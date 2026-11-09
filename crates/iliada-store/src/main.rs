@@ -64,9 +64,13 @@ async fn main() -> Result<()> {
             if entry.network {
                 eprintln!("{} uses the internet.", entry.name);
             }
+            let last = std::sync::atomic::AtomicU64::new(u64::MAX);
             let path = store
                 .install(entry, &|done, total| {
-                    eprint!("\r  downloading {}: {:>3}%", entry.name, done * 100 / total.max(1))
+                    let pct = done * 100 / total.max(1);
+                    if last.swap(pct, std::sync::atomic::Ordering::Relaxed) != pct {
+                        eprint!("\r  downloading {}: {pct:>3}%", entry.name);
+                    }
                 })
                 .await?;
             eprintln!("\ninstalled {}", path.display());
