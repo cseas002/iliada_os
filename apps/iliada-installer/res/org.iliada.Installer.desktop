@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Install Iliada
+Comment=Install Iliada on this computer
+Exec=iliada-installer
+Icon=system-software-install
+Categories=System;
+StartupNotify=true
+StartupWMClass=org.iliada.Installer

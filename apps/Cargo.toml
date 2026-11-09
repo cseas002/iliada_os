@@ -2,7 +2,7 @@
 # build of libcosmic for all of them.
 [workspace]
 resolver = "3"
-members = ["iliada-store-gui", "iliada-settings"]
+members = ["iliada-store-gui", "iliada-settings", "iliada-installer"]
 
 [workspace.package]
 version = "0.1.0"

@@ -2,6 +2,7 @@
 #   nix build .#installer-iso
 { config, lib, pkgs, modulesPath, iliada, ... }:
 let
+  desktopApps = pkgs.callPackage ../desktop-apps.nix { };
   iliada-install = pkgs.writeShellApplication {
     name = "iliada-install";
     runtimeInputs = with pkgs; [
@@ -45,12 +46,21 @@ in
 
   # The Iliada source the installed system is built from.
   environment.etc."iliada/source".source = iliada;
-  environment.systemPackages = [ iliada-install ];
+  environment.systemPackages = [
+    iliada-install
+    # "Install Iliada" in the launcher and the dock.
+    (pkgs.runCommand "iliada-installer-entry" { } ''
+      install -Dm644 ${desktopApps}/share/iliada/installer/org.iliada.Installer.desktop \
+        $out/share/applications/org.iliada.Installer.desktop
+    '')
+  ];
+  # The graphical installer opens when the live session starts.
+  environment.etc."xdg/autostart/org.iliada.Installer.desktop".source =
+    "${desktopApps}/share/iliada/installer/org.iliada.Installer-autostart.desktop";
 
   services.getty.helpLine = lib.mkForce ''
 
-    Welcome to the Iliada installer.
-    Install with:  sudo iliada-install --disk /dev/<disk> --user <name>
-    List disks:    lsblk
+    Welcome to the Iliada installer. Use "Install Iliada" on the desktop, or:
+    sudo iliada-install --disk /dev/<disk> --user <name>     (disks: lsblk)
   '';
 }

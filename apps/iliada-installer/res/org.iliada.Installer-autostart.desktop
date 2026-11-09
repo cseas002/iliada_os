@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Install Iliada
+Exec=iliada-installer
+Icon=system-software-install
+NoDisplay=true

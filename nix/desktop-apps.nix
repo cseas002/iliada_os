@@ -1,4 +1,5 @@
-# Iliada's desktop apps: the Store, Settings and the Setup Assistant. One
+# Iliada's desktop apps: the Store, Settings, the Setup Assistant and the
+# installer. One
 # cargo workspace (apps/), built separately from the core tools because it
 # depends on libcosmic (git dependencies, GPU rendering stack).
 { lib, rustPlatform, libcosmicAppHook }:
@@ -31,6 +32,8 @@ rustPlatform.buildRustPackage {
       apps/iliada-store-gui/res/org.iliada.Store.desktop \
       apps/iliada-settings/res/org.iliada.Settings.desktop \
       apps/iliada-settings/res/org.iliada.Setup.desktop
+    # The installer's entries are only linked in on the live system.
+    install -Dm644 -t $out/share/iliada/installer apps/iliada-installer/res/*.desktop
   '';
 
   meta = {
