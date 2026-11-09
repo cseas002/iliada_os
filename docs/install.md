@@ -65,9 +65,9 @@ the (upcoming) backup and sync feature pushes to your private GitHub repo.
 
 ### Apps (no rebuild, no terminal)
 
-* **Install:** drag an `.app` into Applications, or drop a downloaded
-  `.deb` there. It is translated into a sandboxed `.app` within seconds and
-  appears in the app launcher.
+* **Install:** drag an `.app` into Applications. It appears in the app
+  launcher within seconds. Apps are only ever `.app` bundles; there are no
+  other package formats to deal with.
 * **Uninstall:** drag the app to the Trash.
 * Both are recorded in `/etc/iliada/apps.toml` automatically. On a machine
   restored from that configuration, the listed apps install themselves.

@@ -21,9 +21,13 @@ Apps never cause a rebuild. They live outside the system image by design
 (ADR 0001), so installing one only means adding a bundle.
 
 ### 2. App lifecycle without a terminal
-* **Install:** drag a `.app` into Applications; drop a downloaded package
-  (`.deb` now, signed `.iliadapp` later) into Applications and it is
-  translated automatically; later, a "Get Apps" catalog.
+* **The only app format users see is `.app`.** No `.deb`, Flatpak or
+  AppImage ever reaches the user. The Package Translator turns those into
+  `.app` bundles behind the scenes (on a build service, or locally for app-list
+  entries).
+* **Install:** drag a `.app` into Applications. Web downloads arrive as a
+  single compressed, signed `.app` (like macOS's zipped apps) that opens into a
+  `.app`. Later, a "Get Apps" catalog.
 * **Uninstall:** drag the app to the Trash.
 * **Record:** `iliada-appd` keeps `/etc/iliada/apps.toml` equal to what is in
   `/Applications`, including where each app came from, so another machine can

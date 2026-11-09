@@ -1,5 +1,6 @@
-//! Watch mode: keep `/Applications` in line with the app list, translate
-//! packages dropped into Applications, and update apps when upstream changes.
+//! Watch mode: install the apps on the app list and update them when
+//! upstream changes. Users only ever see `.app` bundles; this daemon is the
+//! plumbing that produces them.
 //!
 //! The app list (normally `/etc/iliada/apps.toml`) is *mutable state*: it is
 //! re-read every tick, so an entry added by a restore or by `iliada-appd`
@@ -114,14 +115,11 @@ struct State {
 #[derive(Debug, Clone)]
 pub struct ServeConfig {
     pub list: PathBuf,
-    /// Packages (`*.deb`) dropped here are translated and removed.
-    pub drop_dir: Option<PathBuf>,
     pub tick: Duration,
 }
 
 enum Job {
     Watch(Watch, String),
-    Drop(PathBuf),
 }
 
 /// Ids of the bundles currently installed in `dir`.
@@ -135,21 +133,6 @@ pub fn installed_ids(dir: &Path) -> BTreeSet<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// Regular `.deb` files (not symlinks) waiting in the drop directory.
-pub fn dropped_packages(dir: &Path) -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map(|rd| {
-            rd.flatten()
-                .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
-                .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|x| x == "deb"))
-                .collect()
-        })
-        .unwrap_or_default();
-    v.sort();
-    v
 }
 
 pub async fn serve(ingestor: Arc<Ingestor>, cfg: ServeConfig) -> Result<()> {
@@ -188,21 +171,6 @@ pub async fn serve(ingestor: Arc<Ingestor>, cfg: ServeConfig) -> Result<()> {
                         }
                         in_flight.lock().await.remove(&watch.key());
                     }
-                    Job::Drop(path) => {
-                        let key = path.display().to_string();
-                        match ing.ingest(&Source::Url(key.clone())).await {
-                            Ok(r) => {
-                                tracing::info!(worker, bundle = %r.bundle.display(), "installed dropped package");
-                                let _ = std::fs::remove_file(&path);
-                            }
-                            Err(e) => {
-                                tracing::error!(worker, package = %key, error = %format!("{e:#}"), "dropped package could not be installed");
-                                // Keep it visible to the user, but stop retrying.
-                                let _ = std::fs::rename(&path, path.with_extension("deb.failed"));
-                            }
-                        }
-                        in_flight.lock().await.remove(&key);
-                    }
                 }
             }
         });
@@ -210,20 +178,9 @@ pub async fn serve(ingestor: Arc<Ingestor>, cfg: ServeConfig) -> Result<()> {
 
     let mut list_mtime = mtime(&cfg.list);
     let mut next_update_check = Instant::now();
-    tracing::info!(list = %cfg.list.display(), drop_dir = ?cfg.drop_dir, "watching");
+    tracing::info!(list = %cfg.list.display(), "watching");
     loop {
-        // 1. Packages dropped into Applications.
-        if let Some(dir) = &cfg.drop_dir {
-            for p in dropped_packages(dir) {
-                let key = p.display().to_string();
-                if in_flight.lock().await.insert(key) {
-                    tracing::info!(package = %p.display(), "package dropped into Applications");
-                    tx.send(Job::Drop(p)).await?;
-                }
-            }
-        }
-
-        // 2. The app list changed (an app was added by a restore, by hand, or by appd).
+        // 1. The app list changed (an app was added by a restore, by hand, or by appd).
         let m = mtime(&cfg.list);
         let list_changed = m != list_mtime;
         if list_changed {
@@ -234,7 +191,7 @@ pub async fn serve(ingestor: Arc<Ingestor>, cfg: ServeConfig) -> Result<()> {
             }
         }
 
-        // 3. New entries now; upstream updates every interval_secs.
+        // 2. New entries now; upstream updates every interval_secs.
         let full_check = Instant::now() >= next_update_check;
         if full_check {
             ingestor.invalidate_indexes().await;
@@ -327,14 +284,5 @@ mod tests {
         assert!(l.watches[1].source().is_none(), "manual entries are recorded, not managed");
         std::fs::write(&p, "[[watch]]\ndebian = \"a\"\nurl = \"https://x\"\n").unwrap();
         assert!(Watchlist::load(&p).is_err());
-    }
-
-    #[test]
-    fn finds_dropped_debs_but_not_symlinks() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("b.deb"), "x").unwrap();
-        std::fs::write(dir.path().join("a.deb.failed"), "x").unwrap();
-        std::os::unix::fs::symlink("/etc/passwd", dir.path().join("evil.deb")).unwrap();
-        assert_eq!(dropped_packages(dir.path()), vec![dir.path().join("b.deb")]);
     }
 }

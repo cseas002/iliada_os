@@ -29,9 +29,9 @@
     desktop.enable = true;
     # desktop.autoLoginUser = "iliada";
 
-    # Apps live in /Applications, each in its own sandbox. Install one by
-    # dragging it (or a downloaded package) into Applications; uninstall by
-    # dragging it to the Trash. No rebuild is ever needed for apps. The list
+    # Apps are .app bundles in /Applications, each in its own sandbox.
+    # Install one by dragging it into Applications; uninstall by dragging it
+    # to the Trash. No rebuild is ever needed for apps. The list
     # of installed apps is kept automatically in /etc/iliada/apps.toml.
     applications.ingest.enable = true;
 

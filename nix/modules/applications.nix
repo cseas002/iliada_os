@@ -44,7 +44,7 @@ in
       description = "Seed for `list` when it does not exist yet.";
     };
     ingest = {
-      enable = lib.mkEnableOption "the Package Translator daemon (installs apps from the app list and from packages dropped into Applications)";
+      enable = lib.mkEnableOption "the Package Translator daemon (builds the .app bundles on the app list and keeps them updated)";
       extraArgs = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [ ];
@@ -139,7 +139,6 @@ in
         ExecStart = lib.escapeShellArgs ([
           "${config.iliada.package}/bin/iliada-ingest" "serve"
           "--watchlist" cfg.list
-          "--drop-dir" cfg.root
           "--out" cfg.root
           "--cache" "/var/cache/iliada-ingest"
         ] ++ cfg.ingest.extraArgs);

@@ -205,7 +205,7 @@ justification, runtime base), validated by the same Rust types.
 | Tier-1 sandbox (`iliada-run`) | done; GUI apps (GNOME Calculator) run sandboxed from the launcher |
 | Tier-2 micro-VMs | config generation tested; booting needs the guest image (Phase 2) |
 | Desktop (COSMIC), app registry (`iliada-appd`) | done; apps appear in search and launch sandboxed |
-| Apps without rebuild (drag, drop a .deb, Trash, auto-recorded list) | implemented and unit-tested; VM validation pending |
+| Apps without rebuild (drag a .app in, Trash, auto-recorded list) | implemented and unit-tested; VM validation pending |
 | Installer ISO + `iliada-install`, config template | done; end-to-end install test passes (UEFI VM) |
 | Rust userland (uutils, sudo-rs, ntpd-rs, fish) | done |
 | Immutable appliance image | evaluates; build and boot not yet tested |
@@ -216,9 +216,10 @@ justification, runtime base), validated by the same Rust types.
 Users never need a terminal (ADR 0005). The system layer (Nix) is changed by
 the Settings app through `iliada-configd`, which applies it with a
 background rebuild. The user layer (apps, preferences) changes instantly
-and never needs a rebuild. Apps are installed by dragging `.app` bundles or
-downloaded packages into Applications, and uninstalled by dragging them to
-the Trash. `iliada-appd` records every change in `/etc/iliada/apps.toml`.
+and never needs a rebuild. The only app format users ever see is `.app`:
+apps are installed by dragging a `.app` into Applications and uninstalled by
+dragging it to the Trash. The Package Translator produces `.app` bundles
+behind the scenes and is never user-facing. `iliada-appd` records every change in `/etc/iliada/apps.toml`.
 
 `/etc/iliada` is a git repository. With backup on, `iliada-syncd` pushes it
 to a private `iliada_<name>` repository. On a new computer the Setup
@@ -229,12 +230,12 @@ commits signed by the profile's enrolled devices are applied.
 
 **Phase 2: Mac-like, no terminal** (ADR 0005, in this order)
 
-1. Apps without terminal or rebuild: mutable `apps.toml`, drag-to-install,
-   drop-a-package-to-install, drag-to-Trash uninstall, automatic recording.
+1. Apps without terminal or rebuild: mutable `apps.toml`, drag a `.app` in to
+   install, drag to the Trash to uninstall, automatic recording.
 2. `iliada-configd` + `settings.toml`: GUI settings applied in the background.
 3. Graphical installer and first-boot Setup Assistant.
 4. `iliada-syncd`: GitHub backup/restore, device enrolment, signed changes.
-5. "Get Apps" catalog; signed `.iliadapp` downloads.
+5. "Get Apps" catalog; downloadable apps as signed, compressed `.app`s.
 
 **Phase 2b: isolation and the desktop shell**
 
