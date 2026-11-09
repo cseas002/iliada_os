@@ -101,6 +101,9 @@ sed -i -e "s|networking.hostName = \"iliada\";|networking.hostName = \"$HOSTNAME
   -e '/initialPassword = /d' /mnt/etc/iliada/configuration.nix
 
 step "Installing Iliada (this downloads and builds the system)"
+# Lock first: creating flake.lock during the install would change the flake
+# directory after Nix has hashed it.
+nix --extra-experimental-features "nix-command flakes" flake lock /mnt/etc/iliada
 nixos-install --root /mnt --flake /mnt/etc/iliada#iliada --no-root-passwd --no-channel-copy
 
 sed -i 's|path:/mnt/etc/iliada/source|path:/etc/iliada/source|' /mnt/etc/iliada/flake.nix
