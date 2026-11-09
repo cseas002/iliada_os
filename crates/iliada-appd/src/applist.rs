@@ -144,6 +144,7 @@ mod tests {
             executable: "x".into(),
             entry: None,
             args: vec![],
+            env: Default::default(),
             icon: None,
             runtime: "iliada-base-1".into(),
             isolation: IsolationTier::MicroVm,

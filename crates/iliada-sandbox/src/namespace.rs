@@ -42,6 +42,8 @@ const GUEST_XDG_RUNTIME_DIR: &str = "/run/user/app";
 pub struct HostDesktop {
     pub fonts: PathBuf,
     pub icons: PathBuf,
+    /// shared-mime-info database (GTK 3 needs it to recognise image formats).
+    pub mime: PathBuf,
     pub opengl_driver: PathBuf,
 }
 
@@ -50,6 +52,7 @@ impl Default for HostDesktop {
         Self {
             fonts: "/etc/fonts".into(),
             icons: "/run/current-system/sw/share/icons".into(),
+            mime: "/run/current-system/sw/share/mime".into(),
             opengl_driver: "/run/opengl-driver".into(),
         }
     }
@@ -137,6 +140,8 @@ fn bwrap_prefix(spec: &SandboxSpec, host: &HostIsolationConfig, desktop: &HostDe
         push(&["--dev-bind-try", "/dev/dri", "/dev/dri"]);
         push(&["--ro-bind-try", &p(&desktop.opengl_driver), "/run/opengl-driver"]);
         push(&["--ro-bind-try", &p(&desktop.icons), "/run/host/share/icons"]);
+        push(&["--ro-bind-try", &p(&desktop.mime), "/run/host/share/mime"]);
+        push(&["--setenv", "QT_QPA_PLATFORM", "wayland"]);
         push(&["--setenv", "__EGL_VENDOR_LIBRARY_DIRS", "/run/opengl-driver/share/glvnd/egl_vendor.d"]);
     }
 

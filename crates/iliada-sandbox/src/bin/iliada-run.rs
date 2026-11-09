@@ -85,6 +85,7 @@ async fn main() -> Result<()> {
     let mut spec = SandboxSpec::from_bundle(&bundle, &host, network, data_dir(bundle.info.id.as_str())?)?;
     spec.display = wayland_socket();
     spec.args = bundle.info.args.iter().cloned().chain(args).collect();
+    spec.env.extend(bundle.info.env.iter().map(|(k, v)| (k.clone(), v.clone())));
 
     let backend = backend_for(tier, &host);
     let mut handle = backend.launch(&spec).await?;

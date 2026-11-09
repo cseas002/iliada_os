@@ -84,6 +84,9 @@ struct Recipe {
     /// Arguments always passed to the program.
     #[serde(default)]
     args: Vec<String>,
+    /// Environment always set for the app.
+    #[serde(default)]
+    env: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -143,6 +146,7 @@ async fn build(recipes: &Path, out: &Path, only: &[String], base: &str, cache: O
             display_name: Some(recipe.name.clone()),
             include: recipe.include.clone(),
             args: recipe.args.clone(),
+            env: recipe.env.clone(),
             force: true,
             ..Default::default()
         };

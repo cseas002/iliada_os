@@ -50,6 +50,8 @@ in
         # bin/: a static busybox (sh, grep, sed, coreutils…), so the launcher
         # scripts many apps ship (/usr/bin/chromium, soffice, …) run unmodified.
         # Static, so the app's own libraries on LD_LIBRARY_PATH cannot break it.
+        # Static bash too: some launchers (Thunderbird's) are bash scripts.
+        postBuild = "ln -s ${pkgs.pkgsStatic.bash}/bin/bash $out/bin/bash";
         paths = [ pkgs.pkgsStatic.busybox ] ++ map lib.getLib (with pkgs; [
           glibc
           stdenv.cc.cc # libgcc_s, libstdc++

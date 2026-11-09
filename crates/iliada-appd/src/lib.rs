@@ -198,6 +198,7 @@ mod tests {
             executable: "x".into(),
             entry: Some("usr/bin/x".into()),
             args: vec![],
+            env: Default::default(),
             icon: Some("Resources/icon.svg".into()),
             runtime: "iliada-base-1".into(),
             isolation: IsolationTier::MicroVm,

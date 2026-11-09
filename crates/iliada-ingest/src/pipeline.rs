@@ -67,6 +67,8 @@ pub struct IngestConfig {
     pub include: Vec<String>,
     /// Arguments always passed to the entry point.
     pub args: Vec<String>,
+    /// Environment always set for the app.
+    pub env: std::collections::BTreeMap<String, String>,
     pub max_download_bytes: u64,
     pub max_unpacked_bytes: u64,
     /// Follow dependency edges into non-`lib*` packages too.
@@ -95,6 +97,7 @@ impl Default for IngestConfig {
             display_name: None,
             include: vec![],
             args: vec![],
+            env: Default::default(),
             max_download_bytes: 1 << 30,
             max_unpacked_bytes: 4 << 30,
             full_closure: false,
@@ -397,6 +400,7 @@ impl Ingestor {
             executable: exe_name,
             entry: Some(exe_rel.to_string_lossy().into_owned()),
             args: self.cfg.args.clone(),
+            env: self.cfg.env.clone(),
             icon,
             runtime: self.runtime.name.clone(),
             isolation: self.cfg.isolation,

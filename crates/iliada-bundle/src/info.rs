@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use iliada_types::AppId;
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +23,9 @@ pub struct Info {
     /// Arguments always passed to `entry` (e.g. `--writer`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    /// Environment always set for the app (e.g. `SAL_USE_VCLPLUGIN = "gtk3"`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
     /// Path relative to `Contents/`, e.g. `Resources/icon.png`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
@@ -105,6 +110,7 @@ mod tests {
             executable: "jq".into(),
             entry: Some("usr/bin/jq".into()),
             args: vec![],
+            env: Default::default(),
             icon: None,
             runtime: "iliada-base-1".into(),
             isolation: IsolationTier::MicroVm,
