@@ -109,7 +109,7 @@ impl App {
     }
 }
 
-fn buttons<'a>(items: Vec<widget::Button<'a, Message>>) -> Element<'a, Message> {
+fn buttons<'a>(items: Vec<widget::button::TextButton<'a, Message>>) -> Element<'a, Message> {
     let mut row = widget::row::with_capacity(items.len()).spacing(cosmic::theme::spacing().space_s);
     for b in items {
         row = row.push(b);

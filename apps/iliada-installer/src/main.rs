@@ -11,7 +11,6 @@ use cosmic::app::{Settings, Task};
 use cosmic::iced::{Alignment, Length, Size};
 use cosmic::widget;
 use cosmic::{ApplicationExt, Core, Element, executor};
-use futures_util::StreamExt;
 use iliada_system::init::{valid_hostname, valid_timezone, valid_user};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -240,7 +239,7 @@ impl App {
         cosmic::task::stream(stream)
     }
 
-    fn page<'a>(&'a self, title: &'a str, body: &'a str, content: Vec<Element<'a, Message>>, actions: Vec<widget::Button<'a, Message>>) -> Element<'a, Message> {
+    fn page<'a>(&'a self, title: &'a str, body: &'a str, content: Vec<Element<'a, Message>>, actions: Vec<widget::button::TextButton<'a, Message>>) -> Element<'a, Message> {
         let spacing = cosmic::theme::spacing();
         let mut col = widget::column::with_capacity(content.len() + 3)
             .push(widget::text::title2(title))
