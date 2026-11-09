@@ -1,0 +1,21 @@
+[package]
+name = "iliada-ipc"
+description = "Wire protocol between sandboxed Iliada apps (guest) and the host permission broker."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+iliada-types.workspace = true
+serde.workspace = true
+postcard.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "net"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

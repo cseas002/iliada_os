@@ -1,0 +1,21 @@
+[package]
+name = "iliada-guest"
+description = "Client library used inside an Iliada sandbox to talk to the host permission broker."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+iliada-types.workspace = true
+iliada-ipc.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "io-util"] }
+tracing.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true
