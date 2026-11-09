@@ -82,16 +82,20 @@ def main():
     ap.add_argument("--workdir", required=True)
     ap.add_argument("--vnc", type=int, default=1, help="VNC display number (port 5900+N)")
     ap.add_argument("--vncdo", help="vncdo binary, to capture a screenshot of the installed system")
+    ap.add_argument("--boot-only", action="store_true", help="skip installation; boot the existing disk")
     args = ap.parse_args()
 
     os.makedirs(args.workdir, exist_ok=True)
     disk = os.path.join(args.workdir, "disk.qcow2")
     sock = os.path.join(args.workdir, "serial.sock")
-    for p in (disk, sock):
-        if os.path.exists(p):
-            os.remove(p)
+    if os.path.exists(sock):
+        os.remove(sock)
+    log = open(os.path.join(args.workdir, "serial.log"), "a" if args.boot_only else "w")
+    if args.boot_only:
+        return boot_installed(args, disk, sock)
+    if os.path.exists(disk):
+        os.remove(disk)
     subprocess.run(["qemu-img", "create", "-q", "-f", "qcow2", disk, "40G"], check=True)
-    log = open(os.path.join(args.workdir, "serial.log"), "w")
 
     print("[1/3] booting the installer ISO", flush=True)
     vm = qemu(args, disk, sock, cdrom=args.iso)
@@ -112,12 +116,18 @@ def main():
         if code != 0:
             print(f"iliada-install failed with {code}; see {log.name}", file=sys.stderr)
             return 1
-        con.send("sudo poweroff\n")
-        vm.wait(timeout=120)
+        # Flush and unmount the target, then power off immediately (a full
+        # live-session shutdown is slow and irrelevant here).
+        con.send("bash -c 'sudo umount -R /mnt; sync; sudo poweroff -f'\n")
+        vm.wait(timeout=300)
     finally:
         if vm.poll() is None:
             vm.kill()
 
+    return boot_installed(args, disk, sock)
+
+
+def boot_installed(args, disk, sock):
     print("[3/3] booting the installed system", flush=True)
     vm = qemu(args, disk, sock)
     try:
