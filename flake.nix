@@ -57,6 +57,10 @@
         // lib.optionalAttrs (lib.elem system linuxSystems) {
           # Bootable live/installer ISO.
           installer-iso = self.nixosConfigurations."installer-${arch system}".config.system.build.isoImage;
+          # Ready-to-run VM disk (UTM on Apple Silicon: the aarch64 one).
+          utm-image = pkgs.callPackage ./nix/utm-image.nix {
+            image = self.nixosConfigurations."utm-${arch system}".config.system.build.image;
+          };
         });
 
       overlays.default = final: _prev: { iliada-tools = final.callPackage ./nix/package.nix { }; };
@@ -69,6 +73,7 @@
       #              `nix build .#nixosConfigurations.appliance-x86_64.config.system.build.image`
       nixosConfigurations = perLinux "dev-vm" [ ./nix/hosts/dev-vm.nix ]
         // perLinux "appliance" [ ./nix/hosts/appliance.nix ]
+        // perLinux "utm" [ ./nix/hosts/utm.nix ]
         // installers;
 
       devShells = forAll allSystems (pkgs: {
