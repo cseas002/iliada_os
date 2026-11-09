@@ -59,6 +59,9 @@ pub struct IngestConfig {
     pub isolation: IsolationTier,
     /// Mark the bundle as needing the internet.
     pub network: bool,
+    /// The app's name (bundle folder and launcher), overriding the upstream one
+    /// ("Firefox" rather than "Firefox ESR").
+    pub display_name: Option<String>,
     pub max_download_bytes: u64,
     pub max_unpacked_bytes: u64,
     /// Follow dependency edges into non-`lib*` packages too.
@@ -84,6 +87,7 @@ impl Default for IngestConfig {
             exec_override: None,
             isolation: IsolationTier::Namespace,
             network: false,
+            display_name: None,
             max_download_bytes: 1 << 30,
             max_unpacked_bytes: 4 << 30,
             full_closure: false,
@@ -267,7 +271,9 @@ impl Ingestor {
             )
             .await?;
         }
-        // Plugin modules of the packages in use need their own libraries too.
+        // Plugin modules of the packages in use need their own libraries too,
+        // as far as they are already available: plugins are optional (e.g. a
+        // Qt bridge shipped next to a GTK library must not pull in all of Qt).
         let in_use = |c: &Closure| -> BTreeSet<String> {
             c.records.iter().filter_map(|r| r.package.clone()).chain(deps.data.iter().cloned()).collect()
         };
@@ -278,6 +284,7 @@ impl Ingestor {
                 .filter_map(|p| deps.plugin_needed.get(p))
                 .flatten()
                 .filter(|s| !roots.contains(*s))
+                .filter(|s| deps.available.contains_key(*s) || provided.contains(*s) || self.runtime.provides_soname(s))
                 .cloned()
                 .collect();
             if extra.is_empty() {
@@ -334,7 +341,12 @@ impl Ingestor {
         let app_id = AppId::from_upstream(&self.cfg.vendor_prefix, &package)?;
         let info = Info {
             id: app_id.clone(),
-            name: desktop.as_ref().and_then(|d| d.name.clone()).unwrap_or_else(|| package.clone()),
+            name: self
+                .cfg
+                .display_name
+                .clone()
+                .or_else(|| desktop.as_ref().and_then(|d| d.name.clone()))
+                .unwrap_or_else(|| package.clone()),
             version: version.clone(),
             executable: exe_name,
             entry: Some(exe_rel.to_string_lossy().into_owned()),

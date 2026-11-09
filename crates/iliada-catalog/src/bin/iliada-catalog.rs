@@ -134,6 +134,7 @@ async fn build(recipes: &Path, out: &Path, only: &[String], base: &str, cache: O
             exec_override: recipe.exec.clone(),
             full_closure: recipe.full_closure,
             network: recipe.network,
+            display_name: Some(recipe.name.clone()),
             force: true,
             ..Default::default()
         };
