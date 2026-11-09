@@ -1,0 +1,183 @@
+diff --git a/src/app.rs b/src/app.rs
+index 77aa67d..0d7ff0e 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -791,6 +791,23 @@ impl App {
+     fn open_file(&mut self, paths: &[impl AsRef<Path>]) -> Task<Message> {
+         let mut tasks = Vec::new();
+ 
++        // Iliada: application bundles are launched in their sandbox.
++        let (bundles, paths): (Vec<PathBuf>, Vec<PathBuf>) = paths
++            .iter()
++            .map(|p| p.as_ref().to_owned())
++            .partition(|p| crate::tab::is_app_bundle(p));
++        for bundle in &bundles {
++            let mut command = std::process::Command::new("iliada-run");
++            command.arg(bundle);
++            if let Err(err) = spawn_detached(&mut command) {
++                log::warn!("failed to launch {}: {}", bundle.display(), err);
++            }
++        }
++        if paths.is_empty() {
++            return Task::none();
++        }
++        let paths = &paths[..];
++
+         // Associate all paths to its MIME type
+         // This allows handling paths as groups if possible, such as launching a single video
+         // player that is passed every path.
+diff --git a/src/tab.rs b/src/tab.rs
+index d462c11..0769632 100644
+--- a/src/tab.rs
++++ b/src/tab.rs
+@@ -591,6 +591,26 @@ fn get_desktop_file_icon(path: &Path) -> Option<String> {
+ 
+ /// Creates an icon handle from a desktop file's Icon field value.
+ /// Supports both icon names (looked up in theme) and absolute paths (used directly).
++/// Iliada: a directory `Name.app` containing `Contents/Info.toml` is an
++/// application bundle. It is shown and opened like an app, not a folder.
++pub fn is_app_bundle(path: &Path) -> bool {
++    path.extension().is_some_and(|e| e == "app") && path.join("Contents/Info.toml").is_file()
++}
++
++/// Iliada: the bundle's own icon, or a generic application icon.
++fn app_bundle_icon(path: &Path, size: u16) -> widget::icon::Handle {
++    for name in ["icon.svg", "icon.png"] {
++        let icon = path.join("Contents/Resources").join(name);
++        if icon.is_file() {
++            return widget::icon::from_path(icon);
++        }
++    }
++    widget::icon::from_name("application-x-executable")
++        .prefer_svg(true)
++        .size(size)
++        .handle()
++}
++
+ fn desktop_icon_handle(icon: &str, size: u16) -> widget::icon::Handle {
+     let icon_path = Path::new(icon);
+     if icon_path.is_absolute() && icon_path.exists() {
+@@ -816,8 +836,16 @@ pub fn item_from_entry(
+         }
+     };
+ 
++    let app_bundle = metadata.is_dir() && !remote && is_app_bundle(&path);
+     let (mime, icon_handle_grid, icon_handle_list, icon_handle_list_condensed) =
+-        if metadata.is_dir() {
++        if app_bundle {
++            (
++                "application/x-iliada-app".parse().unwrap(),
++                app_bundle_icon(&path, sizes.grid()),
++                app_bundle_icon(&path, sizes.list()),
++                app_bundle_icon(&path, sizes.list_condensed()),
++            )
++        } else if metadata.is_dir() {
+             (
+                 //TODO: make this a static
+                 "inode/directory".parse().unwrap(),
+@@ -853,7 +881,7 @@ pub fn item_from_entry(
+ 
+     let mut children_opt = None;
+     let mut dir_size = DirSize::NotDirectory;
+-    if metadata.is_dir() && !remote {
++    if metadata.is_dir() && !remote && !app_bundle {
+         dir_size = DirSize::Calculating(Controller::default());
+         //TODO: calculate children in the background (and make it cancellable?)
+         match fs::read_dir(&path) {
+@@ -866,7 +894,12 @@ pub fn item_from_entry(
+         }
+     }
+ 
+-    let display_name = display_name_for_file(&path, &name, is_gvfs, is_desktop);
++    let display_name = if app_bundle {
++        // Like macOS: "Calculator", not "Calculator.app".
++        Item::display_name(name.strip_suffix(".app").unwrap_or(&name))
++    } else {
++        display_name_for_file(&path, &name, is_gvfs, is_desktop)
++    };
+ 
+     Item {
+         name,
+@@ -2344,6 +2377,11 @@ pub struct Item {
+ }
+ 
+ impl Item {
++    /// Iliada application bundle (see `is_app_bundle`).
++    pub fn is_app_bundle(&self) -> bool {
++        self.mime == "application/x-iliada-app"
++    }
++
+     fn display_name(name: &str) -> String {
+         // In order to wrap at periods and underscores, add a zero width space after each one
+         name.replace('.', ".\u{200B}").replace('_', "_\u{200B}")
+@@ -3549,7 +3587,7 @@ impl Tab {
+                         for (i, item) in items.iter_mut().enumerate() {
+                             if Some(i) == click_i_opt {
+                                 if let Some(location) = &item.location_opt {
+-                                    if item.metadata.is_dir() {
++                                    if item.metadata.is_dir() && !item.is_app_bundle() {
+                                         cd = Some(location.clone());
+                                     } else if let Some(path) = location.path_opt() {
+                                         paths_to_open.push(path.clone());
+@@ -3592,7 +3630,7 @@ impl Tab {
+                     .and_then(|items| click_i_opt.and_then(|click_i| items.get(click_i)))
+                 {
+                     if let Some(location) = &clicked_item.location_opt {
+-                        if clicked_item.metadata.is_dir() {
++                        if clicked_item.metadata.is_dir() && !clicked_item.is_app_bundle() {
+                             cd = Some(location.clone());
+                         } else if let Some(path) = location.path_opt() {
+                             commands.push(Command::OpenFile(vec![path.clone()]));
+@@ -4297,7 +4335,7 @@ impl Tab {
+                 // Workaround to support favorited files
+                 match &location {
+                     Location::Path(path) => {
+-                        if path.is_dir() {
++                        if path.is_dir() && !is_app_bundle(path) {
+                             cd = Some(location);
+                         } else {
+                             commands.push(Command::OpenFile(vec![path.clone()]));
+@@ -4320,7 +4358,7 @@ impl Tab {
+             Message::Open(path_opt) => {
+                 match path_opt {
+                     Some(path) => {
+-                        if path.is_dir() {
++                        if path.is_dir() && !is_app_bundle(&path) {
+                             cd = Some(Location::Path(path));
+                         } else {
+                             commands.push(Command::OpenFile(vec![path]));
+@@ -4352,7 +4390,7 @@ impl Tab {
+ 
+                             let path_opt = location.path_opt();
+ 
+-                            if item.metadata.is_dir() {
++                            if item.metadata.is_dir() && !item.is_app_bundle() {
+                                 match mode {
+                                     Mode::App => {
+                                         if is_only_one_selected {
+@@ -4445,7 +4483,7 @@ impl Tab {
+                         self.items_opt.as_ref().and_then(|items| items.get(click_i))
+                     {
+                         if let Some(path) = clicked_item.path_opt() {
+-                            if clicked_item.metadata.is_dir() {
++                            if clicked_item.metadata.is_dir() && !clicked_item.is_app_bundle() {
+                                 //cd = Some(Location::Path(path.clone()));
+                                 commands.push(Command::OpenInNewTab(path.clone()));
+                             } else {
+@@ -5833,7 +5871,7 @@ impl Tab {
+                     }
+ 
+                     let column: Element<Message> =
+-                        if item.metadata.is_dir() && item.location_opt.is_some() {
++                        if item.metadata.is_dir() && !item.is_app_bundle() && item.location_opt.is_some() {
+                             self.dnd_dest(&item.location_opt.clone().unwrap(), column)
+                         } else {
+                             column.into()
+@@ -6269,6 +6307,7 @@ impl Tab {
+ 
+                     let button_row = button(row.into());
+                     let button_row: Element<_> = if item.metadata.is_dir()
++                        && !item.is_app_bundle()
+                         && let Some(location) = item.location_opt.as_ref()
+                     {
+                         self.dnd_dest(location, button_row)

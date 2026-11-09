@@ -17,6 +17,16 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # COSMIC Files shows Iliada .app bundles as apps (their own icon, name
+    # without ".app"), launches them sandboxed on open, and never treats them
+    # as drop targets. See nix/patches/cosmic-files-app-bundles.patch.
+    nixpkgs.overlays = [
+      (final: prev: {
+        cosmic-files = prev.cosmic-files.overrideAttrs (old: {
+          patches = (old.patches or [ ]) ++ [ ../patches/cosmic-files-app-bundles.patch ];
+        });
+      })
+    ];
     services.desktopManager.cosmic.enable = true;
     services.displayManager.cosmic-greeter.enable = true;
     services.displayManager.autoLogin = lib.mkIf (cfg.autoLoginUser != null) {
