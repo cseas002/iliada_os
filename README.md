@@ -68,7 +68,13 @@ crates/
   iliada-broker    permission broker daemon (bin: iliada-broker)
   iliada-guest     client library used inside sandboxes (+ examples)
   iliada-sandbox   Tier-1 bubblewrap / Tier-2 cloud-hypervisor controller (bin: iliada-run)
-  iliada-appd      exports GUI bundles to the desktop's app launcher
+  iliada-appd      exports GUI bundles to the desktop; records installs in apps.toml
+  iliada-applist   locked, comment-preserving edits of apps.toml
+  iliada-catalog   app catalog format, signatures, and the catalog builder
+  iliada-store     the Store engine + CLI (bin: iliada-store)
+  iliada-cli       the `iliada` command
+apps/
+  iliada-store-gui the Store (COSMIC GUI)
 nix/
   modules/         the declarative system manifest (iliada.* NixOS options)
   hosts/           dev-vm, appliance (immutable image) and installer ISO
@@ -87,6 +93,12 @@ xtask/             cargo xtask automation
 # Rust (macOS or Linux)
 cargo test --workspace
 cargo xtask ci                       # fmt + clippy -D warnings + tests
+
+# On an installed Iliada
+iliada list                     # apps in the Store
+iliada install firefox          # install an app (.app, sandboxed)
+iliada tool add htop            # a command-line tool (system setting)
+iliada service enable ssh       # a service
 
 # Ingest a real Debian package into a bundle
 cargo run -p iliada-ingest -- run debian:jq --out out

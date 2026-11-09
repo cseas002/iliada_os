@@ -205,7 +205,11 @@ justification, runtime base), validated by the same Rust types.
 | Tier-1 sandbox (`iliada-run`) | done; GUI apps (GNOME Calculator) run sandboxed from the launcher |
 | Tier-2 micro-VMs | config generation tested; booting needs the guest image (Phase 2) |
 | Desktop (COSMIC), app registry (`iliada-appd`) | done; apps appear in search and launch sandboxed |
-| Apps without rebuild (drag a .app in, Trash, auto-recorded list) | implemented and unit-tested; VM validation pending |
+| Apps without rebuild (drag a .app in, Trash, auto-recorded list) | done; validated in the VM |
+| Iliada Store (GUI + `iliada`/`iliada-store` CLI), signed catalog | done; 12 apps published in `iliada_apps`; Get → Open validated in the VM |
+| Automatic app updates and restores (`iliada-store-sync` timer) | done; restore validated in the VM |
+| COSMIC Files shows `.app` bundles as apps (icon, launch) | done |
+| Tools and services in `settings.toml`, `iliada tool/service` | done |
 | Installer ISO + `iliada-install`, config template | done; end-to-end install test passes (UEFI VM) |
 | Rust userland (uutils, sudo-rs, ntpd-rs, fish) | done |
 | Immutable appliance image | evaluates; build and boot not yet tested |

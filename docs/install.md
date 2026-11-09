@@ -43,13 +43,32 @@ sudo nixos-rebuild switch --flake /etc/iliada#iliada
 ## Your configuration
 
 ```
-/etc/iliada/
+/etc/iliada/                  a git repository: every change is recorded
+  apps.toml                   your apps (.app bundles), maintained automatically
+  settings.toml               command-line tools and services (plain TOML)
+  configuration.nix           everything else: users, host name, any NixOS option
   flake.nix                   which Iliada version to build from (don't usually edit)
-  configuration.nix           this computer: users, host name, desktop, isolation…
-  apps.toml                   your installed apps (maintained automatically)
   hardware-configuration.nix  disks and drivers (generated)
   source/                     the Iliada release this machine was installed from
 ```
+
+### The `iliada` command
+
+| | |
+|---|---|
+| `iliada list` | apps in the Store |
+| `iliada install firefox` · `iliada remove firefox` | install / remove an app (no password, no rebuild) |
+| `iliada update` | update apps, and install any on your list that are missing |
+| `iliada tool add htop` · `iliada tool remove htop` · `iliada tool list` | command-line tools |
+| `iliada service enable ssh` · `disable` · `list` | services (SSH server, printing) |
+| `iliada apply` | apply `/etc/iliada` after editing it by hand |
+
+Tool and service changes ask for your password once, apply the system
+atomically, and are committed to `/etc/iliada`'s history; if applying fails,
+the file is put back and the running system is untouched.
+
+Apps update themselves: `iliada-store-sync` runs two minutes after boot and
+every six hours (`iliada.store.updateInterval`).
 
 Change anything, then apply it:
 
@@ -65,9 +84,9 @@ the (upcoming) backup and sync feature pushes to your private GitHub repo.
 
 ### Apps (no rebuild, no terminal)
 
-* **Install:** drag an `.app` into Applications. It appears in the app
-  launcher within seconds. Apps are only ever `.app` bundles; there are no
-  other package formats to deal with.
+* **Install:** open the **Store** (in the dock) and click **Get**, or drag an
+  `.app` into Applications. It appears in the launcher within seconds. Apps
+  are only ever `.app` bundles; there are no other package formats.
 * **Uninstall:** drag the app to the Trash.
 * Both are recorded in `/etc/iliada/apps.toml` automatically. On a machine
   restored from that configuration, the listed apps install themselves.
@@ -85,6 +104,9 @@ files unless you grant it.
 | `iliada.desktop.autoLoginUser` | `null` | log a user in automatically |
 | `iliada.workstation.enable` | follows `desktop.enable` | networking, audio, bluetooth, firmware |
 | `iliada.applications.list` | `/etc/iliada/apps.toml` | the app list (mutable, maintained automatically) |
+| `iliada.settingsFile` | `./settings.toml` | tools and services (see above) |
+| `iliada.store.catalog` | Iliada's catalog | where the Store gets apps (signed) |
+| `iliada.store.updateInterval` | `"6h"` | how often apps are updated |
 | `iliada.isolation.defaultTier` | `"namespace"` | `namespace` (native speed) or `micro-vm` |
 | `iliada.isolation.highSecurity` | `false` | every app in its own micro-VM (slower, strongest) |
 | `iliada.isolation.defaultNetwork` | `"none"` | network for app sandboxes: `none` / `nat` |
