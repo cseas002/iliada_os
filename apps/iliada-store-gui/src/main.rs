@@ -11,7 +11,7 @@ use std::sync::Arc;
 use cosmic::app::{Settings, Task};
 use cosmic::iced::{Alignment, Length, Size};
 use cosmic::widget::{self, nav_bar};
-use cosmic::{Core, Element, executor};
+use cosmic::{ApplicationExt, Core, Element, executor};
 use iliada_catalog::{AppEntry, Catalog};
 use iliada_store::{Installed, Store, StoreConfig};
 
@@ -153,7 +153,11 @@ impl cosmic::Application for App {
             status: BTreeMap::new(),
             search: String::new(),
         };
-        let title = app.set_window_title("Store".into());
+        app.set_header_title("Store".into());
+        let title = match app.core.main_window_id() {
+            Some(id) => app.set_window_title("Store".into(), id),
+            None => Task::none(),
+        };
         let load = app.load_catalog();
         (app, Task::batch([title, load]))
     }
