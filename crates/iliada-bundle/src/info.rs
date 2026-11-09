@@ -72,19 +72,17 @@ impl Info {
                 self.executable
             )));
         }
-        if let Some(entry) = &self.entry {
-            if !is_safe_relative(entry) {
-                return Err(BundleError::Invalid(format!(
-                    "Info.entry {entry:?} must be a relative path inside Contents/Root"
-                )));
-            }
+        if let Some(entry) = &self.entry
+            && !is_safe_relative(entry)
+        {
+            return Err(BundleError::Invalid(format!(
+                "Info.entry {entry:?} must be a relative path inside Contents/Root"
+            )));
         }
-        if let Some(icon) = &self.icon {
-            if !is_safe_relative(icon) {
-                return Err(BundleError::Invalid(format!(
-                    "Info.icon {icon:?} must be a relative path inside Contents"
-                )));
-            }
+        if let Some(icon) = &self.icon
+            && !is_safe_relative(icon)
+        {
+            return Err(BundleError::Invalid(format!("Info.icon {icon:?} must be a relative path inside Contents")));
         }
         Ok(())
     }

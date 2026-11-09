@@ -10,7 +10,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/cseas002/iliada_os"
-rust-version = "1.85"
+rust-version = "1.89"
 
 [workspace.dependencies]
 iliada-types = { path = "crates/iliada-types" }
@@ -20,8 +20,10 @@ iliada-broker = { path = "crates/iliada-broker" }
 iliada-guest = { path = "crates/iliada-guest" }
 iliada-sandbox = { path = "crates/iliada-sandbox" }
 iliada-appd = { path = "crates/iliada-appd" }
+iliada-applist = { path = "crates/iliada-applist" }
 iliada-catalog = { path = "crates/iliada-catalog" }
 iliada-ingest = { path = "crates/iliada-ingest" }
+iliada-store = { path = "crates/iliada-store" }
 
 anyhow = "1"
 thiserror = "2"

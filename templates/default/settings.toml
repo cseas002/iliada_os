@@ -1,0 +1,13 @@
+# System settings for this computer.
+#
+# Change them with the `iliada` command (`iliada tool add htop`,
+# `iliada service enable ssh`), or edit this file and run `iliada apply`.
+# Apps are not here: they are .app bundles (see apps.toml and the Store).
+
+[tools]
+# Command-line tools, installed system-wide (names as in nixpkgs).
+packages = ["vim", "git", "curl", "wget", "htop", "rsync", "unzip", "zip"]
+
+[services]
+ssh = false        # SSH server: log in to this computer from others
+printing = false   # printing (CUPS)

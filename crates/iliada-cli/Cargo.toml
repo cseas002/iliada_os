@@ -1,0 +1,26 @@
+[package]
+name = "iliada-cli"
+description = "The `iliada` command: apps, tools, services and system configuration."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "iliada"
+path = "src/main.rs"
+
+[dependencies]
+iliada-store.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
+toml_edit = "0.22"
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -580,10 +580,10 @@ impl Ingestor {
             for o in objs.iter().filter(on_loader_path) {
                 let path = dest.join(&o.rel_path);
                 let file = o.rel_path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-                if let Some(so) = &o.soname {
-                    if *so != file {
-                        libs.push((so.clone(), path.clone()));
-                    }
+                if let Some(so) = &o.soname
+                    && *so != file
+                {
+                    libs.push((so.clone(), path.clone()));
                 }
                 libs.push((file, path));
             }

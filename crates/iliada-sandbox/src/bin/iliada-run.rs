@@ -24,10 +24,10 @@ fn find_bundle(target: &str) -> Result<Bundle> {
         return Ok(Bundle::open(target)?);
     }
     for e in std::fs::read_dir(APPLICATIONS).with_context(|| format!("reading {APPLICATIONS}"))?.flatten() {
-        if let Ok(b) = Bundle::open(e.path()) {
-            if b.info.id.as_str() == target {
-                return Ok(b);
-            }
+        if let Ok(b) = Bundle::open(e.path())
+            && b.info.id.as_str() == target
+        {
+            return Ok(b);
         }
     }
     bail!("no bundle {target:?} (not a path, and no app with that id in {APPLICATIONS})")

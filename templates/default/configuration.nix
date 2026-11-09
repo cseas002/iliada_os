@@ -6,7 +6,7 @@
 # │ Every switch is atomic; the boot menu keeps previous versions, so   │
 # │ a bad change is undone by rebooting into the one before it.         │
 # └─────────────────────────────────────────────────────────────────────┘
-{ pkgs, ... }:
+{ ... }:
 {
   # ── This computer ───────────────────────────────────────────────────
   networking.hostName = "iliada";
@@ -25,6 +25,11 @@
 
   # ── Iliada ──────────────────────────────────────────────────────────
   iliada = {
+    # Command-line tools and services (SSH server, printing) live in
+    # settings.toml; change them with `iliada tool add vim`,
+    # `iliada service enable ssh`, or by editing the file and `iliada apply`.
+    settingsFile = ./settings.toml;
+
     # The COSMIC desktop, plus networking, sound, bluetooth and firmware.
     desktop.enable = true;
     # desktop.autoLoginUser = "iliada";
@@ -50,8 +55,6 @@
     ux.hideFhs = true;
   };
 
-  # Extra command-line tools for this machine (most apps belong in apps.toml).
-  environment.systemPackages = with pkgs; [ git ];
 
   # The NixOS release this machine was first installed with. Don't change it.
   system.stateVersion = "26.11";

@@ -57,6 +57,8 @@ pub struct Watch {
     /// Installed by hand; no source to install or update from.
     #[serde(default)]
     pub manual: bool,
+    /// Installed from the Iliada Store; `iliada-store sync` manages it.
+    pub store: Option<String>,
 }
 
 fn default_interval() -> u64 {
@@ -83,7 +85,7 @@ impl Watch {
     /// Entries we can install and update from.
     fn source(&self) -> Option<Source> {
         match (&self.url, &self.debian) {
-            _ if self.manual => None,
+            _ if self.manual || self.store.is_some() => None,
             (Some(u), _) => Some(Source::Url(u.clone())),
             (_, Some(d)) => Some(Source::Debian(d.clone())),
             _ => None,

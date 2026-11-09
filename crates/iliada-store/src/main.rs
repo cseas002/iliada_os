@@ -19,6 +19,9 @@ enum Cmd {
     Install { app: String },
     /// Update every installed app that has a newer version.
     Update,
+    /// Install the Store apps on the app list that are missing, and update
+    /// the rest (what the background service runs).
+    Sync,
     /// Remove an app.
     Remove { app: String },
 }
@@ -80,6 +83,22 @@ async fn main() -> Result<()> {
                 }
             }
             eprintln!("{n} app(s) updated");
+        }
+        Cmd::Sync => {
+            let r = store.sync().await?;
+            for a in &r.installed {
+                eprintln!("installed {a}");
+            }
+            for a in &r.updated {
+                eprintln!("updated {a}");
+            }
+            for (a, e) in &r.failed {
+                eprintln!("FAILED {a}: {e}");
+            }
+            eprintln!("sync: {} installed, {} updated, {} failed", r.installed.len(), r.updated.len(), r.failed.len());
+            if !r.failed.is_empty() {
+                std::process::exit(1);
+            }
         }
         Cmd::Remove { app } => {
             let needle = app.to_lowercase();

@@ -881,13 +881,23 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "iliada-applist",
  "iliada-bundle",
  "iliada-types",
  "serde_json",
  "tempfile",
- "toml_edit",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "iliada-applist"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "iliada-types",
+ "tempfile",
+ "toml_edit",
 ]
 
 [[package]]
@@ -942,6 +952,19 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "zstd",
+]
+
+[[package]]
+name = "iliada-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "iliada-store",
+ "tempfile",
+ "tokio",
+ "toml_edit",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1024,12 +1047,14 @@ dependencies = [
  "ed25519-dalek",
  "futures-util",
  "hex",
+ "iliada-applist",
  "iliada-bundle",
  "iliada-catalog",
  "iliada-ingest",
  "iliada-types",
  "reqwest",
  "ruzstd",
+ "serde",
  "serde_json",
  "sha2",
  "tar",

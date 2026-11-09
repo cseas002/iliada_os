@@ -22,6 +22,8 @@ use iliada_ingest::extract::{ExtractLimits, extract_tar_stream};
 use sha2::{Digest, Sha256};
 
 pub const DEFAULT_CATALOG: &str = "https://github.com/cseas002/iliada_apps/releases/download/catalog/catalog.json";
+/// Written by the `iliada.store` NixOS module.
+pub const SYSTEM_CONFIG: &str = "/etc/iliada/store.json";
 /// The Iliada catalog signing key (public half).
 pub const CATALOG_KEY: &str = include_str!("../catalog.pub");
 const MAX_ARCHIVE: u64 = 8 << 30;
@@ -32,18 +34,42 @@ pub struct StoreConfig {
     pub catalog: String,
     pub key: VerifyingKey,
     pub apps_dir: PathBuf,
+    /// The app list Store installs are recorded in (`/etc/iliada/apps.toml`).
+    pub app_list: Option<PathBuf>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemConfig {
+    catalog: Option<String>,
+    app_list: Option<PathBuf>,
+    applications: Option<PathBuf>,
 }
 
 impl StoreConfig {
-    /// Defaults, with `ILIADA_STORE_CATALOG` overriding the catalog location
-    /// (development: a locally served catalog).
+    /// System settings (`/etc/iliada/store.json`), then defaults;
+    /// `ILIADA_STORE_CATALOG` / `ILIADA_APP_LIST` override (development).
     pub fn from_env() -> Result<Self> {
+        let sys: SystemConfig =
+            fs::read(SYSTEM_CONFIG).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         Ok(Self {
-            catalog: std::env::var("ILIADA_STORE_CATALOG").unwrap_or_else(|_| DEFAULT_CATALOG.into()),
+            catalog: std::env::var("ILIADA_STORE_CATALOG")
+                .ok()
+                .or(sys.catalog)
+                .unwrap_or_else(|| DEFAULT_CATALOG.into()),
             key: iliada_catalog::parse_key(CATALOG_KEY)?,
-            apps_dir: PathBuf::from("/Applications"),
+            apps_dir: sys.applications.unwrap_or_else(|| PathBuf::from("/Applications")),
+            app_list: std::env::var_os("ILIADA_APP_LIST").map(PathBuf::from).or(sys.app_list),
         })
     }
+}
+
+/// What `sync` did.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SyncReport {
+    pub installed: Vec<String>,
+    pub updated: Vec<String>,
+    pub failed: Vec<(String, String)>,
 }
 
 /// An app currently in Applications.
@@ -196,8 +222,41 @@ impl Store {
         if dest.exists() {
             fs::rename(&dest, staging.path().join("replaced"))?;
         }
+        // Record it before it appears, so iliada-appd sees a Store entry
+        // rather than a hand-installed app.
+        if let Some(list) = &self.cfg.app_list
+            && let Err(e) = iliada_applist::record_store_install(list, &app.id, &app.name, &app.id)
+        {
+            tracing::warn!(error = %format!("{e:#}"), "could not record the install in the app list");
+        }
         fs::rename(bundle_dir, &dest)?;
         Ok(dest)
+    }
+
+    /// Bring Applications in line with the app list's Store entries: install
+    /// the missing ones (a restore on a new computer), update the outdated
+    /// ones. With no app list, only updates installed apps.
+    pub async fn sync(&self) -> Result<SyncReport> {
+        let catalog = self.catalog().await?;
+        let installed = self.installed();
+        let wanted: Vec<String> = match &self.cfg.app_list {
+            Some(list) => iliada_applist::store_entries(list)?.into_iter().map(|(store, _)| store).collect(),
+            None => installed.keys().cloned().collect(),
+        };
+        let mut report = SyncReport::default();
+        for app in catalog.apps.iter().filter(|a| wanted.contains(&a.id) || installed.contains_key(&a.id)) {
+            let action = match installed.get(&app.id) {
+                None => "install",
+                Some(i) if i.version != app.version => "update",
+                Some(_) => continue,
+            };
+            match self.install(app, &|_, _| {}).await {
+                Ok(_) if action == "install" => report.installed.push(app.name.clone()),
+                Ok(_) => report.updated.push(app.name.clone()),
+                Err(e) => report.failed.push((app.name.clone(), format!("{e:#}"))),
+            }
+        }
+        Ok(report)
     }
 
     /// Remove an app (what dragging it to the Trash and emptying it does).
@@ -286,6 +345,7 @@ mod tests {
             catalog: dir.join("catalog.json").display().to_string(),
             key: sk.verifying_key(),
             apps_dir: apps,
+            app_list: Some(dir.join("apps.toml")),
         };
         (cfg, entry, archive_bytes)
     }
@@ -315,7 +375,16 @@ mod tests {
         wrong.key = SigningKey::from_bytes(&[1u8; 32]).verifying_key();
         assert!(Store::new(wrong).unwrap().catalog().await.is_err());
 
+        // The install was recorded as a Store entry.
+        let list = std::fs::read_to_string(d.path().join("apps.toml")).unwrap();
+        assert!(list.contains("store = \"org.example.hello\""));
+
         store.remove("org.example.hello").unwrap();
         assert!(store.installed().is_empty());
+
+        // Sync reinstalls what the list says should be there (a restore).
+        let report = store.sync().await.unwrap();
+        assert_eq!(report.installed, vec!["Hello".to_string()]);
+        assert!(store.installed().contains_key("org.example.hello"));
     }
 }

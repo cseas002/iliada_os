@@ -14,12 +14,9 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use iliada_applist::{Table, entry_id, value};
 use iliada_bundle::{Bundle, PackageRole};
-use iliada_types::AppId;
-use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
-
-const DEBIAN_PREFIX: &str = "org.debian";
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ListReport {
@@ -63,61 +60,43 @@ fn installed(apps: &Path) -> Vec<Installed> {
     v
 }
 
-/// The app id an existing entry refers to.
-fn entry_id(t: &Table) -> Option<String> {
-    if let Some(id) = t.get("id").and_then(Item::as_str) {
-        return Some(id.to_owned());
-    }
-    let d = t.get("debian").and_then(Item::as_str)?;
-    AppId::from_upstream(DEBIAN_PREFIX, d).ok().map(|i| i.to_string())
-}
-
 pub fn sync_list(apps: &Path, list: &Path, seen_file: &Path) -> Result<ListReport> {
-    let text = fs::read_to_string(list).unwrap_or_default();
-    let mut doc: DocumentMut = text.parse().with_context(|| format!("parsing {}", list.display()))?;
     let seen: BTreeSet<String> =
         fs::read(seen_file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
     let now = installed(apps);
     let now_ids: BTreeSet<String> = now.iter().map(|i| i.id.clone()).collect();
-
-    if !doc.contains_key("watch") {
-        doc["watch"] = Item::ArrayOfTables(ArrayOfTables::new());
-    }
-    let aot = doc["watch"].as_array_of_tables_mut().context("`watch` must be an array of tables")?;
     let mut report = ListReport::default();
 
-    // Uninstalled here: was seen on this machine, is gone now.
-    let gone: BTreeSet<&String> = seen.difference(&now_ids).collect();
-    let mut i = 0;
-    while i < aot.len() {
-        let id = aot.get(i).and_then(entry_id);
-        match id {
-            Some(id) if gone.contains(&id) => {
-                aot.remove(i);
-                report.removed.push(id);
+    iliada_applist::edit(list, |aot| {
+        // Uninstalled here: was seen on this machine, is gone now.
+        let gone: BTreeSet<&String> = seen.difference(&now_ids).collect();
+        let mut i = 0;
+        while i < aot.len() {
+            match aot.get(i).and_then(entry_id) {
+                Some(id) if gone.contains(&id) => {
+                    aot.remove(i);
+                    report.removed.push(id);
+                }
+                _ => i += 1,
             }
-            _ => i += 1,
         }
-    }
-
-    // Installed here but not listed: record it.
-    let listed: BTreeSet<String> = aot.iter().filter_map(entry_id).collect();
-    for app in now.iter().filter(|a| !listed.contains(&a.id)) {
-        let mut t = Table::new();
-        match (&app.debian, &app.url) {
-            (Some(d), _) => t["debian"] = value(d.as_str()),
-            (_, Some(u)) => t["url"] = value(u.as_str()),
-            _ => t["manual"] = value(true),
+        // Installed here but not listed: record it.
+        let listed: BTreeSet<String> = aot.iter().filter_map(entry_id).collect();
+        for app in now.iter().filter(|a| !listed.contains(&a.id)) {
+            let mut t = Table::new();
+            match (&app.debian, &app.url) {
+                (Some(d), _) => t["debian"] = value(d.as_str()),
+                (_, Some(u)) => t["url"] = value(u.as_str()),
+                _ => t["manual"] = value(true),
+            }
+            t["id"] = value(app.id.as_str());
+            t["name"] = value(app.name.as_str());
+            aot.push(t);
+            report.added.push(app.id.clone());
         }
-        t["id"] = value(app.id.as_str());
-        t["name"] = value(app.name.as_str());
-        aot.push(t);
-        report.added.push(app.id.clone());
-    }
+        Ok(report != ListReport::default())
+    })?;
 
-    if report != ListReport::default() {
-        fs::write(list, doc.to_string()).with_context(|| format!("writing {}", list.display()))?;
-    }
     if now_ids != seen {
         if let Some(dir) = seen_file.parent() {
             fs::create_dir_all(dir)?;
@@ -131,6 +110,9 @@ pub fn sync_list(apps: &Path, list: &Path, seen_file: &Path) -> Result<ListRepor
 mod tests {
     use super::*;
     use iliada_bundle::{BundleLayout, Info, IsolationTier, PackageRecord, Permissions, Provenance, SourceRecord};
+    use iliada_types::AppId;
+
+    const DEBIAN_PREFIX: &str = "org.debian";
 
     fn bundle(apps: &Path, name: &str, pkg: &str, url: &str) -> PathBuf {
         let l = BundleLayout::in_dir(apps, name);

@@ -45,10 +45,10 @@ impl Fetcher {
         }
         self.check_scheme(src)?;
         let resp = self.client.get(src).send().await?.error_for_status().with_context(|| format!("GET {src}"))?;
-        if let Some(len) = resp.content_length() {
-            if len > self.max_bytes {
-                bail!("{src} is {len} bytes, over the {} byte limit", self.max_bytes);
-            }
+        if let Some(len) = resp.content_length()
+            && len > self.max_bytes
+        {
+            bail!("{src} is {len} bytes, over the {} byte limit", self.max_bytes);
         }
         let mut hasher = Sha256::new();
         let mut bytes = Vec::new();

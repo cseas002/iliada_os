@@ -38,10 +38,10 @@ fn walk(root: &Path, rel: &Path, out: &mut Vec<ElfObject>) -> Result<()> {
         let child_rel = rel.join(entry.file_name());
         if ft.is_dir() {
             walk(root, &child_rel, out)?;
-        } else if ft.is_file() {
-            if let Some(obj) = inspect(&root.join(&child_rel), &child_rel)? {
-                out.push(obj);
-            }
+        } else if ft.is_file()
+            && let Some(obj) = inspect(&root.join(&child_rel), &child_rel)?
+        {
+            out.push(obj);
         }
     }
     Ok(())
@@ -83,10 +83,10 @@ pub fn provided_sonames(root: &Path, objects: &[ElfObject]) -> BTreeSet<String> 
     // Libraries the program finds through its own RUNPATH ($ORIGIN) anywhere
     // in the tree, often without a DT_SONAME.
     for o in objects.iter().filter(|o| !o.is_executable) {
-        if let Some(name) = o.rel_path.file_name().map(|n| n.to_string_lossy().into_owned()) {
-            if name.contains(".so") {
-                set.insert(name);
-            }
+        if let Some(name) = o.rel_path.file_name().map(|n| n.to_string_lossy().into_owned())
+            && name.contains(".so")
+        {
+            set.insert(name);
         }
     }
     for dir in library_dirs(root) {

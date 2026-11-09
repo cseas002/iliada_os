@@ -7,6 +7,8 @@
 #   iliada.desktop       COSMIC desktop
 #   iliada.workstation   networking, audio, bluetooth, firmware, boot loader
 #   iliada.rustUserland  Rust coreutils, sudo-rs, ntpd-rs, fish
+#   iliada.settingsFile  settings.toml: command-line tools, services
+#   iliada.store         the Store catalog and automatic app updates
 #   iliada.ux            FHS hiding, privilege model
 { lib, pkgs, ... }:
 {
@@ -18,6 +20,8 @@
     ./desktop.nix
     ./workstation.nix
     ./rust-userland.nix
+    ./settings.nix
+    ./store.nix
     ./ux.nix
   ];
 

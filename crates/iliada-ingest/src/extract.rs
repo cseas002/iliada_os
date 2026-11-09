@@ -89,12 +89,12 @@ pub fn sanitize(raw: &Path) -> Result<Option<PathBuf>, ExtractError> {
 /// Does a symlink at `link_rel` with `target` stay inside the root?
 pub fn symlink_stays_inside(link_rel: &Path, target: &Path) -> bool {
     let mut depth: Vec<&std::ffi::OsStr> = Vec::new();
-    if !target.is_absolute() {
-        if let Some(parent) = link_rel.parent() {
-            for c in parent.components() {
-                if let Component::Normal(p) = c {
-                    depth.push(p);
-                }
+    if !target.is_absolute()
+        && let Some(parent) = link_rel.parent()
+    {
+        for c in parent.components() {
+            if let Component::Normal(p) = c {
+                depth.push(p);
             }
         }
     }

@@ -84,7 +84,7 @@ nixos-generate-config --root /mnt
 mkdir -p /mnt/etc/iliada
 cp -rL "$SOURCE" /mnt/etc/iliada/source
 chmod -R u+w /mnt/etc/iliada/source
-cp "$TEMPLATE/flake.nix" "$TEMPLATE/configuration.nix" "$TEMPLATE/apps.toml" /mnt/etc/iliada/
+cp "$TEMPLATE/flake.nix" "$TEMPLATE/configuration.nix" "$TEMPLATE/apps.toml" "$TEMPLATE/settings.toml" /mnt/etc/iliada/
 mv /mnt/etc/nixos/hardware-configuration.nix /mnt/etc/iliada/
 rm -rf /mnt/etc/nixos
 system="$(uname -m)-linux"
@@ -105,7 +105,8 @@ sed -i -e "s|networking.hostName = \"iliada\";|networking.hostName = \"$HOSTNAME
 # file does not disturb the flake. The bundled Iliada source is an input,
 # not part of the configuration.
 G() { git -C /mnt/etc/iliada -c user.name=Iliada -c user.email=iliada@localhost "$@"; }
-printf 'source/\n' > /mnt/etc/iliada/.gitignore
+# Not configuration: the bundled Iliada source, and files the system manages.
+printf 'source/\nisolation.json\nstore.json\n' > /mnt/etc/iliada/.gitignore
 G init -q -b main
 G add -A
 G commit -q -m "Initial configuration for $HOSTNAME_"

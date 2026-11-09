@@ -52,6 +52,7 @@
   systemd.targets.hybrid-sleep.enable = false;
 
   iliada = {
+    settingsFile = ../../examples/settings.toml;
     applications = {
       list = "/var/lib/iliada/apps.toml";
       initialList = ../../examples/watchlist.toml;
