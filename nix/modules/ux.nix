@@ -30,7 +30,10 @@ in
     (lib.mkIf cfg.hideFhs {
       systemd.tmpfiles.rules = [ "f+ /.hidden 0644 root root - ${lib.concatStringsSep "\\n" hidden}" ];
     })
-    (lib.mkIf cfg.noSudo { security.sudo.enable = false; })
+    (lib.mkIf cfg.noSudo {
+      security.sudo.enable = false;
+      security.sudo-rs.enable = false;
+    })
     {
       security.polkit.enable = true;
       security.polkit.extraConfig = ''

@@ -21,8 +21,13 @@ Principles:
    permissions on the user's behalf.
 4. **AI helps, but never acts as an authority.** AI suggestions are verified
    mechanically or confirmed by the user before they take effect.
-5. **Everything is declarative.** The whole system is defined in Nix, and
-   the daemons are written in Rust.
+5. **Everything is declarative.** The whole system is defined in Nix.
+6. **Rust wherever it is ready.** Everything Iliada writes is Rust, and so is
+   every system component with a working Rust implementation:
+
+   | Rust 🦀 | Still C (no production Rust replacement yet) |
+   |---|---|
+   | coreutils, diff, sed, ps (uutils) · sudo-rs · ntpd-rs · fish · COSMIC desktop, compositor, terminal, files · cloud-hypervisor · virtiofsd · all Iliada daemons | Linux kernel · glibc · systemd · Mesa · PipeWire · NetworkManager · bash (for scripts) |
 
 * **Immutable base.** The system is composed with Nix and shipped as a signed,
   read-only image (dm-verity `/nix/store`, UKI, tmpfs root). Updates are atomic

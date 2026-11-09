@@ -33,7 +33,17 @@
       "-object secret,id=vncpw,data=iliada"
       "-vnc 127.0.0.1:0,password-secret=vncpw"
     ];
+    # SSH into the VM from the server: ssh -p 2222 iliada@localhost
+    forwardPorts = [
+      {
+        from = "host";
+        host.address = "127.0.0.1";
+        host.port = 2222;
+        guest.port = 22;
+      }
+    ];
   };
+  services.openssh.enable = true;
 
   iliada = {
     applications.ingest = {
