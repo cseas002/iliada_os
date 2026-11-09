@@ -4,6 +4,7 @@
 #   iliada.applications  the /Applications volume and the ingestion daemon
 #   iliada.isolation     sandbox tiers, VMM, guest kernel, network policy
 #   iliada.broker        the runtime permission broker
+#   iliada.desktop       COSMIC desktop
 #   iliada.ux            FHS hiding, privilege model
 { lib, pkgs, ... }:
 {
@@ -12,6 +13,7 @@
     ./applications.nix
     ./isolation.nix
     ./broker.nix
+    ./desktop.nix
     ./ux.nix
   ];
 
