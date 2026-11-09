@@ -2,8 +2,9 @@
 #
 # Run it headless on a server and view it from another machine:
 #   server$ nix run .#nixosConfigurations.dev-vm-x86_64.config.system.build.vm
-#   mac$    ssh -N -L 5900:localhost:5900 personalServerLocal
-#   mac$    open vnc://localhost:5900          (password: iliada)
+#   mac$    ssh -N -L 5901:localhost:5900 personalServerLocal
+#   mac$    open vnc://localhost:5901          (password: iliada)
+# (Local port 5901 because macOS's own Screen Sharing service owns 5900.)
 { lib, ... }:
 {
   networking.hostName = "iliada-dev";
