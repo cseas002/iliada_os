@@ -171,7 +171,14 @@ async fn main() -> Result<()> {
             if entry.network {
                 eprintln!("{} uses the internet.", entry.name);
             }
-            s.install(entry, &|d, t| eprint!("\rDownloading {}… {:>3}%", entry.name, d * 100 / t.max(1))).await?;
+            let last = std::sync::atomic::AtomicU64::new(u64::MAX);
+            s.install(entry, &|d, t| {
+                let pct = d * 100 / t.max(1);
+                if last.swap(pct, std::sync::atomic::Ordering::Relaxed) != pct {
+                    eprint!("\rDownloading {}… {pct:>3}%", entry.name);
+                }
+            })
+            .await?;
             eprintln!("\n{} is in Applications.", entry.name);
         }
         Cmd::Remove { app } => {

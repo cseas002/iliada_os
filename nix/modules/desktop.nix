@@ -31,7 +31,37 @@ in
     # Apps come only as .app bundles: the Iliada Store replaces COSMIC Store
     # (which installs Flatpaks and system packages).
     environment.cosmic.excludePackages = [ pkgs.cosmic-store ];
-    environment.systemPackages = [ (pkgs.callPackage ../store-gui.nix { }) ];
+    environment.systemPackages = [
+      (pkgs.callPackage ../store-gui.nix { })
+      # Iliada's desktop defaults (users can still change them): Applications
+      # in the Files sidebar; the Iliada Store in the dock. hiPrio: they replace
+      # COSMIC's own defaults for the same settings.
+      (lib.hiPrio (pkgs.runCommand "iliada-cosmic-defaults" { } ''
+        files=$out/share/cosmic/com.system76.CosmicFiles/v1
+        dock=$out/share/cosmic/com.system76.CosmicAppList/v1
+        mkdir -p $files $dock
+        cat > $files/favorites <<'EOF'
+        [
+            Home,
+            Path("/Applications"),
+            Documents,
+            Downloads,
+            Music,
+            Pictures,
+            Videos,
+        ]
+        EOF
+        cat > $dock/favorites <<'EOF'
+        [
+            "com.system76.CosmicFiles",
+            "org.iliada.Store",
+            "com.system76.CosmicEdit",
+            "com.system76.CosmicTerm",
+            "com.system76.CosmicSettings",
+        ]
+        EOF
+      ''))
+    ];
     services.displayManager.cosmic-greeter.enable = true;
     services.displayManager.autoLogin = lib.mkIf (cfg.autoLoginUser != null) {
       enable = true;
