@@ -4,6 +4,7 @@
 //!   iliada-catalog build --recipes iliada_apps/recipes --out dist [--only firefox,gimp]
 //!   iliada-catalog assemble --out dist [--include firefox,gimp]
 //!   iliada-catalog sign --key ~/.config/iliada/catalog.key dist/catalog.json
+//!   iliada-catalog release --source iliada_os --version 0.2.0 --key … --out dist-os
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -63,6 +64,23 @@ enum Cmd {
         #[arg(long)]
         key: PathBuf,
         catalog: PathBuf,
+    },
+    /// Package an Iliada release: the committed source tree as
+    /// iliada-<version>-source.tar.zst, and a signed release.json naming it.
+    /// Upload both (and release.json.sig) to the GitHub release v<version>.
+    Release {
+        /// A git checkout of iliada_os at the release commit.
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        key: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        /// Where the source archive will be downloadable from.
+        #[arg(long, default_value = "https://github.com/cseas002/iliada_os/releases/download")]
+        base_url: String,
     },
 }
 
@@ -257,6 +275,39 @@ async fn main() -> Result<()> {
             iliada_catalog::verify(&sk.verifying_key(), &bytes, &fs::read_to_string(&sig_path)?)?;
             eprintln!("signed: {}", sig_path.display());
         }
+        Cmd::Release { source, version, key, out, base_url } => release(&source, &version, &key, &out, &base_url)?,
     }
+    Ok(())
+}
+
+fn release(source: &Path, version: &str, key: &Path, out: &Path, base_url: &str) -> Result<()> {
+    let sk = iliada_catalog::parse_signing_key(&fs::read_to_string(key)?)?;
+    fs::create_dir_all(out)?;
+    // Committed files only, under one folder.
+    let tar = std::process::Command::new("git")
+        .arg("-C")
+        .arg(source)
+        .args(["archive", "--format=tar", &format!("--prefix=iliada-{version}/"), "HEAD"])
+        .output()
+        .context("running git archive")?;
+    if !tar.status.success() {
+        bail!("git archive: {}", String::from_utf8_lossy(&tar.stderr));
+    }
+    let name = format!("iliada-{version}-source.tar.zst");
+    let archive = zstd::encode_all(tar.stdout.as_slice(), 19)?;
+    fs::write(out.join(&name), &archive)?;
+    let manifest = iliada_catalog::Release {
+        kind: iliada_catalog::RELEASE_KIND.into(),
+        version: version.into(),
+        source: format!("{base_url}/v{version}/{name}"),
+        sha256: hex::encode(Sha256::digest(&archive)),
+        size: archive.len() as u64,
+    };
+    let bytes = serde_json::to_vec_pretty(&manifest)?;
+    fs::write(out.join("release.json"), &bytes)?;
+    let sig = iliada_catalog::sign(&sk, &bytes);
+    iliada_catalog::verify_bytes(&sk.verifying_key(), &bytes, &sig)?;
+    fs::write(out.join("release.json.sig"), sig + "\n")?;
+    eprintln!("{}: {name} ({} KB), release.json, release.json.sig", out.display(), archive.len() / 1024);
     Ok(())
 }

@@ -46,6 +46,21 @@ pub struct Archive {
     pub size: u64,
 }
 
+/// `kind` of an Iliada release manifest (`release.json`).
+pub const RELEASE_KIND: &str = "iliada-release";
+
+/// An Iliada release: where its source is, signed like the catalog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Release {
+    pub kind: String,
+    pub version: String,
+    /// URL of `iliada-<version>-source.tar.zst` (one folder: the source tree).
+    pub source: String,
+    pub sha256: String,
+    pub size: u64,
+}
+
 pub fn parse_key(b64: &str) -> Result<VerifyingKey> {
     let bytes: [u8; 32] =
         B64.decode(b64.trim())?.try_into().map_err(|_| anyhow::anyhow!("public key must be 32 bytes"))?;

@@ -29,6 +29,7 @@ ruzstd = "0.8"
 
 [dev-dependencies]
 tempfile.workspace = true
+zstd = "0.13"
 
 [lints]
 workspace = true

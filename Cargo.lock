@@ -1084,6 +1084,7 @@ dependencies = [
  "toml_edit",
  "tracing",
  "tracing-subscriber",
+ "zstd",
 ]
 
 [[package]]
