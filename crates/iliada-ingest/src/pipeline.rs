@@ -1,0 +1,618 @@
+//! The end-to-end ingestion pipeline. See the crate docs for the data flow.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use anyhow::{Context, Result, bail, ensure};
+use iliada_bundle::{
+    Bundle, BundleLayout, Info, IsolationTier, LibraryRecord, PackageRecord, PackageRole, Provenance, SourceRecord,
+};
+use iliada_types::AppId;
+
+use crate::advisor::{Advisor, AdvisorContext};
+use crate::control::Control;
+use crate::deb::open_deb;
+use crate::desktop::{self, DesktopEntry};
+use crate::elf::{ElfObject, host_deb_arch, multiarch_triplet, provided_sonames, scan_tree};
+use crate::extract::{ExtractLimits, extract_tar, symlink_stays_inside};
+use crate::fetch::Fetcher;
+use crate::index::{IndexLocation, PackageIndex};
+use crate::infer::infer_permissions;
+use crate::launcher::{patch_runpaths, write_launcher};
+use crate::resolve::{Closure, LibCandidate, compute_closure};
+use crate::runtime::RuntimeBase;
+use crate::sandbox::{Confinement, run_confined};
+
+/// What to ingest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Source {
+    /// A `.deb` at an https:// URL, file:// URL or local path.
+    Url(String),
+    /// A package name looked up in the configured Debian suite (`debian:jq`).
+    Debian(String),
+}
+
+impl Source {
+    pub fn parse(s: &str) -> Self {
+        match s.strip_prefix("debian:") {
+            Some(name) => Source::Debian(name.to_owned()),
+            None => Source::Url(s.to_owned()),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct IngestConfig {
+    pub out_dir: PathBuf,
+    pub cache_dir: PathBuf,
+    pub mirror: String,
+    pub suite: String,
+    pub components: Vec<String>,
+    /// Target Debian architecture; defaults to the package's own (or the host's for `Architecture: all`).
+    pub arch: Option<String>,
+    pub vendor_prefix: String,
+    pub exec_override: Option<String>,
+    pub isolation: IsolationTier,
+    pub max_download_bytes: u64,
+    pub max_unpacked_bytes: u64,
+    /// Follow dependency edges into non-`lib*` packages too.
+    pub full_closure: bool,
+    pub max_dependency_packages: usize,
+    /// Consult the Debian package index for dependencies.
+    pub use_index: bool,
+    /// Replace an existing bundle with the same name.
+    pub force: bool,
+    pub allow_http: bool,
+}
+
+impl Default for IngestConfig {
+    fn default() -> Self {
+        Self {
+            out_dir: PathBuf::from("out"),
+            cache_dir: default_cache_dir(),
+            mirror: "https://deb.debian.org/debian".into(),
+            suite: "trixie".into(),
+            components: vec!["main".into()],
+            arch: None,
+            vendor_prefix: "org.debian".into(),
+            exec_override: None,
+            isolation: IsolationTier::MicroVm,
+            max_download_bytes: 1 << 30,
+            max_unpacked_bytes: 4 << 30,
+            full_closure: false,
+            max_dependency_packages: 200,
+            use_index: true,
+            force: false,
+            allow_http: false,
+        }
+    }
+}
+
+pub fn default_cache_dir() -> PathBuf {
+    if let Some(x) = std::env::var_os("XDG_CACHE_HOME") {
+        return PathBuf::from(x).join("iliada-ingest");
+    }
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache/iliada-ingest")).unwrap_or_else(|| ".cache".into())
+}
+
+#[derive(Debug, Clone)]
+pub struct IngestReport {
+    pub bundle: PathBuf,
+    pub app_id: AppId,
+    pub version: String,
+    pub executable: PathBuf,
+    pub libraries: Vec<LibraryRecord>,
+    pub packages: Vec<PackageRecord>,
+    pub unresolved: Vec<String>,
+    pub skipped_dependencies: Vec<String>,
+    pub missing_dependencies: Vec<String>,
+    pub confinement: Confinement,
+    pub runpaths_patched: usize,
+}
+
+#[derive(Debug)]
+pub struct Ingestor {
+    cfg: IngestConfig,
+    fetcher: Fetcher,
+    runtime: RuntimeBase,
+    advisors: Vec<Box<dyn Advisor>>,
+    indexes: tokio::sync::Mutex<HashMap<String, Arc<PackageIndex>>>,
+}
+
+#[derive(Debug, Default)]
+struct DepState {
+    fetched: BTreeMap<String, PackageRecord>,
+    available: BTreeMap<String, LibCandidate>,
+    skipped: BTreeSet<String>,
+    missing: BTreeSet<String>,
+}
+
+impl Ingestor {
+    pub fn new(cfg: IngestConfig, advisors: Vec<Box<dyn Advisor>>) -> Result<Self> {
+        let fetcher = Fetcher::new(cfg.max_download_bytes, cfg.allow_http)?;
+        Ok(Self { cfg, fetcher, runtime: RuntimeBase::builtin(), advisors, indexes: Default::default() })
+    }
+
+    pub fn config(&self) -> &IngestConfig {
+        &self.cfg
+    }
+
+    pub fn fetcher(&self) -> &Fetcher {
+        &self.fetcher
+    }
+
+    /// Drop cached package indexes (watch mode calls this every cycle).
+    pub async fn invalidate_indexes(&self) {
+        self.indexes.lock().await.clear();
+    }
+
+    pub async fn index(&self, arch: &str) -> Result<Arc<PackageIndex>> {
+        let mut guard = self.indexes.lock().await;
+        if let Some(i) = guard.get(arch) {
+            return Ok(i.clone());
+        }
+        let loc = IndexLocation {
+            mirror: self.cfg.mirror.clone(),
+            suite: self.cfg.suite.clone(),
+            components: self.cfg.components.clone(),
+            arch: arch.to_owned(),
+        };
+        let idx = Arc::new(PackageIndex::load(&self.fetcher, &self.cfg.cache_dir, &loc).await?);
+        guard.insert(arch.to_owned(), idx.clone());
+        Ok(idx)
+    }
+
+    fn target_arch(&self) -> String {
+        self.cfg.arch.clone().unwrap_or_else(|| host_deb_arch().to_owned())
+    }
+
+    pub async fn ingest(&self, source: &Source) -> Result<IngestReport> {
+        // 1. Fetch the primary package.
+        let (url, expected_sha) = match source {
+            Source::Url(u) => (u.clone(), None),
+            Source::Debian(name) => {
+                let idx = self.index(&self.target_arch()).await?;
+                let e = idx.get(name).with_context(|| format!("package {name:?} not found in {}", self.cfg.suite))?;
+                (idx.url_for(e), Some(e.sha256.clone()))
+            }
+        };
+        tracing::info!(%url, "fetching package");
+        let primary = self.fetcher.fetch(&url).await?;
+        if let Some(exp) = expected_sha {
+            ensure!(primary.sha256 == exp, "checksum mismatch for {url}: index says {exp}, got {}", primary.sha256);
+        }
+
+        // 2. Extract into a private staging area under the output directory.
+        fs::create_dir_all(&self.cfg.out_dir)?;
+        let staging = tempfile::Builder::new().prefix(".iliada-ingest-").tempdir_in(&self.cfg.out_dir)?;
+        let layout = BundleLayout::new(staging.path().join("bundle.app"));
+        layout.create_dirs()?;
+        let limits = ExtractLimits { max_total_bytes: self.cfg.max_unpacked_bytes, ..Default::default() };
+        let (bytes, root, unpack_limit) = (primary.bytes, layout.fhs_root(), self.cfg.max_unpacked_bytes);
+        let ((control, report), confinement) = run_confined(staging.path().to_owned(), move || {
+            let deb = open_deb(&bytes, unpack_limit)?;
+            let report = extract_tar(&deb.data_tar, &root, limits)?;
+            Ok((deb.control, report))
+        })
+        .await?;
+        if !report.skipped.is_empty() {
+            tracing::warn!(skipped = ?report.skipped, "special files were not extracted");
+        }
+        let package = control.package().context("control file has no Package field")?.to_owned();
+        let version = control.version().context("control file has no Version field")?.to_owned();
+        let deb_arch = control.architecture().unwrap_or("all").to_owned();
+        let arch = if deb_arch == "all" { self.target_arch() } else { deb_arch };
+        let triplet = multiarch_triplet(&arch);
+        tracing::info!(%package, %version, %arch, files = report.files, ?confinement, "extracted");
+
+        // 3. Analyse what the payload needs.
+        let root = layout.fhs_root();
+        let objects = {
+            let root = root.clone();
+            tokio::task::spawn_blocking(move || scan_tree(&root)).await??
+        };
+        let provided = provided_sonames(&root, &objects);
+        let provided_needed: BTreeMap<String, Vec<String>> =
+            objects.iter().filter_map(|o| o.soname.clone().map(|s| (s, o.needed.clone()))).collect();
+        let roots: BTreeSet<String> = objects.iter().flat_map(|o| o.needed.iter().cloned()).collect();
+        let desktop = desktop::find(&root, &package);
+        let exe_rel = choose_executable(&root, &package, desktop.as_ref(), self.cfg.exec_override.as_deref())?;
+
+        // 4. Resolve dependencies through the package index, then advisors.
+        let mut deps = DepState::default();
+        let mut index = None;
+        let needs_more = roots.iter().any(|s| !provided.contains(s) && !self.runtime.provides_soname(s));
+        if needs_more && self.cfg.use_index {
+            let idx = self.index(&arch).await?;
+            self.walk_dependencies(&idx, control.depends(), None, false, staging.path(), &mut deps).await?;
+            index = Some(idx);
+        }
+        let mut closure = compute_closure(&roots, &provided, &provided_needed, &self.runtime, &deps.available);
+        if let Some(idx) = &index {
+            // Second chance: some library packages are not named lib* (zlib1g).
+            // Retry skipped direct dependencies before asking any advisor.
+            let retry: Vec<String> = deps.skipped.iter().filter(|n| n.contains("lib")).cloned().collect();
+            for name in retry {
+                if closure.unresolved.is_empty() {
+                    break;
+                }
+                deps.skipped.remove(&name);
+                self.walk_dependencies(idx, vec![vec![name]], None, true, staging.path(), &mut deps).await?;
+                closure = compute_closure(&roots, &provided, &provided_needed, &self.runtime, &deps.available);
+            }
+        }
+        if let Some(idx) = &index {
+            self.consult_advisors(
+                idx,
+                &control,
+                &arch,
+                staging.path(),
+                &roots,
+                &provided,
+                &provided_needed,
+                &mut deps,
+                &mut closure,
+            )
+            .await?;
+        }
+        for s in &closure.unresolved {
+            tracing::warn!(soname = %s, "unresolved shared library; the app may fail to start");
+        }
+
+        // 5. Assemble the bundle.
+        for soname in &closure.bundle {
+            let src = &deps.available[soname].path;
+            let dst = layout.libraries().join(soname);
+            fs::copy(src, &dst).with_context(|| format!("copying {}", src.display()))?;
+            fs::set_permissions(&dst, fs::Permissions::from_mode(0o755))?;
+        }
+        let exe_name = exe_rel.file_name().context("executable has no file name")?.to_string_lossy().into_owned();
+        write_launcher(&layout, &exe_name, &exe_rel, triplet)?;
+        let exec_objects: Vec<PathBuf> =
+            objects.iter().filter(|o| o.is_executable).map(|o: &ElfObject| o.rel_path.clone()).collect();
+        let runpaths_patched = patch_runpaths(&layout, &exec_objects, triplet).await?;
+        let icon = copy_resources(&layout, &root, desktop.as_ref())?;
+
+        let used_packages: BTreeSet<&str> = closure.records.iter().filter_map(|r| r.package.as_deref()).collect();
+        let mut packages = vec![PackageRecord {
+            name: package.clone(),
+            version: version.clone(),
+            url: url.clone(),
+            sha256: primary.sha256.clone(),
+            role: PackageRole::Primary,
+        }];
+        packages.extend(deps.fetched.values().filter(|p| used_packages.contains(p.name.as_str())).cloned());
+
+        let app_id = AppId::from_upstream(&self.cfg.vendor_prefix, &package)?;
+        let info = Info {
+            id: app_id.clone(),
+            name: desktop.as_ref().and_then(|d| d.name.clone()).unwrap_or_else(|| package.clone()),
+            version: version.clone(),
+            executable: exe_name,
+            entry: Some(exe_rel.to_string_lossy().into_owned()),
+            icon,
+            runtime: self.runtime.name.clone(),
+            isolation: self.cfg.isolation,
+            categories: desktop.as_ref().map(|d| d.categories.clone()).unwrap_or_default(),
+            mime_types: desktop.as_ref().map(|d| d.mime_types.clone()).unwrap_or_default(),
+        };
+        let permissions = infer_permissions(closure.records.iter().map(|r| r.soname.as_str()));
+        let provenance = Provenance {
+            generator: concat!("iliada-ingest ", env!("CARGO_PKG_VERSION")).into(),
+            created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+            source: SourceRecord { url, sha256: primary.sha256, format: "deb".into() },
+            packages: packages.clone(),
+            libraries: closure.records.clone(),
+        };
+        Bundle::write_manifests(&layout, &info, &permissions, Some(&provenance))?;
+        Bundle::open(layout.root()).context("freshly written bundle failed validation")?;
+
+        // 6. Publish atomically (same filesystem: rename).
+        let dest = BundleLayout::in_dir(&self.cfg.out_dir, &info.name);
+        if dest.root().exists() {
+            if !self.cfg.force {
+                bail!("{} already exists (use --force to replace it)", dest.root().display());
+            }
+            fs::remove_dir_all(dest.root())?;
+        }
+        fs::rename(layout.root(), dest.root())?;
+
+        Ok(IngestReport {
+            bundle: dest.root().to_owned(),
+            app_id,
+            version,
+            executable: exe_rel,
+            libraries: closure.records,
+            packages,
+            unresolved: closure.unresolved,
+            skipped_dependencies: deps.skipped.into_iter().collect(),
+            missing_dependencies: deps.missing.into_iter().collect(),
+            confinement,
+            runpaths_patched,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn consult_advisors(
+        &self,
+        idx: &PackageIndex,
+        control: &Control,
+        arch: &str,
+        staging: &Path,
+        roots: &BTreeSet<String>,
+        provided: &BTreeSet<String>,
+        provided_needed: &BTreeMap<String, Vec<String>>,
+        deps: &mut DepState,
+        closure: &mut Closure,
+    ) -> Result<()> {
+        for advisor in &self.advisors {
+            if closure.unresolved.is_empty() {
+                break;
+            }
+            let ctx = AdvisorContext {
+                package: control.package().unwrap_or_default().to_owned(),
+                version: control.version().unwrap_or_default().to_owned(),
+                arch: arch.to_owned(),
+                suite: self.cfg.suite.clone(),
+                unresolved: closure.unresolved.clone(),
+                already_fetched: deps.fetched.keys().cloned().collect(),
+            };
+            let suggestions = match advisor.suggest(&ctx).await {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(advisor = advisor.name(), error = %e, "advisor failed; skipping it");
+                    continue;
+                }
+            };
+            for s in suggestions {
+                if deps.available.contains_key(&s.soname) || deps.fetched.contains_key(&s.package) {
+                    continue;
+                }
+                if idx.get(&s.package).is_none() {
+                    tracing::debug!(advisor = advisor.name(), package = %s.package, "suggested package does not exist");
+                    continue;
+                }
+                self.walk_dependencies(idx, vec![vec![s.package.clone()]], Some(advisor.name()), true, staging, deps)
+                    .await?;
+                if deps.available.contains_key(&s.soname) {
+                    tracing::info!(advisor = advisor.name(), soname = %s.soname, package = %s.package, rationale = %s.rationale, "advisor suggestion verified");
+                } else {
+                    tracing::warn!(advisor = advisor.name(), soname = %s.soname, package = %s.package, "advisor suggestion rejected: package does not ship that soname");
+                }
+            }
+            *closure = compute_closure(roots, provided, provided_needed, &self.runtime, &deps.available);
+        }
+        Ok(())
+    }
+
+    /// Breadth-first walk of Depends edges. Only `lib*` packages are followed
+    /// (unless `full_closure`, or `force_roots` for the root groups);
+    /// packages in the runtime base are never fetched.
+    async fn walk_dependencies(
+        &self,
+        idx: &PackageIndex,
+        roots: Vec<Vec<String>>,
+        advised_by: Option<&str>,
+        force_roots: bool,
+        staging: &Path,
+        st: &mut DepState,
+    ) -> Result<()> {
+        let mut queue: VecDeque<(Vec<String>, bool)> = roots.into_iter().map(|g| (g, true)).collect();
+        while let Some((group, is_root)) = queue.pop_front() {
+            if group.iter().any(|n| self.runtime.provides_package(n)) {
+                continue;
+            }
+            let Some(entry) = group.iter().find_map(|n| idx.get(n)) else {
+                st.missing.insert(group.join(" | "));
+                continue;
+            };
+            if st.fetched.contains_key(&entry.name) || st.skipped.contains(&entry.name) {
+                continue;
+            }
+            let forced = is_root && force_roots;
+            if !forced && !self.cfg.full_closure && !entry.name.starts_with("lib") {
+                st.skipped.insert(entry.name.clone());
+                continue;
+            }
+            if st.fetched.len() >= self.cfg.max_dependency_packages {
+                bail!("dependency closure exceeds {} packages", self.cfg.max_dependency_packages);
+            }
+            let url = idx.url_for(entry);
+            tracing::info!(package = %entry.name, version = %entry.version, "fetching dependency");
+            let f = self.fetcher.fetch(&url).await?;
+            ensure!(f.sha256 == entry.sha256, "checksum mismatch for {url}");
+
+            let dest = staging.join("deps").join(&entry.name);
+            let (bytes, d, limit) = (f.bytes, dest.clone(), self.cfg.max_unpacked_bytes);
+            let limits = ExtractLimits { max_total_bytes: limit, ..Default::default() };
+            run_confined(staging.to_owned(), move || {
+                let deb = open_deb(&bytes, limit)?;
+                extract_tar(&deb.data_tar, &d, limits)?;
+                Ok(())
+            })
+            .await?;
+            let objs = {
+                let d = dest.clone();
+                tokio::task::spawn_blocking(move || scan_tree(&d)).await??
+            };
+            let advised = if is_root { advised_by.map(str::to_owned) } else { None };
+            for o in objs.into_iter().filter(|o| o.is_shared_lib) {
+                if let Some(soname) = o.soname.clone() {
+                    st.available.entry(soname).or_insert(LibCandidate {
+                        package: entry.name.clone(),
+                        path: dest.join(&o.rel_path),
+                        needed: o.needed,
+                        advised_by: advised.clone(),
+                    });
+                }
+            }
+            st.fetched.insert(
+                entry.name.clone(),
+                PackageRecord {
+                    name: entry.name.clone(),
+                    version: entry.version.clone(),
+                    url,
+                    sha256: f.sha256,
+                    role: PackageRole::Dependency,
+                },
+            );
+            queue.extend(entry.depends.iter().cloned().map(|g| (g, false)));
+        }
+        Ok(())
+    }
+}
+
+const BIN_DIRS: [&str; 5] = ["usr/bin", "bin", "usr/games", "usr/sbin", "sbin"];
+
+/// Resolve `rel` inside `root` to a regular file, following symlinks
+/// *lexically* (absolute targets re-rooted), never via the host filesystem.
+pub fn resolve_in_root(root: &Path, rel: &Path) -> Option<PathBuf> {
+    let mut cur = rel.to_owned();
+    for _ in 0..16 {
+        let meta = fs::symlink_metadata(root.join(&cur)).ok()?;
+        if meta.is_file() {
+            return Some(cur);
+        }
+        if !meta.file_type().is_symlink() {
+            return None;
+        }
+        let target = fs::read_link(root.join(&cur)).ok()?;
+        if !symlink_stays_inside(&cur, &target) {
+            return None;
+        }
+        let joined = if target.is_absolute() { target } else { cur.parent().unwrap_or(Path::new("")).join(target) };
+        let mut norm = PathBuf::new();
+        for c in joined.components() {
+            match c {
+                std::path::Component::Normal(p) => norm.push(p),
+                std::path::Component::ParentDir => {
+                    norm.pop();
+                }
+                _ => {}
+            }
+        }
+        cur = norm;
+    }
+    None
+}
+
+fn is_executable_in_root(root: &Path, rel: &Path) -> Option<PathBuf> {
+    let real = resolve_in_root(root, rel)?;
+    let mode = fs::metadata(root.join(&real)).ok()?.permissions().mode();
+    (mode & 0o111 != 0).then_some(real)
+}
+
+fn choose_executable(
+    root: &Path,
+    package: &str,
+    desktop: Option<&DesktopEntry>,
+    override_: Option<&str>,
+) -> Result<PathBuf> {
+    let by_name = |name: &str| BIN_DIRS.iter().find_map(|d| is_executable_in_root(root, &Path::new(d).join(name)));
+    if let Some(o) = override_ {
+        let found = if o.contains('/') {
+            crate::extract::sanitize(Path::new(o)).ok().flatten().and_then(|p| is_executable_in_root(root, &p))
+        } else {
+            by_name(o)
+        };
+        return found.with_context(|| format!("--exec {o:?} is not an executable in the package"));
+    }
+    if let Some(p) = desktop.and_then(|d| d.exec.as_deref()).and_then(by_name) {
+        return Ok(p);
+    }
+    if let Some(p) = by_name(package) {
+        return Ok(p);
+    }
+    for d in BIN_DIRS {
+        let Ok(rd) = fs::read_dir(root.join(d)) else { continue };
+        let mut names: Vec<_> = rd.flatten().map(|e| e.file_name()).collect();
+        names.sort();
+        if let Some(p) = names.iter().find_map(|n| is_executable_in_root(root, &Path::new(d).join(n))) {
+            return Ok(p);
+        }
+    }
+    bail!("no executable found in the package; pass --exec <name>")
+}
+
+/// Copy the desktop entry and icon into `Contents/Resources`; returns the
+/// icon path relative to `Contents/` for Info.toml.
+fn copy_resources(layout: &BundleLayout, root: &Path, desktop: Option<&DesktopEntry>) -> Result<Option<String>> {
+    let Some(d) = desktop else { return Ok(None) };
+    if let Some(name) = d.file.file_name() {
+        fs::copy(&d.file, layout.resources().join(name))?;
+    }
+    let Some(icon) = d.icon.as_deref().and_then(|i| desktop::find_icon(root, i)) else { return Ok(None) };
+    let rel = icon.strip_prefix(root).ok().and_then(|r| resolve_in_root(root, r));
+    let Some(rel) = rel else { return Ok(None) };
+    let ext = rel.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_else(|| "png".into());
+    let name = format!("icon.{ext}");
+    fs::copy(root.join(rel), layout.resources().join(&name))?;
+    Ok(Some(format!("Resources/{name}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::deb::tests::build_deb;
+
+    #[test]
+    fn source_parsing() {
+        assert_eq!(Source::parse("debian:jq"), Source::Debian("jq".into()));
+        assert_eq!(Source::parse("https://x/y.deb"), Source::Url("https://x/y.deb".into()));
+    }
+
+    #[test]
+    fn lexical_resolution_stays_in_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("usr/bin")).unwrap();
+        fs::create_dir_all(root.join("usr/lib/app")).unwrap();
+        fs::write(root.join("usr/lib/app/real"), "x").unwrap();
+        std::os::unix::fs::symlink("../lib/app/real", root.join("usr/bin/rel")).unwrap();
+        std::os::unix::fs::symlink("/usr/lib/app/real", root.join("usr/bin/abs")).unwrap();
+        std::os::unix::fs::symlink("/etc/passwd", root.join("usr/bin/host")).unwrap();
+        assert_eq!(resolve_in_root(root, Path::new("usr/bin/rel")).unwrap(), Path::new("usr/lib/app/real"));
+        assert_eq!(resolve_in_root(root, Path::new("usr/bin/abs")).unwrap(), Path::new("usr/lib/app/real"));
+        assert!(
+            resolve_in_root(root, Path::new("usr/bin/host")).is_none(),
+            "must not resolve to the host's /etc/passwd"
+        );
+    }
+
+    /// End-to-end on a synthetic, dependency-free package (no network).
+    #[tokio::test]
+    async fn ingests_local_deb_offline() {
+        let dir = tempfile::tempdir().unwrap();
+        let deb = build_deb(
+            "Package: hello-iliada\nVersion: 1.0-1\nArchitecture: all\n",
+            &[
+                ("./usr/bin/hello-iliada", b"#!/bin/sh\necho hello from iliada\n", 0o755),
+                (
+                    "./usr/share/applications/hello-iliada.desktop",
+                    b"[Desktop Entry]\nName=Hello Iliada\nExec=hello-iliada\nCategories=Utility;\n",
+                    0o644,
+                ),
+            ],
+        );
+        let deb_path = dir.path().join("hello.deb");
+        fs::write(&deb_path, deb).unwrap();
+        let cfg = IngestConfig {
+            out_dir: dir.path().join("out"),
+            cache_dir: dir.path().join("cache"),
+            use_index: false,
+            ..Default::default()
+        };
+        let ing = Ingestor::new(cfg, vec![]).unwrap();
+        let report = ing.ingest(&Source::Url(deb_path.to_string_lossy().into_owned())).await.unwrap();
+        assert!(report.bundle.ends_with("Hello Iliada.app"));
+        let b = Bundle::open(&report.bundle).unwrap();
+        assert_eq!(b.info.id.as_str(), "org.debian.hello-iliada");
+        assert_eq!(b.info.categories, ["Utility"]);
+        let out = std::process::Command::new(b.layout.executables().join("hello-iliada")).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hello from iliada");
+    }
+}

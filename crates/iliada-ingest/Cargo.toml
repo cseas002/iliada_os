@@ -1,0 +1,49 @@
+[package]
+name = "iliada-ingest"
+description = "Iliada ingestion daemon: turns upstream packages (.deb first) into self-contained .app bundles."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "iliada-ingest"
+path = "src/main.rs"
+
+[features]
+default = []
+# Enables the Claude-backed dependency advisor (needs ANTHROPIC_API_KEY at runtime).
+claude = []
+
+[dependencies]
+iliada-types.workspace = true
+iliada-bundle.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+reqwest.workspace = true
+futures-util.workspace = true
+sha2.workspace = true
+hex.workspace = true
+tempfile.workspace = true
+libc = "0.2"
+# Pure-Rust archive + decompression stack: untrusted input never touches C parsers.
+ar = "0.9"
+tar = { version = "0.4", default-features = false }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+lzma-rs = "0.3"
+ruzstd = "0.8"
+goblin = { version = "0.9", default-features = false, features = ["std", "elf32", "elf64", "endian_fd"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4"
+
+[lints]
+workspace = true
