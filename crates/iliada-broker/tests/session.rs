@@ -136,3 +136,57 @@ async fn while_running_grant_dies_with_the_session() {
     let mut c = Client::connect_unix(&sock).await.unwrap();
     assert!(matches!(c.request(Capability::Microphone, None).await.unwrap(), Reply::Denied { .. }));
 }
+
+/// Bundles installed after start-up are picked up; removed ones are dropped.
+#[tokio::test]
+async fn follows_installs_and_removals() {
+    use iliada_bundle::{Bundle, BundleLayout, Info, IsolationTier};
+    let dir = tempfile::tempdir().unwrap();
+    let (apps, sockets, state) = (dir.path().join("Applications"), dir.path().join("sock"), dir.path().join("state"));
+    std::fs::create_dir_all(&apps).unwrap();
+    let engine = Engine::new(GrantStore::open(&state).unwrap(), Arc::new(Scripted::new([], [])));
+    let broker = Arc::new(Broker::new(engine, &state));
+    let watcher = tokio::spawn(broker.clone().watch_applications(
+        apps.clone(),
+        sockets.clone(),
+        std::time::Duration::from_millis(50),
+    ));
+
+    let wait_for = |p: PathBuf, exists: bool| async move {
+        for _ in 0..100 {
+            if p.exists() == exists {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        false
+    };
+
+    // Install a bundle after the broker is already running.
+    let layout = BundleLayout::in_dir(&apps, "Memo");
+    layout.create_dirs().unwrap();
+    std::fs::write(layout.executables().join("memo"), "#!/bin/sh\n").unwrap();
+    let info = Info {
+        id: app().id,
+        name: "Memo".into(),
+        version: "1".into(),
+        executable: "memo".into(),
+        entry: None,
+        icon: None,
+        runtime: "iliada-base-1".into(),
+        isolation: IsolationTier::Namespace,
+        categories: vec![],
+        mime_types: vec![],
+    };
+    Bundle::write_manifests(&layout, &info, &app().permissions, None).unwrap();
+    let sock = transport::broker_socket(&sockets, &app().id);
+    assert!(wait_for(sock.clone(), true).await, "socket appears after install");
+    let mut c = Client::connect_unix(&sock).await.unwrap();
+    assert_eq!(c.request(Capability::Camera, None).await.unwrap(), Reply::Denied { reason: DenyReason::NotDeclared });
+    drop(c);
+
+    // Uninstall: the socket goes away.
+    std::fs::remove_dir_all(layout.root()).unwrap();
+    assert!(wait_for(sock, false).await, "socket removed after uninstall");
+    watcher.abort();
+}

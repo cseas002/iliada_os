@@ -1,17 +1,18 @@
 //! One Unix listener per app; one session per connection.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
+use iliada_bundle::{Bundle, Permissions};
 use iliada_ipc::{
     Channel, DenyReason, Event, Grant, GrantInfo, GrantScope, GuestMessage, Handle, HostMessage, MAX_READ_CHUNK,
     MediaKind, PROTOCOL_VERSION, Reply, Request, Resource, transport,
 };
-use iliada_types::{Capability, FileScope};
+use iliada_types::{AppId, Capability, FileScope};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::task::JoinHandle;
@@ -83,6 +84,71 @@ impl Broker {
             out.push((path, task));
         }
         Ok(out)
+    }
+
+    /// Serve every bundle in `dir`, following installs, updates and removals.
+    ///
+    /// The directory is rescanned every `interval` (bundles are published by
+    /// atomic rename, so a scan never sees a half-written one). Phase 2
+    /// replaces polling with notifications from `iliada-appd`.
+    pub async fn watch_applications(self: Arc<Self>, dir: PathBuf, socket_dir: PathBuf, interval: std::time::Duration) {
+        struct Served {
+            name: String,
+            permissions: Permissions,
+            socket: PathBuf,
+            task: JoinHandle<()>,
+        }
+        let mut served: HashMap<AppId, Served> = HashMap::new();
+        let mut warned: HashSet<PathBuf> = HashSet::new();
+        loop {
+            let mut present = HashSet::new();
+            let entries = std::fs::read_dir(&dir).map(|rd| rd.flatten().map(|e| e.path()).collect::<Vec<_>>());
+            for path in entries.unwrap_or_default() {
+                if path.extension().is_none_or(|x| x != "app") {
+                    continue;
+                }
+                let bundle = match Bundle::open(&path) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        if warned.insert(path.clone()) {
+                            tracing::warn!(bundle = %path.display(), error = %e, "ignoring invalid bundle");
+                        }
+                        continue;
+                    }
+                };
+                warned.remove(&path);
+                let ctx = AppContext::from(&bundle);
+                present.insert(ctx.id.clone());
+                if let Some(s) = served.get(&ctx.id) {
+                    if s.name == ctx.name && s.permissions == ctx.permissions {
+                        continue;
+                    }
+                    tracing::info!(app = %ctx.id, "bundle changed; reloading");
+                    if let Some(old) = served.remove(&ctx.id) {
+                        old.task.abort();
+                    }
+                }
+                let (name, permissions, id) = (ctx.name.clone(), ctx.permissions.clone(), ctx.id.clone());
+                match self.listen(&socket_dir, vec![ctx]) {
+                    Ok(mut l) => {
+                        let (socket, task) = l.remove(0);
+                        tracing::info!(app = %id, socket = %socket.display(), "serving");
+                        served.insert(id, Served { name, permissions, socket, task });
+                    }
+                    Err(e) => tracing::error!(app = %id, error = %format!("{e:#}"), "cannot serve bundle"),
+                }
+            }
+            served.retain(|id, s| {
+                if present.contains(id) {
+                    return true;
+                }
+                s.task.abort();
+                let _ = std::fs::remove_file(&s.socket);
+                tracing::info!(app = %id, "bundle removed; socket closed");
+                false
+            });
+            tokio::time::sleep(interval).await;
+        }
     }
 
     async fn run_session(&self, app: Arc<AppContext>, stream: UnixStream) -> Result<()> {

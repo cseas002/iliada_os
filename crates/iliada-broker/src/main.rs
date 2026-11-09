@@ -41,23 +41,15 @@ async fn main() -> Result<()> {
         .init();
     let cli = Cli::parse();
 
-    let mut paths = cli.bundles.clone();
-    if let Some(dir) = &cli.applications {
-        for e in std::fs::read_dir(dir)?.flatten() {
-            if e.path().extension().is_some_and(|x| x == "app") {
-                paths.push(e.path());
-            }
-        }
+    if cli.bundles.is_empty() && cli.applications.is_none() {
+        bail!("nothing to serve: pass --bundle <path> and/or --applications <dir>");
     }
     let mut apps = Vec::new();
-    for p in &paths {
+    for p in &cli.bundles {
         match Bundle::open(p) {
             Ok(b) => apps.push(AppContext::from(&b)),
-            Err(e) => tracing::warn!(bundle = %p.display(), error = %e, "skipping invalid bundle"),
+            Err(e) => bail!("invalid bundle {}: {e}", p.display()),
         }
-    }
-    if apps.is_empty() {
-        bail!("no valid bundles to serve (use --bundle or --applications)");
     }
 
     let frontend: Arc<dyn PromptFrontend> = match cli.frontend {
@@ -69,6 +61,11 @@ async fn main() -> Result<()> {
     let listeners = broker.listen(&cli.socket_dir, apps)?;
     for (path, _) in &listeners {
         tracing::info!(socket = %path.display(), "listening");
+    }
+    if let Some(dir) = cli.applications.clone() {
+        // Apps may be installed after the broker starts (e.g. by the Package Translator).
+        tracing::info!(dir = %dir.display(), "watching for bundles");
+        tokio::spawn(broker.clone().watch_applications(dir, cli.socket_dir.clone(), std::time::Duration::from_secs(2)));
     }
     tracing::info!(audit = %broker.audit_path().display(), "audit log");
     tokio::signal::ctrl_c().await?;
