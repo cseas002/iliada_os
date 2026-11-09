@@ -1,0 +1,34 @@
+[package]
+name = "iliada-system"
+description = "The Iliada system service: settings, tools, services, backup and updates, for admin users without sudo."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "iliada-systemd"
+path = "src/bin/iliada-systemd.rs"
+
+[dependencies]
+iliada-catalog.workspace = true
+iliada-ingest.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+reqwest.workspace = true
+toml_edit = "0.22"
+sha2.workspace = true
+hex.workspace = true
+ruzstd = "0.8"
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

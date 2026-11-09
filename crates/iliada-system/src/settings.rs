@@ -10,7 +10,8 @@
 //! ```
 //!
 //! The Iliada NixOS modules read this file (`iliada.settingsFile`); the
-//! `iliada` command and, later, the Settings app edit it. Edits keep comments.
+//! system service edits it for the `iliada` command and Settings. Edits keep
+//! comments.
 
 use anyhow::{Result, bail};
 use toml_edit::{Array, DocumentMut, Item, Table, Value, value};

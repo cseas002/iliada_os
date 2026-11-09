@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Iliada Settings
+GenericName=System Settings
+Comment=Updates, backup, command-line tools and services
+Exec=iliada-settings
+Icon=preferences-system
+Categories=Settings;System;
+Keywords=update;backup;github;restore;tools;ssh;printing;
+StartupNotify=true
+StartupWMClass=org.iliada.Settings

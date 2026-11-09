@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Setup Assistant
+Comment=Restore a backup or set up this computer
+Exec=iliada-setup
+Icon=system-software-install
+Categories=Settings;System;
+StartupNotify=true
+StartupWMClass=org.iliada.Setup

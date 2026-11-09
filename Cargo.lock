@@ -961,9 +961,9 @@ dependencies = [
  "anyhow",
  "clap",
  "iliada-store",
- "tempfile",
+ "iliada-system",
+ "serde_json",
  "tokio",
- "toml_edit",
  "tracing-subscriber",
 ]
 
@@ -1063,6 +1063,27 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "zstd",
+]
+
+[[package]]
+name = "iliada-system"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hex",
+ "iliada-catalog",
+ "iliada-ingest",
+ "reqwest",
+ "ruzstd",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "toml_edit",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

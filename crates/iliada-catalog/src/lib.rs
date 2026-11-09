@@ -66,12 +66,18 @@ pub fn sign(key: &SigningKey, catalog_bytes: &[u8]) -> String {
     B64.encode(key.sign(catalog_bytes).to_bytes())
 }
 
+/// Check an Ed25519 signature (base64) over `bytes`.
+pub fn verify_bytes(key: &VerifyingKey, bytes: &[u8], sig_b64: &str) -> Result<()> {
+    let sig: [u8; 64] =
+        B64.decode(sig_b64.trim())?.try_into().map_err(|_| anyhow::anyhow!("signature must be 64 bytes"))?;
+    key.verify(bytes, &Signature::from_bytes(&sig)).context("signature is invalid")?;
+    Ok(())
+}
+
 /// Verify `sig` over `catalog_bytes`, then parse. Nothing is parsed before
 /// the signature checks out.
 pub fn verify(key: &VerifyingKey, catalog_bytes: &[u8], sig_b64: &str) -> Result<Catalog> {
-    let sig: [u8; 64] =
-        B64.decode(sig_b64.trim())?.try_into().map_err(|_| anyhow::anyhow!("signature must be 64 bytes"))?;
-    key.verify(catalog_bytes, &Signature::from_bytes(&sig)).context("catalog signature is invalid")?;
+    verify_bytes(key, catalog_bytes, sig_b64).context("catalog signature is invalid")?;
     let catalog: Catalog = serde_json::from_slice(catalog_bytes).context("malformed catalog")?;
     if catalog.format != FORMAT {
         bail!("unsupported catalog format {}", catalog.format);

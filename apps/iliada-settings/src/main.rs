@@ -1,0 +1,601 @@
+//! Iliada Settings: updates, backup, command-line tools, services, about.
+//!
+//! A COSMIC app over the Iliada system service. Display, network, sound and
+//! the rest stay in COSMIC's own Settings; this is what is Iliada's.
+
+use cosmic::app::{Settings, Task};
+use cosmic::iced::{Alignment, Length, Size};
+use cosmic::widget::{self, nav_bar, settings};
+use cosmic::{ApplicationExt, Core, Element, executor};
+use futures_util::StreamExt;
+use iliada_settings::{Progress, ago, open_url, run};
+use iliada_system::client;
+use iliada_system::protocol::{Backup, Event, Request, Status};
+
+fn main() -> cosmic::iced::Result {
+    let settings = Settings::default().size(Size::new(900.0, 680.0));
+    cosmic::app::run::<App>(settings, ())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Page {
+    Updates,
+    Backup,
+    Tools,
+    Services,
+    About,
+}
+
+#[derive(Debug, Clone)]
+enum Confirm {
+    Restore(String),
+    SignOut,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Refresh,
+    Status(Result<Status, String>),
+    Run(Request),
+    Progress(Progress),
+    ToolInput(String),
+    AddTool,
+    BackupName(String),
+    OpenSignIn,
+    LoadBackups,
+    Backups(Result<Vec<Backup>, String>),
+    Ask(Confirm),
+    Confirmed,
+    Cancel,
+    Dismiss,
+}
+
+struct Job {
+    request: Request,
+    line: String,
+}
+
+struct App {
+    core: Core,
+    nav: nav_bar::Model,
+    status: Option<Result<Status, String>>,
+    job: Option<Job>,
+    sign_in: Option<(String, String)>,
+    error: Option<String>,
+    notice: Option<String>,
+    tool_input: String,
+    backup_name: String,
+    backups: Option<Result<Vec<Backup>, String>>,
+    confirm: Option<Confirm>,
+}
+
+fn load_status() -> Task<Message> {
+    cosmic::task::future(async { Message::Status(client::status().await.map_err(|e| format!("{e:#}"))) })
+}
+
+fn load_backups() -> Task<Message> {
+    cosmic::task::future(async {
+        Message::Backups(client::call_as(&Request::BackupList, &mut |_| {}).await.map_err(|e| format!("{e:#}")))
+    })
+}
+
+/// What to tell the user when a request succeeds.
+fn success(request: &Request, result: &serde_json::Value) -> Option<String> {
+    let changed = result.get("changed").and_then(|c| c.as_bool()).unwrap_or(true);
+    Some(match request {
+        Request::AddTools { packages } if changed => format!("Installed {}.", packages.join(", ")),
+        Request::RemoveTools { packages } if changed => format!("Removed {}.", packages.join(", ")),
+        Request::SetService { .. } | Request::Apply if changed => "Settings applied.".into(),
+        Request::UpdateApps => "Apps are up to date.".into(),
+        Request::UpdateSystem => match result["updated"].as_bool() {
+            Some(true) => format!(
+                "Iliada {} is installed. Restart the computer to finish.",
+                result["version"].as_str().unwrap_or("")
+            ),
+            _ => "Iliada is up to date.".into(),
+        },
+        Request::CheckSystemUpdate => match result["newer"].as_bool() {
+            Some(true) => format!("Iliada {} is available.", result["latest"].as_str().unwrap_or("")),
+            _ => "Iliada is up to date.".into(),
+        },
+        Request::BackupSignIn => format!("Signed in as {}.", result["account"].as_str().unwrap_or("")),
+        Request::BackupEnable { .. } | Request::BackupNow => "Backed up.".into(),
+        Request::Restore { .. } => "Restored. Your apps are being installed in the background.".into(),
+        Request::BackupSignOut => "Signed out. Backups are off.".into(),
+        _ => return None,
+    })
+}
+
+impl App {
+    fn page(&self) -> Page {
+        self.nav.active_data::<Page>().copied().unwrap_or(Page::Updates)
+    }
+
+    fn status(&self) -> Option<&Status> {
+        self.status.as_ref().and_then(|s| s.as_ref().ok())
+    }
+
+    /// Changes are possible: an administrator, and nothing running.
+    fn can_change(&self) -> bool {
+        self.job.is_none() && self.status().is_some_and(|s| s.admin && s.busy.is_none())
+    }
+
+    fn start(&mut self, request: Request) -> Task<Message> {
+        if self.job.is_some() {
+            return Task::none();
+        }
+        self.error = None;
+        self.notice = None;
+        self.job = Some(Job { request: request.clone(), line: String::new() });
+        cosmic::task::stream(run(request).map(Message::Progress))
+    }
+
+    fn banner(&self) -> Option<Element<'_, Message>> {
+        let spacing = cosmic::theme::spacing();
+        if let Some(job) = &self.job {
+            let what = match job.request.activity() {
+                "" => "Working",
+                w => w,
+            };
+            let mut col = widget::column::with_capacity(2).push(widget::text::heading(format!("{what}…")));
+            if !job.line.is_empty() {
+                col = col.push(widget::text::caption(job.line.as_str()));
+            }
+            let row = widget::row::with_capacity(2)
+                .push(widget::progress_bar::circular::Circular::new().size(20.0))
+                .push(col.spacing(spacing.space_xxxs).width(Length::Fill))
+                .spacing(spacing.space_s)
+                .align_y(Alignment::Center);
+            return Some(card(row.into()));
+        }
+        let (text, is_error) = match (&self.error, &self.notice) {
+            (Some(e), _) => (e.as_str(), true),
+            (None, Some(n)) => (n.as_str(), false),
+            _ => return None,
+        };
+        let icon = if is_error { "dialog-error-symbolic" } else { "emblem-ok-symbolic" };
+        let row = widget::row::with_capacity(3)
+            .push(widget::icon::from_name(icon).size(20).icon())
+            .push(widget::text::body(text).width(Length::Fill))
+            .push(widget::button::icon(widget::icon::from_name("window-close-symbolic")).on_press(Message::Dismiss))
+            .spacing(spacing.space_s)
+            .align_y(Alignment::Center);
+        Some(card(row.into()))
+    }
+
+    fn updates(&self, s: &Status) -> Element<'_, Message> {
+        let ok = self.can_change();
+        let u = &s.system_update;
+        let newer = u.latest.as_ref().filter(|l| iliada_system::update::newer(l, &s.version));
+        let state = match (newer, u.last_check, &u.last_error) {
+            (Some(l), _, _) => format!("Iliada {l} is available."),
+            (None, _, Some(e)) => format!("Could not check for updates: {e}"),
+            (None, Some(t), None) => format!("Up to date (checked {}).", ago(t)),
+            (None, None, None) => "Iliada looks for updates every day.".into(),
+        };
+        let action = match newer {
+            Some(_) => widget::button::suggested("Update now").on_press_maybe(ok.then_some(Message::Run(Request::UpdateSystem))),
+            None => widget::button::standard("Check now").on_press_maybe(ok.then_some(Message::Run(Request::CheckSystemUpdate))),
+        };
+        let system = settings::section()
+            .title("Iliada")
+            .add(settings::item::builder(format!("Iliada {}", s.version)).description(state).control(action));
+        let apps = settings::section().title("Apps").add(
+            settings::item::builder("App updates")
+                .description("Apps from the Store update automatically, every few hours.")
+                .control(widget::button::standard("Update apps now").on_press_maybe(ok.then_some(Message::Run(Request::UpdateApps)))),
+        );
+        settings::view_column(vec![system.into(), apps.into()]).into()
+    }
+
+    fn backup(&self, s: &Status) -> Element<'_, Message> {
+        let ok = self.can_change();
+        let b = &s.backup;
+        let intro = "Your apps and settings, kept in a private repository on your GitHub account. \
+                     On a new computer, restore them in a few clicks.";
+        let mut items: Vec<Element<_>> = Vec::new();
+        if !b.available {
+            items.push(
+                settings::section()
+                    .title("Backup")
+                    .add(info(
+                        "Backup is not available",
+                        Some("This system has no GitHub app configured for backups (iliada.system.githubClientId).".into()),
+                    ))
+                    .into(),
+            );
+            return settings::view_column(items).into();
+        }
+        if let Some((code, url)) = &self.sign_in {
+            let spacing = cosmic::theme::spacing();
+            let col = widget::column::with_capacity(4)
+                .push(widget::text::body("Open GitHub and enter this code:"))
+                .push(widget::text::title1(code.as_str()))
+                .push(widget::button::suggested("Open GitHub").on_press(Message::OpenSignIn))
+                .push(widget::text::caption(format!("{url} · Waiting for you to approve it…")))
+                .spacing(spacing.space_s)
+                .align_x(Alignment::Center);
+            items.push(card(col.width(Length::Fill).into()));
+            return settings::view_column(items).into();
+        }
+        match (&b.account, &b.repo) {
+            (None, _) => {
+                items.push(
+                    settings::section()
+                        .title("Backup")
+                        .add(
+                            settings::item::builder("Back up to GitHub")
+                                .description(intro)
+                                .control(widget::button::suggested("Sign in with GitHub").on_press_maybe(ok.then_some(Message::Run(Request::BackupSignIn)))),
+                        )
+                        .into(),
+                );
+            }
+            (Some(account), None) => {
+                let name_ok = iliada_system::github::valid_name(&self.backup_name);
+                let input = widget::text_input("laptop", &self.backup_name)
+                    .on_input(Message::BackupName)
+                    .on_submit(|_| Message::Run(Request::BackupEnable { name: String::new() }))
+                    .width(Length::Fixed(220.0));
+                let start = widget::button::suggested("Back up")
+                    .on_press_maybe((ok && name_ok).then(|| Message::Run(Request::BackupEnable { name: self.backup_name.clone() })));
+                let row = widget::row::with_capacity(3)
+                    .push(widget::text::body(github_prefix(account)))
+                    .push(input)
+                    .push(start)
+                    .spacing(cosmic::theme::spacing().space_xs)
+                    .align_y(Alignment::Center);
+                items.push(
+                    settings::section()
+                        .title("Backup")
+                        .add(info("Name this backup", Some(intro.into())))
+                        .add(settings::item_row(vec![row.into()]))
+                        .add(
+                            settings::item::builder(format!("Signed in as {account}"))
+                                .control(widget::button::standard("Sign out").on_press_maybe(ok.then_some(Message::Ask(Confirm::SignOut)))),
+                        )
+                        .into(),
+                );
+                items.push(self.restore_list(ok));
+            }
+            (Some(account), Some(repo)) => {
+                let last = match (b.last_backup, &b.last_error) {
+                    (_, Some(e)) => format!("The last backup failed: {e}"),
+                    (Some(t), None) => format!("Last backup: {}.", ago(t)),
+                    (None, None) => "Not backed up yet.".into(),
+                };
+                items.push(
+                    settings::section()
+                        .title("Backup")
+                        .add(
+                            settings::item::builder(format!("Backing up to github.com/{repo}"))
+                                .description(format!("{last} Iliada backs up after every change, and every hour."))
+                                .control(widget::button::standard("Back up now").on_press_maybe(ok.then_some(Message::Run(Request::BackupNow)))),
+                        )
+                        .add(
+                            settings::item::builder(format!("Signed in as {account}"))
+                                .control(widget::button::standard("Sign out").on_press_maybe(ok.then_some(Message::Ask(Confirm::SignOut)))),
+                        )
+                        .into(),
+                );
+                items.push(self.restore_list(ok));
+            }
+        }
+        settings::view_column(items).into()
+    }
+
+    fn restore_list(&self, ok: bool) -> Element<'_, Message> {
+        let mut section = settings::section().title("Restore");
+        match &self.backups {
+            None => {
+                section = section.add(
+                    settings::item::builder("Restore from a backup")
+                        .description("Bring back the apps and settings of another computer.")
+                        .control(widget::button::standard("Show backups").on_press(Message::LoadBackups)),
+                )
+            }
+            Some(Err(e)) => section = section.add(settings::item::builder("Could not list your backups").description(e.as_str()).control(widget::button::standard("Retry").on_press(Message::LoadBackups))),
+            Some(Ok(list)) if list.is_empty() => {
+                section = section.add(info("No backups yet", None))
+            }
+            Some(Ok(list)) => {
+                for b in list {
+                    let updated = b.updated.split('T').next().unwrap_or("").to_owned();
+                    section = section.add(
+                        settings::item::builder(b.name.clone())
+                            .description(format!("github.com/{} · last backup {updated}", b.repo))
+                            .control(widget::button::standard("Restore").on_press_maybe(ok.then(|| Message::Ask(Confirm::Restore(b.repo.clone()))))),
+                    );
+                }
+            }
+        }
+        section.into()
+    }
+
+    fn tools(&self, s: &Status) -> Element<'_, Message> {
+        let ok = self.can_change();
+        let mut installed = settings::section().title("Installed tools");
+        if s.tools.is_empty() {
+            installed = installed.add(info("No tools installed", None));
+        }
+        for t in &s.tools {
+            installed = installed.add(settings::item::builder(t.clone()).control(
+                widget::button::standard("Remove").on_press_maybe(ok.then(|| Message::Run(Request::RemoveTools { packages: vec![t.clone()] }))),
+            ));
+        }
+        let valid = iliada_system::settings::valid_tool_name(self.tool_input.trim());
+        let input = widget::text_input("Package name, e.g. ripgrep", &self.tool_input)
+            .on_input(Message::ToolInput)
+            .on_submit(|_| Message::AddTool)
+            .width(Length::Fill);
+        let add = widget::row::with_capacity(2)
+            .push(input)
+            .push(widget::button::suggested("Install").on_press_maybe((ok && valid).then_some(Message::AddTool)))
+            .spacing(cosmic::theme::spacing().space_xs)
+            .align_y(Alignment::Center);
+        let add = settings::section()
+            .title("Add a tool")
+            .add(info(
+                "Command-line tools",
+                Some("Programs for the Terminal, like vim or git, installed for everyone on this computer. Apps with windows come from the Store.".into()),
+            ))
+            .add(settings::item_row(vec![add.into()]));
+        settings::view_column(vec![installed.into(), add.into()]).into()
+    }
+
+    fn services(&self, s: &Status) -> Element<'_, Message> {
+        let ok = self.can_change();
+        let mut section = settings::section().title("Services");
+        for svc in &s.services {
+            let name = svc.name.clone();
+            let toggle = ok.then(|| move |on| Message::Run(Request::SetService { name: name.clone(), on }));
+            section = section.add(settings::item::builder(svc.description.clone()).toggler_maybe(svc.on, toggle));
+        }
+        settings::view_column(vec![section.into()]).into()
+    }
+
+    fn about(&self, s: &Status) -> Element<'_, Message> {
+        let section = settings::section()
+            .title("This computer")
+            .add(settings::item("Name", widget::text::body(s.hostname.clone())))
+            .add(settings::item("Iliada", widget::text::body(s.version.clone())))
+            .add(settings::item(
+                "Configuration",
+                widget::text::body("/etc/iliada (every change is recorded)"),
+            ));
+        settings::view_column(vec![section.into()]).into()
+    }
+}
+
+/// A settings row that only informs.
+fn info<'a>(title: impl Into<String>, description: Option<String>) -> Element<'a, Message> {
+    let mut col = widget::column::with_capacity(2).push(widget::text::body(title.into()));
+    if let Some(d) = description {
+        col = col.push(widget::text::caption(d));
+    }
+    settings::item_row(vec![col.spacing(2).width(Length::Fill).into()]).into()
+}
+
+fn github_prefix(account: &str) -> String {
+    format!("github.com/{account}/{}", iliada_system::github::PREFIX)
+}
+
+fn card(content: Element<'_, Message>) -> Element<'_, Message> {
+    widget::container(content)
+        .padding(cosmic::theme::spacing().space_s)
+        .class(cosmic::theme::Container::Card)
+        .width(Length::Fill)
+        .into()
+}
+
+impl cosmic::Application for App {
+    type Executor = executor::Default;
+    type Flags = ();
+    type Message = Message;
+    const APP_ID: &'static str = "org.iliada.Settings";
+
+    fn core(&self) -> &Core {
+        &self.core
+    }
+    fn core_mut(&mut self) -> &mut Core {
+        &mut self.core
+    }
+
+    fn init(core: Core, _flags: ()) -> (Self, Task<Message>) {
+        let mut nav = nav_bar::Model::default();
+        let pages = [
+            ("Updates", "software-update-available-symbolic", Page::Updates),
+            ("Backup", "document-save-symbolic", Page::Backup),
+            ("Command-line tools", "utilities-terminal-symbolic", Page::Tools),
+            ("Services", "network-server-symbolic", Page::Services),
+            ("About", "help-about-symbolic", Page::About),
+        ];
+        for (i, (text, icon, page)) in pages.into_iter().enumerate() {
+            let e = nav.insert().text(text).icon(widget::icon::from_name(icon)).data(page);
+            if i == 0 {
+                e.activate();
+            }
+        }
+        let mut app = App {
+            core,
+            nav,
+            status: None,
+            job: None,
+            sign_in: None,
+            error: None,
+            notice: None,
+            tool_input: String::new(),
+            backup_name: String::new(),
+            backups: None,
+            confirm: None,
+        };
+        app.set_header_title("Iliada Settings".into());
+        let title = match app.core.main_window_id() {
+            Some(id) => app.set_window_title("Iliada Settings".into(), id),
+            None => Task::none(),
+        };
+        (app, Task::batch([title, load_status()]))
+    }
+
+    fn nav_model(&self) -> Option<&nav_bar::Model> {
+        Some(&self.nav)
+    }
+
+    fn on_nav_select(&mut self, id: nav_bar::Id) -> Task<Message> {
+        self.nav.activate(id);
+        load_status()
+    }
+
+    fn dialog(&self) -> Option<Element<'_, Message>> {
+        let (title, body, action) = match self.confirm.as_ref()? {
+            Confirm::Restore(repo) => (
+                "Restore this backup?",
+                format!(
+                    "The apps and settings from github.com/{repo} replace this computer's. \
+                     From now on, this computer backs up there."
+                ),
+                widget::button::destructive("Restore"),
+            ),
+            Confirm::SignOut => (
+                "Sign out of GitHub?",
+                "Backups stop. Your backups on GitHub are kept.".to_owned(),
+                widget::button::destructive("Sign out"),
+            ),
+        };
+        Some(
+            widget::dialog()
+                .title(title)
+                .body(body)
+                .primary_action(action.on_press(Message::Confirmed))
+                .secondary_action(widget::button::standard("Cancel").on_press(Message::Cancel))
+                .into(),
+        )
+    }
+
+    fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::Refresh => return load_status(),
+            Message::Status(s) => {
+                if let (Ok(st), true) = (&s, self.backup_name.is_empty()) {
+                    self.backup_name = st.hostname.clone();
+                }
+                self.status = Some(s);
+            }
+            Message::Run(Request::BackupEnable { name }) if name.is_empty() => {
+                let name = self.backup_name.trim().to_owned();
+                if iliada_system::github::valid_name(&name) && self.can_change() {
+                    return self.start(Request::BackupEnable { name });
+                }
+            }
+            Message::Run(request) => return self.start(request),
+            Message::Progress(Progress::Event(e)) => match e {
+                Event::Log { line } => {
+                    if let Some(job) = &mut self.job {
+                        job.line = line.chars().take(120).collect();
+                    }
+                }
+                Event::SignInCode { code, url } => {
+                    open_url(&url);
+                    self.sign_in = Some((code, url));
+                }
+                _ => {}
+            },
+            Message::Progress(Progress::Finished(result)) => {
+                let job = self.job.take();
+                self.sign_in = None;
+                match (job, result) {
+                    (Some(job), Ok(v)) => {
+                        self.notice = success(&job.request, &v);
+                        if matches!(job.request, Request::AddTools { .. }) {
+                            self.tool_input.clear();
+                        }
+                        if matches!(job.request, Request::BackupSignIn) {
+                            return Task::batch([load_status(), load_backups()]);
+                        }
+                        if matches!(job.request, Request::BackupSignOut) {
+                            self.backups = None;
+                        }
+                    }
+                    (_, Err(e)) => self.error = Some(e),
+                    (None, Ok(_)) => {}
+                }
+                return load_status();
+            }
+            Message::ToolInput(s) => self.tool_input = s,
+            Message::AddTool => {
+                let name = self.tool_input.trim().to_owned();
+                if iliada_system::settings::valid_tool_name(&name) && self.can_change() {
+                    return self.start(Request::AddTools { packages: vec![name] });
+                }
+            }
+            Message::BackupName(s) => self.backup_name = s,
+            Message::OpenSignIn => {
+                if let Some((_, url)) = &self.sign_in {
+                    open_url(url);
+                }
+            }
+            Message::LoadBackups => {
+                self.backups = None;
+                return load_backups();
+            }
+            Message::Backups(b) => self.backups = Some(b),
+            Message::Ask(c) => self.confirm = Some(c),
+            Message::Cancel => self.confirm = None,
+            Message::Confirmed => {
+                return match self.confirm.take() {
+                    Some(Confirm::Restore(repo)) => self.start(Request::Restore { repo }),
+                    Some(Confirm::SignOut) => self.start(Request::BackupSignOut),
+                    None => Task::none(),
+                };
+            }
+            Message::Dismiss => {
+                self.error = None;
+                self.notice = None;
+            }
+        }
+        Task::none()
+    }
+
+    fn view(&self) -> Element<'_, Message> {
+        let spacing = cosmic::theme::spacing();
+        let body: Element<_> = match &self.status {
+            None => widget::container(widget::text::body("Loading…")).center(Length::Fill).into(),
+            Some(Err(e)) => widget::container(
+                widget::column::with_capacity(3)
+                    .push(widget::text::title4("Settings are not available"))
+                    .push(widget::text::body(e.as_str()))
+                    .push(widget::button::standard("Try again").on_press(Message::Refresh))
+                    .spacing(spacing.space_s)
+                    .align_x(Alignment::Center),
+            )
+            .center(Length::Fill)
+            .into(),
+            Some(Ok(s)) => {
+                let mut col = widget::column::with_capacity(4).spacing(spacing.space_m);
+                if let Some(b) = self.banner() {
+                    col = col.push(b);
+                }
+                if !s.admin {
+                    col = col.push(card(
+                        widget::text::body("Only an administrator can change these settings.").into(),
+                    ));
+                } else if let (Some(busy), None) = (&s.busy, &self.job) {
+                    col = col.push(card(widget::text::body(format!("Iliada is busy: {busy}…")).into()));
+                }
+                col = col.push(match self.page() {
+                    Page::Updates => self.updates(s),
+                    Page::Backup => self.backup(s),
+                    Page::Tools => self.tools(s),
+                    Page::Services => self.services(s),
+                    Page::About => self.about(s),
+                });
+                widget::scrollable(
+                    widget::container(col.max_width(760)).width(Length::Fill).align_x(Alignment::Center),
+                )
+                .height(Length::Fill)
+                .into()
+            }
+        };
+        widget::container(body).padding(spacing.space_m).into()
+    }
+}

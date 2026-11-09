@@ -1,0 +1,27 @@
+# Iliada's desktop apps (COSMIC/libcosmic). One workspace, one lock file, one
+# build of libcosmic for all of them.
+[workspace]
+resolver = "3"
+members = ["iliada-store-gui", "iliada-settings"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+iliada-store = { path = "../crates/iliada-store" }
+iliada-catalog = { path = "../crates/iliada-catalog" }
+iliada-system = { path = "../crates/iliada-system" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "fs", "sync", "process"] }
+futures-util = "0.3"
+
+[workspace.dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic.git"
+rev = "430f3d48a97d8779f9c1985473912e594ccca1ae"
+default-features = false
+features = ["tokio", "winit", "wayland", "multi-window", "wgpu"]
+
+[profile.release]
+lto = "thin"

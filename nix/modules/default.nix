@@ -9,6 +9,7 @@
 #   iliada.rustUserland  Rust coreutils, sudo-rs, ntpd-rs, fish
 #   iliada.settingsFile  settings.toml: command-line tools, services
 #   iliada.store         the Store catalog and automatic app updates
+#   iliada.system        the system service: tools, services, updates, backups
 #   iliada.ux            FHS hiding, privilege model
 { lib, pkgs, ... }:
 {
@@ -22,6 +23,7 @@
     ./rust-userland.nix
     ./settings.nix
     ./store.nix
+    ./system.nix
     ./ux.nix
   ];
 

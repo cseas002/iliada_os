@@ -14,6 +14,11 @@ in
       example = "iliada";
       description = "Log this user in automatically (kiosk / test VMs).";
     };
+    setupAssistant = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Open the Setup Assistant (restore a backup, turn backups on) at each user's first login.";
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -29,10 +34,16 @@ in
     ];
     services.desktopManager.cosmic.enable = true;
     # Apps come only as .app bundles: the Iliada Store replaces COSMIC Store
-    # (which installs Flatpaks and system packages).
-    environment.cosmic.excludePackages = [ pkgs.cosmic-store ];
+    # (which installs Flatpaks and system packages). Iliada's Setup Assistant
+    # replaces COSMIC's first-login wizard.
+    environment.cosmic.excludePackages = [ pkgs.cosmic-store ]
+      ++ lib.optional (pkgs ? cosmic-initial-setup) pkgs.cosmic-initial-setup;
+    environment.etc."xdg/autostart/org.iliada.Setup.desktop" = lib.mkIf cfg.setupAssistant {
+      source = ../../apps/iliada-settings/res/org.iliada.Setup-autostart.desktop;
+    };
     environment.systemPackages = [
-      (pkgs.callPackage ../store-gui.nix { })
+      # The Store, Iliada Settings and the Setup Assistant.
+      (pkgs.callPackage ../desktop-apps.nix { })
       # Iliada's desktop defaults (users can still change them): Applications
       # in the Files sidebar; the Iliada Store in the dock. hiPrio: they replace
       # COSMIC's own defaults for the same settings.
@@ -55,6 +66,7 @@ in
         [
             "com.system76.CosmicFiles",
             "org.iliada.Store",
+            "org.iliada.Settings",
             "com.system76.CosmicEdit",
             "com.system76.CosmicTerm",
             "com.system76.CosmicSettings",

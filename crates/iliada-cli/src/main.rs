@@ -1,27 +1,29 @@
-//! `iliada`: one command for apps, tools, services and the system.
+//! `iliada`: one command for apps, tools, services, updates and backups.
 //!
 //!   iliada list | install <app> | remove <app> | update
 //!   iliada tool list | tool add <pkg>… | tool remove <pkg>…
 //!   iliada service list | service enable <name> | service disable <name>
-//!   iliada apply
+//!   iliada system update | system apply | system status
+//!   iliada backup status | sign-in | enable <name> | now | list | restore <owner/iliada_name> | sign-out
 //!
-//! Apps are `.app` bundles from the Store (no rebuild, no root). Tools and
-//! services are system settings in /etc/iliada/settings.toml; changing them
-//! applies the configuration (asks for your password once).
+//! Apps are `.app` bundles from the Store (no rebuild, no root). Everything
+//! else goes through the Iliada system service, which checks that you are an
+//! administrator; no sudo. Everything here is also in the Settings app.
 
-mod settings;
+use std::io::IsTerminal;
 
-use std::path::PathBuf;
-use std::process::Command;
-
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use iliada_store::{Store, StoreConfig};
-use toml_edit::DocumentMut;
+use iliada_system::client;
+use iliada_system::protocol::{Backup, Event, Request};
 
 #[derive(Parser)]
-#[command(name = "iliada", version, about = "Apps, tools, services and system configuration")]
+#[command(name = "iliada", version, about = "Apps, tools, services, updates and backups")]
 struct Cli {
+    /// Show the full build output.
+    #[arg(short, long, global = true)]
+    verbose: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -46,8 +48,16 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ServiceCmd,
     },
-    /// Apply /etc/iliada (after editing settings.toml or configuration.nix).
-    Apply,
+    /// Iliada itself.
+    System {
+        #[command(subcommand)]
+        cmd: SystemCmd,
+    },
+    /// Back up apps and settings to a private GitHub repository.
+    Backup {
+        #[command(subcommand)]
+        cmd: BackupCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -64,76 +74,75 @@ enum ServiceCmd {
     Disable { name: String },
 }
 
-fn config_dir() -> PathBuf {
-    std::env::var_os("ILIADA_CONFIG_DIR").map(PathBuf::from).unwrap_or_else(|| "/etc/iliada".into())
+#[derive(Subcommand)]
+enum SystemCmd {
+    /// Version, updates, backup.
+    Status,
+    /// Install the newest Iliada release.
+    Update,
+    /// Apply /etc/iliada (after editing settings.toml or configuration.nix).
+    Apply,
 }
 
-fn settings_path() -> PathBuf {
-    config_dir().join("settings.toml")
+#[derive(Subcommand)]
+enum BackupCmd {
+    Status,
+    /// Sign in to GitHub (you approve a code in your browser).
+    SignIn,
+    /// Back up to the private repository iliada_<name>.
+    Enable {
+        name: String,
+    },
+    /// Back up now.
+    Now,
+    /// Your backups on GitHub.
+    List,
+    /// Restore apps and settings from a backup.
+    Restore {
+        repo: String,
+    },
+    /// Stop backing up and forget the sign-in.
+    SignOut,
 }
 
-fn read_settings() -> Result<DocumentMut> {
-    let text = std::fs::read_to_string(settings_path()).unwrap_or_default();
-    Ok(text.parse()?)
-}
-
-fn is_root() -> bool {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()
-        .and_then(|s| s.lines().find(|l| l.starts_with("Uid:")).map(|l| l.split_whitespace().nth(2) == Some("0")))
-        .unwrap_or(false)
-}
-
-/// System changes need root: re-run this exact command through sudo.
-fn ensure_root() -> Result<()> {
-    if is_root() {
-        return Ok(());
+/// Run a request on the system service, showing its progress.
+async fn system(request: Request, verbose: bool) -> Result<serde_json::Value> {
+    let interactive = std::io::stderr().is_terminal();
+    let what = request.activity();
+    if !what.is_empty() {
+        eprintln!("{what}…");
     }
-    let exe = std::env::current_exe()?;
-    let status = Command::new("sudo").arg(exe).args(std::env::args_os().skip(1)).status().context("running sudo")?;
-    std::process::exit(status.code().unwrap_or(1));
+    let mut on_event = |e: &Event| match e {
+        Event::Log { line } if verbose => eprintln!("{line}"),
+        Event::Log { line } if interactive => {
+            let short: String = line.chars().take(100).collect();
+            eprint!("\r\x1b[2K  {short}");
+        }
+        Event::SignInCode { code, url } => {
+            eprintln!("\nOpen {url} and enter the code:  {code}\n");
+            eprintln!("Waiting for you to approve it on GitHub…");
+        }
+        _ => {}
+    };
+    let r = client::call(&request, &mut on_event).await;
+    if interactive && !verbose {
+        eprint!("\r\x1b[2K");
+    }
+    r
 }
 
-/// Is `name` a package in the Iliada system's nixpkgs?
-fn package_exists(name: &str) -> bool {
-    let attr = format!("{}#nixosConfigurations.iliada.pkgs.{name}.name", config_dir().display());
-    Command::new("nix")
-        .args(["--extra-experimental-features", "nix-command flakes", "eval", "--raw", &attr])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+fn changed(v: &serde_json::Value) -> bool {
+    v.get("changed").and_then(|c| c.as_bool()).unwrap_or(true)
 }
 
-/// Rebuild the system from /etc/iliada and record the change in its history.
-fn apply(message: &str) -> Result<()> {
-    let dir = config_dir();
-    eprintln!("Applying the configuration (this can take a few minutes)…");
-    let flake = format!("{}#iliada", dir.display());
-    let ok = Command::new("nixos-rebuild").args(["switch", "--flake", &flake]).status()?.success();
-    if !ok {
-        bail!("applying the configuration failed; nothing was changed (the previous system is still active)");
+fn ago(t: u64) -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(t);
+    match now.saturating_sub(t) {
+        s if s < 90 => "just now".into(),
+        s if s < 90 * 60 => format!("{} minutes ago", s / 60),
+        s if s < 36 * 3600 => format!("{} hours ago", s / 3600),
+        s => format!("{} days ago", s / 86400),
     }
-    if dir.join(".git").exists() {
-        let _ = Command::new("git")
-            .args(["-C", &dir.display().to_string(), "-c", "user.name=Iliada", "-c", "user.email=iliada@localhost"])
-            .args(["commit", "-q", "-a", "-m", message])
-            .status();
-    }
-    eprintln!("Done.");
-    Ok(())
-}
-
-/// Write new settings, apply them, and put the old file back if applying fails.
-fn change_settings(doc: &DocumentMut, message: &str) -> Result<()> {
-    let path = settings_path();
-    let previous = std::fs::read_to_string(&path).unwrap_or_default();
-    std::fs::write(&path, doc.to_string()).with_context(|| format!("writing {}", path.display()))?;
-    if let Err(e) = apply(message) {
-        std::fs::write(&path, previous)?;
-        return Err(e);
-    }
-    Ok(())
 }
 
 async fn store() -> Result<Store> {
@@ -146,7 +155,9 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()))
         .with_writer(std::io::stderr)
         .init();
-    match Cli::parse().cmd {
+    let cli = Cli::parse();
+    let v = cli.verbose;
+    match cli.cmd {
         Cmd::List => {
             let s = store().await?;
             let (catalog, installed) = (s.catalog().await?, s.installed());
@@ -206,40 +217,21 @@ async fn main() -> Result<()> {
             }
         }
         Cmd::Tool { cmd: ToolCmd::List } => {
-            for t in settings::tools(&read_settings()?) {
+            for t in client::status().await?.tools {
                 println!("{t}");
             }
         }
         Cmd::Tool { cmd: ToolCmd::Add { packages } } => {
-            ensure_root()?;
-            for p in &packages {
-                if !settings::valid_tool_name(p) || !package_exists(p) {
-                    bail!("there is no package called {p:?}");
-                }
-            }
-            let mut doc = read_settings()?;
-            let added = settings::add_tools(&mut doc, &packages)?;
-            if added.is_empty() {
-                eprintln!("Already installed.");
-                return Ok(());
-            }
-            change_settings(&doc, &format!("Add tools: {}", added.join(", ")))?;
+            let r = system(Request::AddTools { packages }, v).await?;
+            eprintln!("{}", if changed(&r) { "Installed." } else { "Already installed." });
         }
         Cmd::Tool { cmd: ToolCmd::Remove { packages } } => {
-            ensure_root()?;
-            let mut doc = read_settings()?;
-            let removed = settings::remove_tools(&mut doc, &packages);
-            if removed.is_empty() {
-                eprintln!("None of those are installed.");
-                return Ok(());
-            }
-            change_settings(&doc, &format!("Remove tools: {}", removed.join(", ")))?;
+            let r = system(Request::RemoveTools { packages }, v).await?;
+            eprintln!("{}", if changed(&r) { "Removed." } else { "None of those are installed." });
         }
         Cmd::Service { cmd: ServiceCmd::List } => {
-            let doc = read_settings()?;
-            for (name, what) in settings::SERVICES {
-                let on = if settings::service(&doc, name) { "on" } else { "off" };
-                println!("{name:<10} {on:<4} {what}");
+            for s in client::status().await?.services {
+                println!("{:<10} {:<4} {}", s.name, if s.on { "on" } else { "off" }, s.description);
             }
         }
         Cmd::Service { cmd } => {
@@ -248,17 +240,89 @@ async fn main() -> Result<()> {
                 ServiceCmd::Disable { name } => (name, false),
                 ServiceCmd::List => unreachable!(),
             };
-            ensure_root()?;
-            let mut doc = read_settings()?;
-            if !settings::set_service(&mut doc, &name, on)? {
-                eprintln!("{name} is already {}.", if on { "on" } else { "off" });
+            let r = system(Request::SetService { name: name.clone(), on }, v).await?;
+            let state = if on { "on" } else { "off" };
+            eprintln!(
+                "{}",
+                if changed(&r) { format!("{name} is {state}.") } else { format!("{name} is already {state}.") }
+            );
+        }
+        Cmd::System { cmd: SystemCmd::Status } => {
+            let s = client::status().await?;
+            println!("Iliada {} on {}", s.version, s.hostname);
+            match (&s.system_update.latest, s.system_update.last_check) {
+                (Some(l), _) if iliada_system::update::newer(l, &s.version) => {
+                    println!("Iliada {l} is available: iliada system update")
+                }
+                (_, Some(t)) => println!("Up to date (checked {})", ago(t)),
+                _ => println!("Not checked for updates yet"),
+            }
+            if let Some(b) = &s.busy {
+                println!("Busy: {b}");
+            }
+        }
+        Cmd::System { cmd: SystemCmd::Update } => {
+            let r = system(Request::UpdateSystem, v).await?;
+            if r["updated"].as_bool() == Some(true) {
+                eprintln!("Iliada {} is installed. Restart to finish.", r["version"].as_str().unwrap_or("?"));
+            } else {
+                eprintln!("Iliada is up to date.");
+            }
+        }
+        Cmd::System { cmd: SystemCmd::Apply } => {
+            system(Request::Apply, v).await?;
+            eprintln!("Done.");
+        }
+        Cmd::Backup { cmd } => backup(cmd, v).await?,
+    }
+    Ok(())
+}
+
+async fn backup(cmd: BackupCmd, v: bool) -> Result<()> {
+    match cmd {
+        BackupCmd::Status => {
+            let b = client::status().await?.backup;
+            if !b.available {
+                println!("Backups to GitHub are not set up on this system.");
                 return Ok(());
             }
-            change_settings(&doc, &format!("{} {name}", if on { "Enable" } else { "Disable" }))?;
+            match (&b.account, &b.repo) {
+                (None, _) => println!("Not signed in. Sign in with: iliada backup sign-in"),
+                (Some(a), None) => println!("Signed in as {a}; not backing up yet: iliada backup enable <name>"),
+                (Some(_), Some(r)) => {
+                    let when = b.last_backup.map(ago).unwrap_or_else(|| "not yet".into());
+                    println!("Backing up to github.com/{r} (last backup: {when})");
+                }
+            }
+            if let Some(e) = &b.last_error {
+                println!("Last backup failed: {e}");
+            }
         }
-        Cmd::Apply => {
-            ensure_root()?;
-            apply("Apply configuration")?;
+        BackupCmd::SignIn => {
+            let r = system(Request::BackupSignIn, v).await?;
+            eprintln!("Signed in as {}.", r["account"].as_str().unwrap_or("?"));
+        }
+        BackupCmd::Enable { name } => {
+            let r = system(Request::BackupEnable { name }, v).await?;
+            eprintln!("Backing up to github.com/{}.", r["repo"].as_str().unwrap_or("?"));
+        }
+        BackupCmd::Now => {
+            system(Request::BackupNow, v).await?;
+            eprintln!("Backed up.");
+        }
+        BackupCmd::List => {
+            let list: Vec<Backup> = client::call_as(&Request::BackupList, &mut |_| {}).await?;
+            for b in list {
+                println!("{:<40} {}", b.repo, b.updated);
+            }
+        }
+        BackupCmd::Restore { repo } => {
+            system(Request::Restore { repo }, v).await?;
+            eprintln!("Restored. Your apps are being installed in the background.");
+        }
+        BackupCmd::SignOut => {
+            system(Request::BackupSignOut, v).await?;
+            eprintln!("Signed out; backups are off.");
         }
     }
     Ok(())

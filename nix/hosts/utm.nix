@@ -13,7 +13,7 @@ in
 {
   imports = [
     "${modulesPath}/image/repart.nix"
-    "${modulesPath}/profiles/qemu-guest.nix"
+    ../profiles/vm-guest.nix
   ];
 
   networking.hostName = "iliada";
@@ -30,27 +30,14 @@ in
       autoLoginUser = "iliada";
     };
     settingsFile = ../../templates/default/settings.toml;
-    applications.list = "/var/lib/iliada/apps.toml";
-  };
-
-  # UTM / QEMU guest integration: clipboard sharing, window resizing.
-  services.spice-vdagentd.enable = true;
-  services.qemuGuest.enable = true;
-
-  # The image boots a unified kernel image from the ESP; systemd-boot is
-  # installed there too, so later system updates work as usual.
-  boot.loader.grub.enable = false;
-  boot.loader.efi.canTouchEfiVariables = lib.mkForce false;
-  boot.growPartition = true;
-  fileSystems."/" = {
-    device = "/dev/disk/by-partlabel/iliada-root";
-    fsType = "ext4";
-    autoResize = true;
-  };
-  fileSystems."/boot" = {
-    device = "/dev/disk/by-partlabel/ESP";
-    fsType = "vfat";
-    options = [ "umask=0077" ];
+    # First boot writes /etc/iliada (like the installer does), so Settings
+    # and `iliada` can change and update this system.
+    system.firstBoot = {
+      enable = true;
+      user = "iliada";
+      fullName = "Iliada";
+      autoLogin = true;
+    };
   };
 
   # First boot: register the store paths with Nix and create the system

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Setup Assistant
+Exec=iliada-setup --first-run
+Icon=system-software-install
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

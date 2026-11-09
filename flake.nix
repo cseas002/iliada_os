@@ -13,7 +13,8 @@
 
       # An Iliada system: NixOS from Iliada's pinned nixpkgs, plus the iliada.* modules.
       iliadaSystem = { system, modules ? [ ], specialArgs ? { } }: lib.nixosSystem {
-        inherit specialArgs;
+        # `iliada`: this flake, for modules that need its source or profiles.
+        specialArgs = { iliada = self; } // specialArgs;
         modules = [ { nixpkgs.hostPlatform = system; } self.nixosModules.default ] ++ modules;
       };
       mkSystem = system: modules: iliadaSystem { inherit system modules; };
@@ -24,7 +25,6 @@
         (system: lib.nameValuePair "installer-${arch system}" (iliadaSystem {
           inherit system;
           modules = [ ./nix/hosts/installer.nix ];
-          specialArgs.iliadaSource = self;
         }))
         linuxSystems);
     in
@@ -52,7 +52,8 @@
           default = iliada-tools;
         }
         // lib.optionalAttrs (lib.elem system linuxSystems) {
-          iliada-store-gui = pkgs.callPackage ./nix/store-gui.nix { };
+          # The Store, Settings and the Setup Assistant (libcosmic).
+          iliada-desktop-apps = pkgs.callPackage ./nix/desktop-apps.nix { };
         }
         // lib.optionalAttrs (lib.elem system linuxSystems) {
           # Bootable live/installer ISO.
@@ -67,6 +68,8 @@
 
       # The declarative system manifest: `iliada.*` options.
       nixosModules.default = import ./nix/modules;
+      # A VM started from the ready-to-run image (disks, boot, guest tools).
+      nixosModules.vm-guest = import ./nix/profiles/vm-guest.nix;
 
       # dev-vm-*:    mutable dev system; `nix run .#nixosConfigurations.dev-vm-x86_64.config.system.build.vm`
       # appliance-*: the immutable image (dm-verity store, A/B updates);

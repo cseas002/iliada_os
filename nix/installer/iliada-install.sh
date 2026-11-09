@@ -81,50 +81,18 @@ mount -o umask=0077 "${P}1" /mnt/boot
 
 step "Writing the configuration to /etc/iliada"
 nixos-generate-config --root /mnt
-mkdir -p /mnt/etc/iliada
-cp -rL "$SOURCE" /mnt/etc/iliada/source
-chmod -R u+w /mnt/etc/iliada/source
-cp "$TEMPLATE/flake.nix" "$TEMPLATE/configuration.nix" "$TEMPLATE/apps.toml" "$TEMPLATE/settings.toml" /mnt/etc/iliada/
-mv /mnt/etc/nixos/hardware-configuration.nix /mnt/etc/iliada/
-rm -rf /mnt/etc/nixos
-system="$(uname -m)-linux"
-# The installed system builds from the copy of Iliada it was installed with.
-# During installation that copy is at /mnt/etc/iliada/source (a real
-# directory; the live system's /etc/iliada/source is a symlink Nix refuses);
-# afterwards the path is rewritten to what the installed system sees.
-sed -i -e 's|inputs.iliada.url = .*|inputs.iliada.url = "path:/mnt/etc/iliada/source";|' \
-  -e "s|system = \"x86_64-linux\";|system = \"$system\";|" /mnt/etc/iliada/flake.nix
-sed -i -e "s|networking.hostName = \"iliada\";|networking.hostName = \"$HOSTNAME_\";|" \
-  -e "s|time.timeZone = \"UTC\";.*|time.timeZone = \"$TIMEZONE\";|" \
-  -e "s|users.users.iliada = {|users.users.$USERNAME = {|" \
-  -e "s|description = \"Iliada User\";|description = \"${FULLNAME//\"/}\";|" \
-  -e '/initialPassword = /d' /mnt/etc/iliada/configuration.nix
-
-# /etc/iliada is a git repository: it is what gets backed up and synced
-# (ADR 0005), and git flakes hash only committed files, so writing the lock
-# file does not disturb the flake. The bundled Iliada source is an input,
-# not part of the configuration.
-G() { git -C /mnt/etc/iliada -c user.name=Iliada -c user.email=iliada@localhost "$@"; }
-# Not configuration: the bundled Iliada source, and files the system manages.
-printf 'source/\nisolation.json\nstore.json\n' > /mnt/etc/iliada/.gitignore
-G init -q -b main
-G add -A
-G commit -q -m "Initial configuration for $HOSTNAME_"
-NIX=(nix --extra-experimental-features "nix-command flakes")
-"${NIX[@]}" flake lock git+file:///mnt/etc/iliada
-G add flake.lock
-G commit -q -m "Lock Iliada"
+# /etc/iliada: the configuration (a git repository: what gets backed up and
+# synced), and the copy of Iliada it builds from.
+iliada-systemd init --root /mnt --source "$SOURCE" --profile hardware \
+  --user "$USERNAME" --full-name "$FULLNAME" --hostname "$HOSTNAME_" --timezone "$TIMEZONE"
 
 step "Installing Iliada (this downloads and builds the system)"
 nixos-install --root /mnt --flake git+file:///mnt/etc/iliada#iliada --no-root-passwd --no-channel-copy
-
-sed -i 's|path:/mnt/etc/iliada/source|path:/etc/iliada/source|' /mnt/etc/iliada/flake.nix
-sed -i 's|"/mnt/etc/iliada/source"|"/etc/iliada/source"|g' /mnt/etc/iliada/flake.lock
-G commit -q -am "Installed"
+iliada-systemd finish --root /mnt
 
 step "Setting the password for $USERNAME"
 printf '%s:%s\n' "$USERNAME" "$PASSWORD" | nixos-enter --root /mnt -c chpasswd
 
 step "Done"
 echo "Iliada is installed on $DISK. Remove the installation medium and reboot."
-echo "Your configuration: /etc/iliada (apply changes with: sudo nixos-rebuild switch --flake /etc/iliada#iliada)"
+echo "Change it later in Settings, or with the iliada command."

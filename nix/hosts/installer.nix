@@ -1,6 +1,6 @@
 # The Iliada live/installer ISO: a COSMIC live session plus `iliada-install`.
 #   nix build .#installer-iso
-{ config, lib, pkgs, modulesPath, iliadaSource, ... }:
+{ config, lib, pkgs, modulesPath, iliada, ... }:
 let
   iliada-install = pkgs.writeShellApplication {
     name = "iliada-install";
@@ -14,6 +14,7 @@ let
       nixos-install-tools
       config.nix.package
       git
+      config.iliada.package
     ];
     text = builtins.readFile ../installer/iliada-install.sh;
   };
@@ -28,6 +29,7 @@ in
     desktop = {
       enable = true;
       autoLoginUser = "nixos";
+      setupAssistant = false;
     };
     applications.ingest.enable = false;
   };
@@ -42,7 +44,7 @@ in
   boot.kernelParams = [ "console=tty0" "console=ttyS0,115200" ];
 
   # The Iliada source the installed system is built from.
-  environment.etc."iliada/source".source = iliadaSource;
+  environment.etc."iliada/source".source = iliada;
   environment.systemPackages = [ iliada-install ];
 
   services.getty.helpLine = lib.mkForce ''
