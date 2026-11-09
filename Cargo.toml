@@ -18,6 +18,8 @@ iliada-broker = { path = "crates/iliada-broker" }
 iliada-guest = { path = "crates/iliada-guest" }
 iliada-sandbox = { path = "crates/iliada-sandbox" }
 iliada-appd = { path = "crates/iliada-appd" }
+iliada-catalog = { path = "crates/iliada-catalog" }
+iliada-ingest = { path = "crates/iliada-ingest" }
 
 anyhow = "1"
 thiserror = "2"

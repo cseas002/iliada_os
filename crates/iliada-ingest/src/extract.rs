@@ -141,9 +141,19 @@ fn clear_dest(dest: &Path) -> Result<(), ExtractError> {
 }
 
 pub fn extract_tar(tar_bytes: &[u8], root: &Path, limits: ExtractLimits) -> Result<ExtractReport, ExtractError> {
+    extract_tar_stream(tar_bytes, root, limits)
+}
+
+/// Like [`extract_tar`], reading the archive from a stream (large archives,
+/// e.g. app downloads, never need to fit in memory).
+pub fn extract_tar_stream<R: Read>(
+    reader: R,
+    root: &Path,
+    limits: ExtractLimits,
+) -> Result<ExtractReport, ExtractError> {
     fs::create_dir_all(root).map_err(io_err(root))?;
     let mut report = ExtractReport::default();
-    let mut archive = tar::Archive::new(tar_bytes);
+    let mut archive = tar::Archive::new(reader);
     let mut count = 0u64;
 
     for entry in archive.entries().map_err(ExtractError::Tar)? {

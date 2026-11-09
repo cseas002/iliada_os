@@ -71,7 +71,8 @@
       devShells = forAll allSystems (pkgs: {
         default = pkgs.mkShell {
           packages = with pkgs; [ cargo rustc rustfmt clippy rust-analyzer ]
-            ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ patchelf cloud-hypervisor virtiofsd bubblewrap ];
+            # glib.dev: glib-compile-schemas for the Package Translator / catalog builder.
+            ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ patchelf cloud-hypervisor virtiofsd bubblewrap glib.dev ];
         };
       });
 

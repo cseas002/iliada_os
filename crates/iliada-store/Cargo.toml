@@ -1,0 +1,38 @@
+[package]
+name = "iliada-store"
+description = "The Iliada Store: install and update sandboxed .app bundles from the signed catalog."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "iliada-store"
+path = "src/main.rs"
+
+[dependencies]
+iliada-catalog.workspace = true
+iliada-bundle.workspace = true
+iliada-ingest.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+reqwest.workspace = true
+futures-util.workspace = true
+sha2.workspace = true
+hex.workspace = true
+tempfile.workspace = true
+ruzstd = "0.8"
+
+[dev-dependencies]
+iliada-types.workspace = true
+ed25519-dalek = "2"
+tar = "0.4"
+zstd = "0.13"
+
+[lints]
+workspace = true
