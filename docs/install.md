@@ -85,7 +85,8 @@ files unless you grant it.
 | `iliada.desktop.autoLoginUser` | `null` | log a user in automatically |
 | `iliada.workstation.enable` | follows `desktop.enable` | networking, audio, bluetooth, firmware |
 | `iliada.applications.list` | `/etc/iliada/apps.toml` | the app list (mutable, maintained automatically) |
-| `iliada.isolation.defaultTier` | `"micro-vm"` | `namespace` or `micro-vm` |
+| `iliada.isolation.defaultTier` | `"namespace"` | `namespace` (native speed) or `micro-vm` |
+| `iliada.isolation.highSecurity` | `false` | every app in its own micro-VM (slower, strongest) |
 | `iliada.isolation.defaultNetwork` | `"none"` | network for app sandboxes: `none` / `nat` |
 | `iliada.rustUserland.enable` | `true` | uutils, sudo-rs, ntpd-rs, fish |
 | `iliada.ux.hideFhs` | `true` | hide Unix folders in the file manager |

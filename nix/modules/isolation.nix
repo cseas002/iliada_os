@@ -11,8 +11,20 @@ in
   options.iliada.isolation = {
     defaultTier = lib.mkOption {
       type = lib.types.enum [ "namespace" "micro-vm" ];
-      default = "micro-vm";
-      description = "Tier for bundles that do not request one. Ingested apps always declare micro-vm.";
+      default = "namespace";
+      description = ''
+        Tier for apps that do not ask for one. The namespace sandbox (like macOS's
+        App Sandbox) runs at native speed; micro-VMs cost start-up time, memory and
+        graphics speed, so they are opt-in.
+      '';
+    };
+    highSecurity = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        High security mode: run every app in its own micro-VM (Qubes-style),
+        regardless of its own setting. Strongest isolation, slower apps.
+      '';
     };
     vmm = lib.mkOption {
       type = lib.types.enum [ "cloud-hypervisor" ];
@@ -101,6 +113,7 @@ in
       dataRoot = cfg.dataRoot;
       defaultVcpus = cfg.defaultVcpus;
       defaultMemoryMib = cfg.defaultMemoryMib;
+      highSecurity = cfg.highSecurity;
     };
   };
 }

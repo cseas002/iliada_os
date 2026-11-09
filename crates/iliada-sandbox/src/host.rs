@@ -24,6 +24,9 @@ pub struct HostIsolationConfig {
     pub data_root: PathBuf,
     pub default_vcpus: u8,
     pub default_memory_mib: u32,
+    /// High security mode: every app gets its own micro-VM, whatever it declares.
+    #[serde(default)]
+    pub high_security: bool,
 }
 
 impl HostIsolationConfig {
@@ -47,6 +50,7 @@ impl HostIsolationConfig {
             data_root: "/var/lib/iliada/apps".into(),
             default_vcpus: 2,
             default_memory_mib: 1024,
+            high_security: false,
         }
     }
 }
@@ -64,5 +68,6 @@ mod tests {
         let c: HostIsolationConfig = serde_json::from_str(FROM_NIX).unwrap();
         assert_eq!(c.socket_dir, Path::new("/run/iliada/sandbox"));
         assert_eq!(c.default_memory_mib, 1024);
+        assert!(!c.high_security, "high security mode is opt-in");
     }
 }

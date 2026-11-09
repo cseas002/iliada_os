@@ -80,7 +80,7 @@ impl Default for IngestConfig {
             arch: None,
             vendor_prefix: "org.debian".into(),
             exec_override: None,
-            isolation: IsolationTier::MicroVm,
+            isolation: IsolationTier::Namespace,
             max_download_bytes: 1 << 30,
             max_unpacked_bytes: 4 << 30,
             full_closure: false,

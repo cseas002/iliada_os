@@ -70,7 +70,8 @@ async fn main() -> Result<()> {
 
     let host = HostIsolationConfig::load(&config)?;
     let bundle = find_bundle(&target)?;
-    let mut tier = bundle.info.isolation;
+    // The app's own setting, unless High security mode puts every app in a VM.
+    let mut tier = if host.high_security { IsolationTier::MicroVm } else { bundle.info.isolation };
     if tier == IsolationTier::MicroVm {
         // Tier 2 is configured but not yet bootable (no guest image yet).
         eprintln!(

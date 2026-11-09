@@ -100,7 +100,7 @@ this design they are the same mechanism.
 | Mechanism | bubblewrap: all namespaces, `--cap-drop ALL`, ro binds | cloud-hypervisor (KVM), virtio-only devices |
 | FS view | bundle `Root` at `/`, runtime base, private data dir | same, via virtio-fs (app share read-only) |
 | Channel out | broker Unix socket bind-mounted | vsock `CID 2:7000` → broker socket |
-| Default for | first-party / reviewed apps | everything ingested from upstream |
+| Used for | **every app, by default** (native speed) | opt-in: "Extra isolation" per app, or "High security mode" for all |
 
 *Why not Firecracker:* no virtio-gpu, no virtio-fs (only block devices), and no
 display path. Desktop apps need all three. cloud-hypervisor is Rust,

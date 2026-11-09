@@ -52,7 +52,7 @@
       initialList = ../../examples/watchlist.toml;
       ingest.enable = true;
     };
-    isolation.defaultTier = "micro-vm";
+    isolation.defaultTier = "namespace";
     broker.frontend = "deny";
     desktop = {
       enable = true;

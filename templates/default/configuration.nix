@@ -35,9 +35,12 @@
     # of installed apps is kept automatically in /etc/iliada/apps.toml.
     applications.ingest.enable = true;
 
-    # Untrusted apps get a micro-VM (falls back to a namespace sandbox until
-    # micro-VM support lands). Network access for apps is off by default.
-    isolation.defaultTier = "micro-vm";
+    # Every app runs in its own sandbox (like macOS's App Sandbox), at native
+    # speed. High security mode gives every app its own micro-VM instead:
+    # stronger isolation, slower apps. Single apps can get "Extra isolation"
+    # in Settings. Network access for apps is off by default.
+    isolation.defaultTier = "namespace";
+    isolation.highSecurity = false;
     isolation.defaultNetwork = "none";
 
     # Rust userland: uutils coreutils, sudo-rs, ntpd-rs, fish.

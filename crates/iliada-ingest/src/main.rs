@@ -60,7 +60,7 @@ struct Opts {
     /// How to resolve libraries the package index walk could not find.
     #[arg(long, value_enum, default_value_t = ResolverChoice::Rules)]
     resolver: ResolverChoice,
-    #[arg(long, value_enum, default_value_t = Tier::MicroVm)]
+    #[arg(long, value_enum, default_value_t = Tier::Namespace)]
     isolation: Tier,
     /// Follow dependencies into non-library packages too.
     #[arg(long)]

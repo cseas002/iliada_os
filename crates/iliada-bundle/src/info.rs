@@ -36,10 +36,13 @@ pub struct Info {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum IsolationTier {
-    /// Tier 1: namespaces + Landlock + seccomp (trusted / first-party apps).
-    Namespace,
-    /// Tier 2: dedicated micro-VM (default for anything ingested from upstream).
+    /// Tier 1 (default): namespaces + Landlock + seccomp, like macOS's App
+    /// Sandbox. Native speed, no extra memory.
     #[default]
+    Namespace,
+    /// Tier 2 (opt-in): a dedicated micro-VM with its own kernel. Strongest
+    /// isolation, at a cost in start-up time, memory and graphics speed. Chosen
+    /// per app ("Extra isolation") or for every app ("High security mode").
     MicroVm,
 }
 
