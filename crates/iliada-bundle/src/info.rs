@@ -26,6 +26,10 @@ pub struct Info {
     pub runtime: String,
     #[serde(default)]
     pub isolation: IsolationTier,
+    /// The app needs the internet. Shown before installation; sandboxes of
+    /// apps without it have no network at all.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub network: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub categories: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -100,6 +104,7 @@ mod tests {
             icon: None,
             runtime: "iliada-base-1".into(),
             isolation: IsolationTier::MicroVm,
+            network: false,
             categories: vec![],
             mime_types: vec![],
         }

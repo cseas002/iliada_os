@@ -106,6 +106,12 @@ fn bwrap_prefix(spec: &SandboxSpec, host: &HostIsolationConfig, desktop: &HostDe
         }
     }
     push(&["--ro-bind-try", &p(&desktop.fonts), "/etc/fonts"]);
+    if spec.network == NetworkPolicy::Nat {
+        // Name resolution and TLS roots from the host, read-only.
+        for f in ["resolv.conf", "hosts", "ssl"] {
+            push(&["--ro-bind-try", &format!("/etc/{f}"), &format!("/etc/{f}")]);
+        }
+    }
 
     let runtime = &host.runtime_dir;
     push(&["--ro-bind", "/nix/store", "/nix/store"]);
@@ -317,5 +323,9 @@ mod tests {
         let (_d, spec) = fixture(NetworkPolicy::Nat, false);
         let a = bwrap_args(&spec, &HostIsolationConfig::example(), &HostDesktop::default());
         assert!(a.contains(&"--share-net".to_string()));
+        assert_eq!(after(&a, "--ro-bind-try", "/etc/resolv.conf"), Some("/etc/resolv.conf"));
+        let (_d, spec) = fixture(NetworkPolicy::None, false);
+        let a = bwrap_args(&spec, &HostIsolationConfig::example(), &HostDesktop::default());
+        assert!(!a.iter().any(|x| x == "/etc/resolv.conf"), "no DNS without network");
     }
 }

@@ -200,6 +200,7 @@ mod tests {
             icon: Some("Resources/icon.svg".into()),
             runtime: "iliada-base-1".into(),
             isolation: IsolationTier::MicroVm,
+            network: false,
             categories: if gui { vec!["Utility".into()] } else { vec![] },
             mime_types: vec![],
         };

@@ -80,7 +80,9 @@ async fn main() -> Result<()> {
         );
         tier = IsolationTier::Namespace;
     }
-    let mut spec = SandboxSpec::from_bundle(&bundle, &host, NetworkPolicy::None, data_dir(bundle.info.id.as_str())?)?;
+    // Only apps that declare it (and were approved for it at install) get a network.
+    let network = if bundle.info.network { NetworkPolicy::Nat } else { NetworkPolicy::None };
+    let mut spec = SandboxSpec::from_bundle(&bundle, &host, network, data_dir(bundle.info.id.as_str())?)?;
     spec.display = wayland_socket();
     spec.args = args;
 

@@ -57,6 +57,8 @@ pub struct IngestConfig {
     pub vendor_prefix: String,
     pub exec_override: Option<String>,
     pub isolation: IsolationTier,
+    /// Mark the bundle as needing the internet.
+    pub network: bool,
     pub max_download_bytes: u64,
     pub max_unpacked_bytes: u64,
     /// Follow dependency edges into non-`lib*` packages too.
@@ -81,6 +83,7 @@ impl Default for IngestConfig {
             vendor_prefix: "org.debian".into(),
             exec_override: None,
             isolation: IsolationTier::Namespace,
+            network: false,
             max_download_bytes: 1 << 30,
             max_unpacked_bytes: 4 << 30,
             full_closure: false,
@@ -338,6 +341,7 @@ impl Ingestor {
             icon,
             runtime: self.runtime.name.clone(),
             isolation: self.cfg.isolation,
+            network: self.cfg.network,
             categories: desktop.as_ref().map(|d| d.categories.clone()).unwrap_or_default(),
             mime_types: desktop.as_ref().map(|d| d.mime_types.clone()).unwrap_or_default(),
         };

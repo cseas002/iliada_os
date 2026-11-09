@@ -175,6 +175,7 @@ async fn follows_installs_and_removals() {
         icon: None,
         runtime: "iliada-base-1".into(),
         isolation: IsolationTier::Namespace,
+        network: false,
         categories: vec![],
         mime_types: vec![],
     };

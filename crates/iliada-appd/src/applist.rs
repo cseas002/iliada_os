@@ -146,6 +146,7 @@ mod tests {
             icon: None,
             runtime: "iliada-base-1".into(),
             isolation: IsolationTier::MicroVm,
+            network: false,
             categories: vec![],
             mime_types: vec![],
         };
