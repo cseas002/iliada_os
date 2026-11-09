@@ -13,6 +13,7 @@ let
       gnused
       nixos-install-tools
       config.nix.package
+      git
     ];
     text = builtins.readFile ../installer/iliada-install.sh;
   };

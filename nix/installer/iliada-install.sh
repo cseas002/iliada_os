@@ -100,14 +100,26 @@ sed -i -e "s|networking.hostName = \"iliada\";|networking.hostName = \"$HOSTNAME
   -e "s|description = \"Iliada User\";|description = \"${FULLNAME//\"/}\";|" \
   -e '/initialPassword = /d' /mnt/etc/iliada/configuration.nix
 
+# /etc/iliada is a git repository: it is what gets backed up and synced
+# (ADR 0005), and git flakes hash only committed files, so writing the lock
+# file does not disturb the flake. The bundled Iliada source is an input,
+# not part of the configuration.
+G() { git -C /mnt/etc/iliada -c user.name=Iliada -c user.email=iliada@localhost "$@"; }
+printf 'source/\n' > /mnt/etc/iliada/.gitignore
+G init -q -b main
+G add -A
+G commit -q -m "Initial configuration for $HOSTNAME_"
+NIX=(nix --extra-experimental-features "nix-command flakes")
+"${NIX[@]}" flake lock git+file:///mnt/etc/iliada
+G add flake.lock
+G commit -q -m "Lock Iliada"
+
 step "Installing Iliada (this downloads and builds the system)"
-# Lock first: creating flake.lock during the install would change the flake
-# directory after Nix has hashed it.
-nix --extra-experimental-features "nix-command flakes" flake lock /mnt/etc/iliada
-nixos-install --root /mnt --flake /mnt/etc/iliada#iliada --no-root-passwd --no-channel-copy
+nixos-install --root /mnt --flake git+file:///mnt/etc/iliada#iliada --no-root-passwd --no-channel-copy
 
 sed -i 's|path:/mnt/etc/iliada/source|path:/etc/iliada/source|' /mnt/etc/iliada/flake.nix
-[ -f /mnt/etc/iliada/flake.lock ] && sed -i 's|"/mnt/etc/iliada/source"|"/etc/iliada/source"|g' /mnt/etc/iliada/flake.lock
+sed -i 's|"/mnt/etc/iliada/source"|"/etc/iliada/source"|g' /mnt/etc/iliada/flake.lock
+G commit -q -am "Installed"
 
 step "Setting the password for $USERNAME"
 printf '%s:%s\n' "$USERNAME" "$PASSWORD" | nixos-enter --root /mnt -c chpasswd
