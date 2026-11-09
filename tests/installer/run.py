@@ -97,12 +97,15 @@ def main():
     vm = qemu(args, disk, sock, cdrom=args.iso)
     try:
         con = Serial(sock, log)
-        con.read_until(r"nixos@iliada-installer[^\n]*[$#] ", 600)
+        # The live user's shell is fish (Iliada's default); accept fish or sh prompts.
+        con.read_until(r"nixos\S*@\S*iliada-installer.*?(> |[$#] )", 600)
+        time.sleep(2)
         print("[2/3] running iliada-install", flush=True)
+        # Run under bash explicitly so the exit-status syntax is shell-independent.
         con.send(
-            "sudo iliada-install --disk /dev/vda --user alex --fullname 'Alex Test' "
+            "bash -c 'sudo iliada-install --disk /dev/vda --user alex --fullname \"Alex Test\" "
             "--hostname iliada-test --timezone Europe/Athens --password test --yes; "
-            "echo INSTALL-EXIT=$?\n"
+            "echo INSTALL-EXIT=$?'\n"
         )
         out = con.read_until(r"INSTALL-EXIT=\d+", 5400)
         code = int(re.search(r"INSTALL-EXIT=(\d+)", out).group(1))
