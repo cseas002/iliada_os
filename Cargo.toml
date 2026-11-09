@@ -1,0 +1,50 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+default-members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+repository = "https://github.com/cseas002/iliada_os"
+rust-version = "1.85"
+
+[workspace.dependencies]
+iliada-types = { path = "crates/iliada-types" }
+iliada-bundle = { path = "crates/iliada-bundle" }
+iliada-ipc = { path = "crates/iliada-ipc" }
+iliada-broker = { path = "crates/iliada-broker" }
+iliada-guest = { path = "crates/iliada-guest" }
+iliada-sandbox = { path = "crates/iliada-sandbox" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "fs", "sync", "time", "signal", "process", "io-std"] }
+async-trait = "0.1"
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json", "http2"] }
+futures-util = "0.3"
+sha2 = "0.10"
+hex = "0.4"
+postcard = { version = "1", features = ["use-std"] }
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# Untrusted-input decoders (xz, zstd, ELF) are slow unoptimised; keep dev builds usable.
+[profile.dev.package."*"]
+opt-level = 2
