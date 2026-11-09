@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
     let network = if bundle.info.network { NetworkPolicy::Nat } else { NetworkPolicy::None };
     let mut spec = SandboxSpec::from_bundle(&bundle, &host, network, data_dir(bundle.info.id.as_str())?)?;
     spec.display = wayland_socket();
-    spec.args = args;
+    spec.args = bundle.info.args.iter().cloned().chain(args).collect();
 
     let backend = backend_for(tier, &host);
     let mut handle = backend.launch(&spec).await?;

@@ -14,7 +14,13 @@ use iliada_bundle::BundleLayout;
 /// Tier-2 micro-VM, `Contents/Root` is mounted at `/` and `Contents/Libraries`
 /// is appended to the loader path by the guest image, so the same bundle runs
 /// unchanged.
-pub fn write_launcher(layout: &BundleLayout, name: &str, exe_in_root: &Path, triplet: Option<&str>) -> Result<PathBuf> {
+pub fn write_launcher(
+    layout: &BundleLayout,
+    name: &str,
+    exe_in_root: &Path,
+    args: &[String],
+    triplet: Option<&str>,
+) -> Result<PathBuf> {
     let mut lib_path = vec!["$here/Libraries".to_owned()];
     if let Some(t) = triplet {
         lib_path.push(format!("$here/Root/usr/lib/{t}"));
@@ -28,9 +34,10 @@ pub fn write_launcher(layout: &BundleLayout, name: &str, exe_in_root: &Path, tri
          export LD_LIBRARY_PATH=\"{}${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}\"\n\
          export XDG_DATA_DIRS=\"$here/Root/usr/share:${{XDG_DATA_DIRS:-/usr/local/share:/usr/share}}\"\n\
          [ -f \"$here/Root/usr/share/glib-2.0/schemas/gschemas.compiled\" ] && export GSETTINGS_SCHEMA_DIR=\"$here/Root/usr/share/glib-2.0/schemas\"\n\
-         exec \"$here/Root/{}\" \"$@\"\n",
+         exec \"$here/Root/{}\"{} \"$@\"\n",
         lib_path.join(":"),
-        exe_in_root.display()
+        exe_in_root.display(),
+        args.iter().map(|a| format!(" '{}'", a.replace('\'', "'\\''"))).collect::<String>()
     );
     let path = layout.executables().join(name);
     fs::write(&path, script).with_context(|| format!("writing {}", path.display()))?;

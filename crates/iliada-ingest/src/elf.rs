@@ -80,6 +80,15 @@ pub fn inspect(path: &Path, rel: &Path) -> Result<Option<ElfObject>> {
 /// the file names of `lib*.so*` entries (Debian ships `libfoo.so.1 -> libfoo.so.1.2.3`).
 pub fn provided_sonames(root: &Path, objects: &[ElfObject]) -> BTreeSet<String> {
     let mut set: BTreeSet<String> = objects.iter().filter_map(|o| o.soname.clone()).collect();
+    // Libraries the program finds through its own RUNPATH ($ORIGIN) anywhere
+    // in the tree, often without a DT_SONAME.
+    for o in objects.iter().filter(|o| !o.is_executable) {
+        if let Some(name) = o.rel_path.file_name().map(|n| n.to_string_lossy().into_owned()) {
+            if name.contains(".so") {
+                set.insert(name);
+            }
+        }
+    }
     for dir in library_dirs(root) {
         if let Ok(rd) = fs::read_dir(&dir) {
             for e in rd.flatten() {

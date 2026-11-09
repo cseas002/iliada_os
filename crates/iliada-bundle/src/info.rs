@@ -18,6 +18,9 @@ pub struct Info {
     /// in `Executables/` is the host-side equivalent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entry: Option<String>,
+    /// Arguments always passed to `entry` (e.g. `--writer`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
     /// Path relative to `Contents/`, e.g. `Resources/icon.png`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
@@ -101,6 +104,7 @@ mod tests {
             version: "1.7.1".into(),
             executable: "jq".into(),
             entry: Some("usr/bin/jq".into()),
+            args: vec![],
             icon: None,
             runtime: "iliada-base-1".into(),
             isolation: IsolationTier::MicroVm,

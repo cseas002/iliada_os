@@ -138,6 +138,7 @@ mod tests {
             version: "1.7.1".into(),
             executable: "jq".into(),
             entry: Some("usr/bin/jq".into()),
+            args: vec![],
             icon: None,
             runtime: "iliada-base-1".into(),
             isolation: IsolationTier::MicroVm,

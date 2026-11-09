@@ -143,6 +143,7 @@ mod tests {
             version: "1".into(),
             executable: "x".into(),
             entry: None,
+            args: vec![],
             icon: None,
             runtime: "iliada-base-1".into(),
             isolation: IsolationTier::MicroVm,

@@ -89,10 +89,11 @@ fn bwrap_prefix(spec: &SandboxSpec, host: &HostIsolationConfig, desktop: &HostDe
 
     // The upstream FHS tree, one top-level entry at a time so the runtime
     // base can supply /lib and /lib64 (the ELF loader) alongside it.
-    let mut has_lib = false;
+    let (mut has_lib, mut has_bin) = (false, false);
     for name in top_level_entries(&root) {
         match name.as_str() {
             "lib" | "lib64" => has_lib = true,
+            "bin" => has_bin = true,
             "etc" | "run" | "proc" | "dev" | "tmp" | "home" | "app" | "nix" => continue,
             _ => {}
         }
@@ -119,6 +120,10 @@ fn bwrap_prefix(spec: &SandboxSpec, host: &HostIsolationConfig, desktop: &HostDe
     if !has_lib {
         push(&["--ro-bind", &p(&runtime.join("lib")), "/lib64"]);
         push(&["--ro-bind", &p(&runtime.join("lib")), "/lib"]);
+    }
+    if !has_bin {
+        // A shell and core utilities for the app's own launcher scripts.
+        push(&["--ro-bind-try", &p(&runtime.join("bin")), "/bin"]);
     }
     push(&["--ro-bind", &p(&contents.join("Libraries")), "/app/lib"]);
     push(&["--bind", &p(&spec.data_dir), "/home/app"]);
@@ -299,6 +304,7 @@ mod tests {
         assert_eq!(after(&a, "--ro-bind", &root.join("etc/jq").display().to_string()), Some("/etc/jq"));
         assert!(after(&a, "--ro-bind", &root.join("etc/fonts").display().to_string()).is_none(), "host fonts win");
         assert_eq!(after(&a, "--ro-bind", &host.runtime_dir.join("lib").display().to_string()), Some("/lib64"));
+        assert_eq!(after(&a, "--ro-bind-try", &host.runtime_dir.join("bin").display().to_string()), Some("/bin"));
         assert_eq!(after(&a, "--bind", "/home/alice/.local/share/iliada/apps/org.debian.jq"), Some("/home/app"));
         assert_eq!(
             after(&a, "--ro-bind-try", "/run/iliada/sandbox/org.debian.jq.vsock_7000"),

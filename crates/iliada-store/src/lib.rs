@@ -242,6 +242,7 @@ mod tests {
             version: "1.0".into(),
             executable: "hello".into(),
             entry: None,
+            args: vec![],
             icon: None,
             runtime: "iliada-base-1".into(),
             isolation: IsolationTier::Namespace,

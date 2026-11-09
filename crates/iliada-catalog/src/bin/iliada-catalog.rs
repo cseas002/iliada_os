@@ -78,6 +78,12 @@ struct Recipe {
     network: bool,
     #[serde(default)]
     full_closure: bool,
+    /// Extra packages unpacked into the app (plugins, programs outside the library path).
+    #[serde(default)]
+    include: Vec<String>,
+    /// Arguments always passed to the program.
+    #[serde(default)]
+    args: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -135,6 +141,8 @@ async fn build(recipes: &Path, out: &Path, only: &[String], base: &str, cache: O
             full_closure: recipe.full_closure,
             network: recipe.network,
             display_name: Some(recipe.name.clone()),
+            include: recipe.include.clone(),
+            args: recipe.args.clone(),
             force: true,
             ..Default::default()
         };

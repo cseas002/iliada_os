@@ -62,6 +62,11 @@ pub struct IngestConfig {
     /// The app's name (bundle folder and launcher), overriding the upstream one
     /// ("Firefox" rather than "Firefox ESR").
     pub display_name: Option<String>,
+    /// Extra packages unpacked into the app itself, next to the primary one
+    /// (programs that live outside the library path, plugins, data).
+    pub include: Vec<String>,
+    /// Arguments always passed to the entry point.
+    pub args: Vec<String>,
     pub max_download_bytes: u64,
     pub max_unpacked_bytes: u64,
     /// Follow dependency edges into non-`lib*` packages too.
@@ -88,6 +93,8 @@ impl Default for IngestConfig {
             isolation: IsolationTier::Namespace,
             network: false,
             display_name: None,
+            include: vec![],
+            args: vec![],
             max_download_bytes: 1 << 30,
             max_unpacked_bytes: 4 << 30,
             full_closure: false,
@@ -221,6 +228,39 @@ impl Ingestor {
         let triplet = multiarch_triplet(&arch);
         tracing::info!(%package, %version, %arch, files = report.files, ?confinement, "extracted");
 
+        // Included packages become part of the app's own tree.
+        let mut deps = DepState::default();
+        let mut dep_roots = control.depends();
+        let mut included = Vec::new();
+        if !self.cfg.include.is_empty() {
+            let idx = self.index(&arch).await?;
+            for name in &self.cfg.include {
+                let e = idx.get(name).with_context(|| format!("included package {name:?} not found"))?;
+                let url = idx.url_for(e);
+                tracing::info!(package = %e.name, "including package in the app");
+                let f = self.fetcher.fetch(&url).await?;
+                ensure!(f.sha256 == e.sha256, "checksum mismatch for {url}");
+                let (bytes, root, limit) = (f.bytes, layout.fhs_root(), self.cfg.max_unpacked_bytes);
+                run_confined(staging.path().to_owned(), move || {
+                    let deb = open_deb(&bytes, limit)?;
+                    extract_tar(&deb.data_tar, &root, limits)?;
+                    Ok(())
+                })
+                .await?;
+                dep_roots.extend(e.depends.iter().cloned());
+                let rec = PackageRecord {
+                    name: e.name.clone(),
+                    version: e.version.clone(),
+                    url,
+                    sha256: f.sha256,
+                    role: PackageRole::Dependency,
+                };
+                // Already in the app: never fetch it again as a dependency.
+                deps.fetched.insert(e.name.clone(), rec.clone());
+                included.push(rec);
+            }
+        }
+
         // 3. Analyse what the payload needs.
         let root = layout.fhs_root();
         let objects = {
@@ -235,12 +275,11 @@ impl Ingestor {
         let exe_rel = choose_executable(&root, &package, desktop.as_ref(), self.cfg.exec_override.as_deref())?;
 
         // 4. Resolve dependencies through the package index, then resolvers.
-        let mut deps = DepState::default();
         let mut index = None;
         let needs_more = roots.iter().any(|s| !provided.contains(s) && !self.runtime.provides_soname(s));
         if needs_more && self.cfg.use_index {
             let idx = self.index(&arch).await?;
-            self.walk_dependencies(&idx, control.depends(), None, false, staging.path(), &mut deps).await?;
+            self.walk_dependencies(&idx, dep_roots, None, false, staging.path(), &mut deps).await?;
             index = Some(idx);
         }
         let mut closure = compute_closure(&roots, &provided, &provided_needed, &self.runtime, &deps.available);
@@ -321,7 +360,7 @@ impl Ingestor {
         let schemas = compile_schemas(staging.path(), &root).await?;
 
         let exe_name = exe_rel.file_name().context("executable has no file name")?.to_string_lossy().into_owned();
-        write_launcher(&layout, &exe_name, &exe_rel, triplet)?;
+        write_launcher(&layout, &exe_name, &exe_rel, &self.cfg.args, triplet)?;
         let exec_objects: Vec<PathBuf> =
             objects.iter().filter(|o| o.is_executable).map(|o: &ElfObject| o.rel_path.clone()).collect();
         let runpaths_patched = patch_runpaths(&layout, &exec_objects, triplet).await?;
@@ -336,7 +375,13 @@ impl Ingestor {
             sha256: primary.sha256.clone(),
             role: PackageRole::Primary,
         }];
-        packages.extend(deps.fetched.values().filter(|p| used_packages.contains(p.name.as_str())).cloned());
+        packages.extend(included.iter().cloned());
+        packages.extend(
+            deps.fetched
+                .values()
+                .filter(|p| used_packages.contains(p.name.as_str()) && !included.iter().any(|i| i.name == p.name))
+                .cloned(),
+        );
 
         let app_id = AppId::from_upstream(&self.cfg.vendor_prefix, &package)?;
         let info = Info {
@@ -350,6 +395,7 @@ impl Ingestor {
             version: version.clone(),
             executable: exe_name,
             entry: Some(exe_rel.to_string_lossy().into_owned()),
+            args: self.cfg.args.clone(),
             icon,
             runtime: self.runtime.name.clone(),
             isolation: self.cfg.isolation,

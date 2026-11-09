@@ -172,6 +172,7 @@ async fn follows_installs_and_removals() {
         version: "1".into(),
         executable: "memo".into(),
         entry: None,
+        args: vec![],
         icon: None,
         runtime: "iliada-base-1".into(),
         isolation: IsolationTier::Namespace,
