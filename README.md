@@ -66,3 +66,10 @@ nix build .#nixosConfigurations.appliance-x86_64.config.system.build.image
 
 Optional AI advisor for ingestion: `cargo run -p iliada-ingest --features claude
 -- run <src> --advisor claude` with `ANTHROPIC_API_KEY` set.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT) at your option. Unless you explicitly state
+otherwise, any contribution intentionally submitted for inclusion in this
+project shall be dual licensed as above, without any additional terms.

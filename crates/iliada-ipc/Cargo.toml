@@ -3,6 +3,7 @@ name = "iliada-ipc"
 description = "Wire protocol between sandboxed Iliada apps (guest) and the host permission broker."
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 

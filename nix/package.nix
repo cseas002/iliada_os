@@ -20,6 +20,7 @@ rustPlatform.buildRustPackage {
   meta = {
     description = "Iliada system daemons: permission broker and ingestion pipeline";
     homepage = "https://github.com/cseas002/iliada_os";
+    license = with lib.licenses; [ mit asl20 ];
     platforms = lib.platforms.unix;
     mainProgram = "iliada-broker";
   };

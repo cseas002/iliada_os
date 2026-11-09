@@ -3,6 +3,7 @@ name = "iliada-ingest"
 description = "Iliada ingestion daemon: turns upstream packages (.deb first) into self-contained .app bundles."
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 

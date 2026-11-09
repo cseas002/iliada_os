@@ -3,6 +3,7 @@ name = "iliada-bundle"
 description = "The Iliada .app bundle format: layout, manifests (Info/Permissions/Provenance) and validation."
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
