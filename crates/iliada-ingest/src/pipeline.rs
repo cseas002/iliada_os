@@ -491,8 +491,9 @@ impl Ingestor {
 
 const BIN_DIRS: [&str; 5] = ["usr/bin", "bin", "usr/games", "usr/sbin", "sbin"];
 
-/// Add group write (and setgid on directories) throughout a bundle.
-/// Symlinks are skipped; their own mode is meaningless.
+/// Add group read/write throughout a bundle. The group itself is inherited
+/// from /Applications (setgid), so no special bits are set here (Nix's build
+/// sandbox, rightly, refuses setgid). Symlinks are skipped.
 fn make_group_writable(path: &Path) -> Result<()> {
     let meta = fs::symlink_metadata(path)?;
     if meta.file_type().is_symlink() {
@@ -500,7 +501,7 @@ fn make_group_writable(path: &Path) -> Result<()> {
     }
     let mode = meta.permissions().mode();
     if meta.is_dir() {
-        fs::set_permissions(path, fs::Permissions::from_mode((mode & 0o777) | 0o2070))?;
+        fs::set_permissions(path, fs::Permissions::from_mode((mode & 0o777) | 0o070))?;
         for e in fs::read_dir(path)?.flatten() {
             make_group_writable(&e.path())?;
         }
