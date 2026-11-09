@@ -148,6 +148,9 @@ struct DepState {
     /// Sonames needed by plugin modules (gdk-pixbuf loaders, GIO/GTK modules…)
     /// that live in `usr/lib/<triplet>/<dir>/` of each package.
     plugin_needed: BTreeMap<String, BTreeSet<String>>,
+    /// Every shared library file each package ships on the loader path,
+    /// including ones loaded at runtime with dlopen (NSS modules, codecs…).
+    pkg_libs: BTreeMap<String, Vec<(String, PathBuf)>>,
     available: BTreeMap<String, LibCandidate>,
     skipped: BTreeSet<String>,
     missing: BTreeSet<String>,
@@ -345,6 +348,17 @@ impl Ingestor {
             let dst = layout.libraries().join(soname);
             fs::copy(src, &dst).with_context(|| format!("copying {}", src.display()))?;
             fs::set_permissions(&dst, fs::Permissions::from_mode(0o755))?;
+        }
+        // The rest of each library package in use: libraries it loads at
+        // runtime (dlopen) never show up as DT_NEEDED anywhere.
+        for pkg in in_use(&closure) {
+            for (name, src) in deps.pkg_libs.get(&pkg).into_iter().flatten() {
+                let dst = layout.libraries().join(name);
+                if fs::symlink_metadata(&dst).is_err() && !self.runtime.provides_soname(name) {
+                    fs::copy(src, &dst).with_context(|| format!("copying {}", src.display()))?;
+                    fs::set_permissions(&dst, fs::Permissions::from_mode(0o755))?;
+                }
+            }
         }
         // Shared data (schemas, locales, icons, GTK resources) of every package
         // that contributed libraries, plus data packages, joins the app's tree.
@@ -555,8 +569,31 @@ impl Ingestor {
                 tokio::task::spawn_blocking(move || scan_tree(&d)).await??
             };
             let suggested = if is_root { suggested_by.map(str::to_owned) } else { None };
-            let plugins: BTreeSet<String> =
-                objs.iter().filter(|o| is_plugin_path(&o.rel_path)).flat_map(|o| o.needed.iter().cloned()).collect();
+            let on_loader_path = |o: &&crate::elf::ElfObject| {
+                !o.is_executable
+                    && !is_plugin_path(&o.rel_path)
+                    && o.rel_path.file_name().is_some_and(|n| n.to_string_lossy().contains(".so"))
+            };
+            let mut libs = Vec::new();
+            for o in objs.iter().filter(on_loader_path) {
+                let path = dest.join(&o.rel_path);
+                let file = o.rel_path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                if let Some(so) = &o.soname {
+                    if *so != file {
+                        libs.push((so.clone(), path.clone()));
+                    }
+                }
+                libs.push((file, path));
+            }
+            if !libs.is_empty() {
+                st.pkg_libs.insert(entry.name.clone(), libs);
+            }
+            // Needs of plugins and of runtime-loaded libraries are best-effort.
+            let plugins: BTreeSet<String> = objs
+                .iter()
+                .filter(|o| is_plugin_path(&o.rel_path) || on_loader_path(o))
+                .flat_map(|o| o.needed.iter().cloned())
+                .collect();
             if !plugins.is_empty() {
                 st.plugin_needed.insert(entry.name.clone(), plugins);
             }
