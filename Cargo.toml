@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "xtask"]
+# GUI apps build against libcosmic and have their own lock files.
+exclude = ["apps"]
 default-members = ["crates/*"]
 
 [workspace.package]

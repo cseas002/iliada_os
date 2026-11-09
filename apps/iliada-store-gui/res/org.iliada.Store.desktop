@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Store
+GenericName=App Store
+Comment=Get apps for Iliada
+Exec=iliada-store-gui
+Icon=system-software-install
+Categories=System;PackageManager;
+Keywords=apps;install;store;software;
+StartupWMClass=org.iliada.Store
