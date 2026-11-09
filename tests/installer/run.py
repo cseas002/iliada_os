@@ -116,10 +116,12 @@ def main():
         if code != 0:
             print(f"iliada-install failed with {code}; see {log.name}", file=sys.stderr)
             return 1
-        # Flush and unmount the target, then power off immediately (a full
-        # live-session shutdown is slow and irrelevant here).
-        con.send("bash -c 'sudo umount -R /mnt; sync; sudo poweroff -f'\n")
-        vm.wait(timeout=300)
+        # Flush everything to the virtual disk, then stop the VM. (Shutting the
+        # live session down cleanly is slow and irrelevant to the result.)
+        con.read_until(r"(> |[$#] )", 60)
+        con.send("sync; echo FLUSHED-$((40+2))\n")
+        con.read_until(r"FLUSHED-42", 120)
+        time.sleep(2)
     finally:
         if vm.poll() is None:
             vm.kill()
