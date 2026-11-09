@@ -1,4 +1,4 @@
-{ lib, rustPlatform }:
+{ lib, rustPlatform, pkg-config, zstd }:
 
 rustPlatform.buildRustPackage {
   pname = "iliada-tools";
@@ -15,6 +15,10 @@ rustPlatform.buildRustPackage {
     ];
   };
   cargoLock.lockFile = ../Cargo.lock;
+
+  # zstd: used by the Store's tests (archive fixtures) and the catalog builder.
+  nativeBuildInputs = [ pkg-config ];
+  buildInputs = [ zstd ];
 
   # Only the default members (crates/*) are built; xtask is dev tooling.
   meta = {
