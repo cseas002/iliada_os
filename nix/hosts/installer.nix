@@ -28,6 +28,10 @@ in
     };
     applications.ingest.enable = false;
   };
+  # sudo-rs here too (the stock installer profile enables C sudo); the live
+  # user needs no password, as on the stock NixOS installer.
+  security.sudo.enable = lib.mkForce false;
+  security.sudo-rs.wheelNeedsPassword = false;
   # The ISO has its own boot loader.
   boot.loader.systemd-boot.enable = lib.mkForce false;
   boot.loader.efi.canTouchEfiVariables = lib.mkForce false;
