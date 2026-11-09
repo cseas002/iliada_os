@@ -88,9 +88,11 @@ cp "$TEMPLATE/flake.nix" "$TEMPLATE/configuration.nix" "$TEMPLATE/apps.toml" /mn
 mv /mnt/etc/nixos/hardware-configuration.nix /mnt/etc/iliada/
 rm -rf /mnt/etc/nixos
 system="$(uname -m)-linux"
-# The installed system builds from the copy of Iliada it was installed with
-# (/etc/iliada/source exists both here and on the installed system).
-sed -i -e 's|inputs.iliada.url = .*|inputs.iliada.url = "path:/etc/iliada/source";|' \
+# The installed system builds from the copy of Iliada it was installed with.
+# During installation that copy is at /mnt/etc/iliada/source (a real
+# directory; the live system's /etc/iliada/source is a symlink Nix refuses);
+# afterwards the path is rewritten to what the installed system sees.
+sed -i -e 's|inputs.iliada.url = .*|inputs.iliada.url = "path:/mnt/etc/iliada/source";|' \
   -e "s|system = \"x86_64-linux\";|system = \"$system\";|" /mnt/etc/iliada/flake.nix
 sed -i -e "s|networking.hostName = \"iliada\";|networking.hostName = \"$HOSTNAME_\";|" \
   -e "s|time.timeZone = \"UTC\";.*|time.timeZone = \"$TIMEZONE\";|" \
@@ -100,6 +102,9 @@ sed -i -e "s|networking.hostName = \"iliada\";|networking.hostName = \"$HOSTNAME
 
 step "Installing Iliada (this downloads and builds the system)"
 nixos-install --root /mnt --flake /mnt/etc/iliada#iliada --no-root-passwd --no-channel-copy
+
+sed -i 's|path:/mnt/etc/iliada/source|path:/etc/iliada/source|' /mnt/etc/iliada/flake.nix
+[ -f /mnt/etc/iliada/flake.lock ] && sed -i 's|"/mnt/etc/iliada/source"|"/etc/iliada/source"|g' /mnt/etc/iliada/flake.lock
 
 step "Setting the password for $USERNAME"
 printf '%s:%s\n' "$USERNAME" "$PASSWORD" | nixos-enter --root /mnt -c chpasswd
