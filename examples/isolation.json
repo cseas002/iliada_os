@@ -1,0 +1,12 @@
+{
+  "guestKernel": "/run/current-system/iliada/guest/kernel",
+  "guestInitrd": "/run/current-system/iliada/guest/initrd",
+  "cloudHypervisor": "/run/current-system/sw/bin/cloud-hypervisor",
+  "virtiofsd": "/run/current-system/sw/bin/virtiofsd",
+  "bwrap": "/run/current-system/sw/bin/bwrap",
+  "runtimeDir": "/run/current-system/iliada/runtime/iliada-base-1",
+  "socketDir": "/run/iliada/sandbox",
+  "dataRoot": "/var/lib/iliada/apps",
+  "defaultVcpus": 2,
+  "defaultMemoryMib": 1024
+}

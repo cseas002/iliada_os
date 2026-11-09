@@ -1,0 +1,9 @@
+# A hand-written first-party bundle used by the broker demo and docs.
+id = "org.iliada.voice-memo"
+name = "Voice Memo"
+version = "0.1.0"
+executable = "voice-memo"
+entry = "usr/bin/voice-memo"
+runtime = "iliada-base-1"
+isolation = "namespace"
+categories = ["AudioVideo", "Recorder"]

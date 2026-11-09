@@ -1,0 +1,9 @@
+# Used by: iliada-ingest serve --watchlist examples/watchlist.toml
+interval_secs = 3600
+concurrency = 2
+
+[[watch]]
+debian = "jq"
+
+[[watch]]
+debian = "gnome-calculator"

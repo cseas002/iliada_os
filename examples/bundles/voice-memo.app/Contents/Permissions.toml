@@ -1,0 +1,12 @@
+# Upper bound of what Voice Memo may *ask* for. Each use is still prompted.
+[[request]]
+capability = "microphone"
+purpose = "Record voice memos"
+
+[[request]]
+capability = { files = "user_picked" }
+purpose = "Import an audio file you choose"
+
+[[request]]
+capability = "notifications"
+purpose = "Tell you when a long recording finishes"
