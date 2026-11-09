@@ -46,7 +46,7 @@ sudo nixos-rebuild switch --flake /etc/iliada#iliada
 /etc/iliada/
   flake.nix                   which Iliada version to build from (don't usually edit)
   configuration.nix           this computer: users, host name, desktop, isolation…
-  apps.toml                   the apps you want, kept up to date automatically
+  apps.toml                   your installed apps (maintained automatically)
   hardware-configuration.nix  disks and drivers (generated)
   source/                     the Iliada release this machine was installed from
 ```
@@ -60,19 +60,22 @@ sudo nixos-rebuild switch --flake /etc/iliada#iliada
 Every change is atomic. If a change breaks something, reboot and pick the
 previous entry in the boot menu.
 
-### Apps
+`/etc/iliada` is a git repository: every change has history, and it is what
+the (upcoming) backup and sync feature pushes to your private GitHub repo.
 
-Add an app to `apps.toml`:
+### Apps (no rebuild, no terminal)
 
-```toml
-[[watch]]
-debian = "gnome-text-editor"
-```
+* **Install:** drag an `.app` into Applications, or drop a downloaded
+  `.deb` there. It is translated into a sandboxed `.app` within seconds and
+  appears in the app launcher.
+* **Uninstall:** drag the app to the Trash.
+* Both are recorded in `/etc/iliada/apps.toml` automatically. On a machine
+  restored from that configuration, the listed apps install themselves.
+* You can also add an entry by hand (`debian = "gnome-text-editor"`). It is
+  picked up within seconds. Apps never need `nixos-rebuild`.
 
-Apply the configuration. The Package Translator builds
-`/Applications/Text Editor.app` and it appears in the app launcher. Every
-app runs in its own sandbox, with no network and no access to your files
-unless you grant it.
+Every app runs in its own sandbox, with no network and no access to your
+files unless you grant it.
 
 ### Useful options
 
@@ -81,7 +84,7 @@ unless you grant it.
 | `iliada.desktop.enable` | `true` in the template | COSMIC desktop |
 | `iliada.desktop.autoLoginUser` | `null` | log a user in automatically |
 | `iliada.workstation.enable` | follows `desktop.enable` | networking, audio, bluetooth, firmware |
-| `iliada.applications.ingest.watchlist` | `./apps.toml` | apps to keep installed |
+| `iliada.applications.list` | `/etc/iliada/apps.toml` | the app list (mutable, maintained automatically) |
 | `iliada.isolation.defaultTier` | `"micro-vm"` | `namespace` or `micro-vm` |
 | `iliada.isolation.defaultNetwork` | `"none"` | network for app sandboxes: `none` / `nat` |
 | `iliada.rustUserland.enable` | `true` | uutils, sudo-rs, ntpd-rs, fish |

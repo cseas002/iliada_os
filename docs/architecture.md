@@ -202,8 +202,14 @@ justification, runtime base), validated by the same Rust types.
 | Package Translator (.deb → .app), index, resolvers, provenance | done; tested offline and against Debian trixie (jq, gnome-calculator) |
 | Landlock confinement of extraction | done; enforced on Linux |
 | IPC protocol, broker, guest client | done; end-to-end tests over real sockets |
-| Sandbox controller | config generation tested; launching needs Linux/KVM (Phase 2 bring-up) |
-| NixOS modules, dev VM, appliance image | evaluate cleanly; image boot testing is Phase 2 |
+| Tier-1 sandbox (`iliada-run`) | done; GUI apps (GNOME Calculator) run sandboxed from the launcher |
+| Tier-2 micro-VMs | config generation tested; booting needs the guest image (Phase 2) |
+| Desktop (COSMIC), app registry (`iliada-appd`) | done; apps appear in search and launch sandboxed |
+| Apps without rebuild (drag, drop a .deb, Trash, auto-recorded list) | implemented and unit-tested; VM validation pending |
+| Installer ISO + `iliada-install`, config template | done; end-to-end install test passes (UEFI VM) |
+| Rust userland (uutils, sudo-rs, ntpd-rs, fish) | done |
+| Immutable appliance image | evaluates; build and boot not yet tested |
+| No-terminal settings, Setup Assistant, GitHub sync | designed (ADR 0005); not implemented |
 
 ## 8b. The user layer: no terminal, configuration that follows you
 
