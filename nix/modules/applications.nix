@@ -67,7 +67,9 @@ in
     environment.systemPackages = [ config.iliada.package ];
 
     # iliada-appd exports desktop entries for GUI bundles; desktops search here.
-    environment.sessionVariables.XDG_DATA_DIRS = [ "/var/lib/iliada-desktop" ];
+    # Appended *last* so system entries always take precedence: an app bundle
+    # must never be able to shadow a system app's desktop entry.
+    environment.sessionVariables.XDG_DATA_DIRS = lib.mkAfter [ "/var/lib/iliada-desktop" ];
     users.users.iliada-appd = {
       isSystemUser = true;
       group = "iliada-apps";
