@@ -48,14 +48,22 @@ pub struct SandboxSpec {
     /// Private, persistent, writable storage for the app (its "home").
     pub data_dir: PathBuf,
     pub network: NetworkPolicy,
+    /// Host Wayland socket to give the app a window connection (GUI apps).
+    pub display: Option<PathBuf>,
     pub vcpus: u8,
     pub memory_mib: u32,
     pub args: Vec<String>,
 }
 
 impl SandboxSpec {
-    /// Build a spec from a validated bundle using host defaults.
-    pub fn from_bundle(b: &Bundle, host: &HostIsolationConfig, network: NetworkPolicy) -> Result<Self> {
+    /// Build a spec from a validated bundle using host defaults. `data_dir`
+    /// is the app's private, persistent home (per user, like macOS containers).
+    pub fn from_bundle(
+        b: &Bundle,
+        host: &HostIsolationConfig,
+        network: NetworkPolicy,
+        data_dir: PathBuf,
+    ) -> Result<Self> {
         let entry = b
             .info
             .entry
@@ -65,8 +73,9 @@ impl SandboxSpec {
             app_id: b.info.id.clone(),
             bundle: b.layout.root().to_owned(),
             entry,
-            data_dir: host.data_root.join(b.info.id.as_str()),
+            data_dir,
             network,
+            display: None,
             vcpus: host.default_vcpus,
             memory_mib: host.default_memory_mib,
             args: vec![],

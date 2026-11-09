@@ -126,6 +126,8 @@ pub struct Ingestor {
 #[derive(Debug, Default)]
 struct DepState {
     fetched: BTreeMap<String, PackageRecord>,
+    /// Arch-independent data packages (`*-common`, `*-data`) whose files are merged into Root.
+    data: BTreeSet<String>,
     available: BTreeMap<String, LibCandidate>,
     skipped: BTreeSet<String>,
     missing: BTreeSet<String>,
@@ -270,6 +272,16 @@ impl Ingestor {
             fs::copy(src, &dst).with_context(|| format!("copying {}", src.display()))?;
             fs::set_permissions(&dst, fs::Permissions::from_mode(0o755))?;
         }
+        // Shared data (schemas, locales, icons, GTK resources) of every package
+        // that contributed libraries, plus data packages, joins the app's tree.
+        let used: BTreeSet<String> = closure.records.iter().filter_map(|r| r.package.clone()).collect();
+        let mut share_from: Vec<&String> = deps.data.iter().collect();
+        share_from.extend(used.iter());
+        for name in share_from {
+            merge_share(&staging.path().join("deps").join(name).join("usr/share"), &root.join("usr/share"))?;
+        }
+        let schemas = compile_schemas(staging.path(), &root).await?;
+
         let exe_name = exe_rel.file_name().context("executable has no file name")?.to_string_lossy().into_owned();
         write_launcher(&layout, &exe_name, &exe_rel, triplet)?;
         let exec_objects: Vec<PathBuf> =
@@ -277,7 +289,8 @@ impl Ingestor {
         let runpaths_patched = patch_runpaths(&layout, &exec_objects, triplet).await?;
         let icon = copy_resources(&layout, &root, desktop.as_ref())?;
 
-        let used_packages: BTreeSet<&str> = closure.records.iter().filter_map(|r| r.package.as_deref()).collect();
+        let mut used_packages: BTreeSet<&str> = used.iter().map(String::as_str).collect();
+        used_packages.extend(deps.data.iter().map(String::as_str));
         let mut packages = vec![PackageRecord {
             name: package.clone(),
             version: version.clone(),
@@ -321,6 +334,9 @@ impl Ingestor {
         }
         fs::rename(layout.root(), dest.root())?;
 
+        if schemas {
+            tracing::info!("compiled GSettings schemas");
+        }
         Ok(IngestReport {
             bundle: dest.root().to_owned(),
             app_id,
@@ -414,7 +430,8 @@ impl Ingestor {
                 continue;
             }
             let forced = is_root && force_roots;
-            if !forced && !self.cfg.full_closure && !entry.name.starts_with("lib") {
+            let data = is_data_package(&entry.name);
+            if !forced && !self.cfg.full_closure && !entry.name.starts_with("lib") && !data {
                 st.skipped.insert(entry.name.clone());
                 continue;
             }
@@ -450,6 +467,9 @@ impl Ingestor {
                     });
                 }
             }
+            if data {
+                st.data.insert(entry.name.clone());
+            }
             st.fetched.insert(
                 entry.name.clone(),
                 PackageRecord {
@@ -467,6 +487,72 @@ impl Ingestor {
 }
 
 const BIN_DIRS: [&str; 5] = ["usr/bin", "bin", "usr/games", "usr/sbin", "sbin"];
+
+/// Debian's convention for architecture-independent support data.
+fn is_data_package(name: &str) -> bool {
+    name.ends_with("-common") || name.ends_with("-data") || name == "gsettings-desktop-schemas"
+}
+
+/// Directories under usr/share that are documentation, not runtime data.
+const SKIP_SHARE: [&str; 5] = ["doc", "man", "info", "lintian", "bug"];
+
+/// Copy `src` into `dst` without overwriting what the app itself ships.
+/// Symlinks are recreated verbatim (they were validated at extraction time).
+fn merge_share(src: &Path, dst: &Path) -> Result<()> {
+    let Ok(rd) = fs::read_dir(src) else { return Ok(()) };
+    for e in rd.flatten() {
+        let name = e.file_name();
+        if dst.ends_with("usr/share") && SKIP_SHARE.iter().any(|s| name == *s) {
+            continue;
+        }
+        copy_no_overwrite(&e.path(), &dst.join(&name))?;
+    }
+    Ok(())
+}
+
+fn copy_no_overwrite(src: &Path, dst: &Path) -> Result<()> {
+    let meta = fs::symlink_metadata(src)?;
+    if meta.file_type().is_symlink() {
+        if fs::symlink_metadata(dst).is_err() {
+            std::os::unix::fs::symlink(fs::read_link(src)?, dst)?;
+        }
+    } else if meta.is_dir() {
+        match fs::symlink_metadata(dst) {
+            Ok(m) if !m.is_dir() => return Ok(()),
+            Ok(_) => {}
+            Err(_) => fs::create_dir_all(dst)?,
+        }
+        for e in fs::read_dir(src)?.flatten() {
+            copy_no_overwrite(&e.path(), &dst.join(e.file_name()))?;
+        }
+    } else if meta.is_file() && fs::symlink_metadata(dst).is_err() {
+        fs::copy(src, dst)?;
+    }
+    Ok(())
+}
+
+/// Debian compiles GSettings schemas in a postinst trigger, which we never
+/// run. Compile them here (confined like extraction) so GLib apps start.
+async fn compile_schemas(staging: &Path, root: &Path) -> Result<bool> {
+    let dir = root.join("usr/share/glib-2.0/schemas");
+    let has_xml = fs::read_dir(&dir)
+        .map(|rd| rd.flatten().any(|e| e.path().extension().is_some_and(|x| x == "xml")))
+        .unwrap_or(false);
+    if !has_xml {
+        return Ok(false);
+    }
+    let Ok(tool) = crate::launcher::which("glib-compile-schemas") else {
+        tracing::warn!("glib-compile-schemas not found; GLib apps in this bundle may refuse to start");
+        return Ok(false);
+    };
+    let (ok, _) =
+        run_confined(staging.to_owned(), move || Ok(std::process::Command::new(tool).arg(&dir).status()?.success()))
+            .await?;
+    if !ok {
+        tracing::warn!("glib-compile-schemas failed");
+    }
+    Ok(ok)
+}
 
 /// Resolve `rel` inside `root` to a regular file, following symlinks
 /// *lexically* (absolute targets re-rooted), never via the host filesystem.

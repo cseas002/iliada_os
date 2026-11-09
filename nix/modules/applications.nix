@@ -66,6 +66,44 @@ in
     };
     environment.systemPackages = [ config.iliada.package ];
 
+    # iliada-appd exports desktop entries for GUI bundles; desktops search here.
+    environment.sessionVariables.XDG_DATA_DIRS = [ "/var/lib/iliada-desktop" ];
+    users.users.iliada-appd = {
+      isSystemUser = true;
+      group = "iliada-apps";
+    };
+    systemd.services.iliada-appd = {
+      description = "Iliada application registry";
+      wantedBy = [ "multi-user.target" ];
+      serviceConfig = {
+        ExecStart = lib.escapeShellArgs [
+          "${config.iliada.package}/bin/iliada-appd"
+          "--applications" cfg.root
+          "--export" "/var/lib/iliada-desktop"
+          "--iliada-run" "/run/current-system/sw/bin/iliada-run"
+        ];
+        User = "iliada-appd";
+        Group = "iliada-apps";
+        StateDirectory = "iliada-desktop";
+        StateDirectoryMode = "0755";
+        UMask = "0022";
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        PrivateTmp = true;
+        PrivateDevices = true;
+        PrivateNetwork = true;
+        NoNewPrivileges = true;
+        CapabilityBoundingSet = "";
+        RestrictAddressFamilies = [ "AF_UNIX" ];
+        RestrictNamespaces = true;
+        LockPersonality = true;
+        MemoryDenyWriteExecute = true;
+        SystemCallArchitectures = "native";
+        SystemCallFilter = [ "@system-service" "~@privileged" ];
+        Restart = "on-failure";
+      };
+    };
+
     users.users.iliada-ingest = lib.mkIf cfg.ingest.enable {
       isSystemUser = true;
       group = "iliada-apps";
@@ -76,6 +114,8 @@ in
       wantedBy = [ "multi-user.target" ];
       wants = [ "network-online.target" ];
       after = [ "network-online.target" ];
+      # Schema compilation (Debian does it in a trigger) and RUNPATH rewriting.
+      path = [ pkgs.glib.dev pkgs.patchelf ];
       serviceConfig = {
         ExecStart = lib.escapeShellArgs ([
           "${config.iliada.package}/bin/iliada-ingest" "serve"

@@ -783,6 +783,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "iliada-appd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "iliada-bundle",
+ "iliada-types",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "iliada-broker"
 version = "0.1.0"
 dependencies = [

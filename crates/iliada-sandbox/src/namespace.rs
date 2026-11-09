@@ -1,16 +1,27 @@
 //! Tier 1: bubblewrap namespace sandbox.
 //!
-//! The app gets a fresh mount, PID, IPC, UTS, cgroup, user (and, unless the
-//! policy grants NAT, network) namespace. Its view of the filesystem is
-//! assembled from read-only binds: bundle `Root` at `/`, the runtime base at
-//! `/lib` + `/usr/lib/iliada-runtime`, bundled libraries at `/app/lib`; the
-//! only writable paths are its data dir and a tmpfs. The broker socket is
-//! bound at `/run/iliada/broker.sock`.
+//! bubblewrap starts from an empty tmpfs root; the app's world is assembled
+//! from binds:
 //!
-//! Phase 2 adds a seccomp filter (`--seccomp <fd>`) and Landlock via the
-//! guest agent.
+//! | Path in sandbox | Source | Mode |
+//! |---|---|---|
+//! | `/usr`, `/opt`, `/etc/*`, … | bundle `Contents/Root/*` | ro |
+//! | `/lib64`, `/lib` | runtime base `lib/` (ELF loader, glibc) | ro |
+//! | `/run/iliada/runtime` | runtime base (fonts, Mesa, Wayland client libs, …) | ro |
+//! | `/app/lib` | bundle `Contents/Libraries` | ro |
+//! | `/nix/store` | host store (runtime base symlinks resolve here; immutable) | ro |
+//! | `/home/app` | the app's private data directory | **rw** |
+//! | `/tmp` | fresh tmpfs | rw |
+//! | `/run/user/app/wayland-0` | host Wayland socket (GUI apps only) | socket |
+//! | `/run/iliada/broker.sock` | the app's broker socket | socket |
+//! | `/etc/fonts`, `/run/host/share/icons`, `/dev/dri`, `/run/opengl-driver` | host fonts, icons, GPU | ro |
+//!
+//! All namespaces are unshared (no network unless the policy grants NAT),
+//! all capabilities are dropped, and the environment is cleared. The app sees
+//! no host home directory, no other apps, and no D-Bus session bus. Phase 2
+//! adds a seccomp filter and a filtered D-Bus proxy for portals.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use anyhow::{Context, Result};
@@ -23,75 +34,132 @@ use tokio::process::{Child, Command};
 use crate::{HostIsolationConfig, IsolationBackend, NetworkPolicy, SandboxHandle, SandboxSpec};
 
 pub const GUEST_BROKER_SOCKET: &str = "/run/iliada/broker.sock";
+pub const GUEST_RUNTIME_DIR: &str = "/run/iliada/runtime";
+const GUEST_XDG_RUNTIME_DIR: &str = "/run/user/app";
+
+/// Host paths that make GUI apps usable; each is bound only if it exists.
+#[derive(Debug, Clone)]
+pub struct HostDesktop {
+    pub fonts: PathBuf,
+    pub icons: PathBuf,
+    pub opengl_driver: PathBuf,
+}
+
+impl Default for HostDesktop {
+    fn default() -> Self {
+        Self {
+            fonts: "/etc/fonts".into(),
+            icons: "/run/current-system/sw/share/icons".into(),
+            opengl_driver: "/run/opengl-driver".into(),
+        }
+    }
+}
+
+/// GNU multiarch triplet of the machine we run on.
+pub fn host_triplet() -> &'static str {
+    match std::env::consts::ARCH {
+        "aarch64" => "aarch64-linux-gnu",
+        "x86" => "i386-linux-gnu",
+        "riscv64" => "riscv64-linux-gnu",
+        _ => "x86_64-linux-gnu",
+    }
+}
 
 /// Build the full bubblewrap argument vector (everything after `bwrap`).
-pub fn bwrap_args(spec: &SandboxSpec, host: &HostIsolationConfig) -> Vec<String> {
+pub fn bwrap_args(spec: &SandboxSpec, host: &HostIsolationConfig, desktop: &HostDesktop) -> Vec<String> {
     let contents = spec.bundle.join("Contents");
+    let root = contents.join("Root");
     let p = |x: &Path| x.display().to_string();
-    let mut a: Vec<String> = vec!["--unshare-all".into()];
+    let mut a: Vec<String> = Vec::new();
+    let mut push = |items: &[&str]| a.extend(items.iter().map(|s| (*s).to_owned()));
+
+    push(&["--unshare-all"]);
     if spec.network == NetworkPolicy::Nat {
-        a.push("--share-net".into());
+        push(&["--share-net"]);
     }
-    a.extend(
-        [
-            "--die-with-parent",
-            "--new-session",
-            "--cap-drop",
-            "ALL",
-            "--clearenv",
-            "--ro-bind",
-            &p(&contents.join("Root")),
-            "/",
-            "--ro-bind",
-            &p(&host.runtime_dir.join("lib")),
-            "/lib",
-            "--ro-bind",
-            &p(&host.runtime_dir),
-            "/usr/lib/iliada-runtime",
-            "--ro-bind",
-            &p(&contents.join("Libraries")),
-            "/app/lib",
-            "--bind",
-            &p(&spec.data_dir),
-            "/home/app",
-            "--proc",
-            "/proc",
-            "--dev",
-            "/dev",
-            "--tmpfs",
-            "/tmp",
-            "--ro-bind",
-            &p(&transport::broker_socket(&host.socket_dir, &spec.app_id)),
-            GUEST_BROKER_SOCKET,
-            "--setenv",
-            "HOME",
-            "/home/app",
-            "--setenv",
-            "LD_LIBRARY_PATH",
-            "/app/lib:/usr/lib/iliada-runtime/lib",
-            "--setenv",
-            "ILIADA_BROKER",
-            GUEST_BROKER_SOCKET,
-            "--setenv",
-            "ILIADA_APP_ID",
-            spec.app_id.as_str(),
-            "--",
-        ]
-        .map(str::to_owned),
-    );
+    push(&["--die-with-parent", "--new-session", "--cap-drop", "ALL", "--clearenv"]);
+
+    // The upstream FHS tree, one top-level entry at a time so the runtime
+    // base can supply /lib and /lib64 (the ELF loader) alongside it.
+    let mut has_lib = false;
+    for name in top_level_entries(&root) {
+        match name.as_str() {
+            "lib" | "lib64" => has_lib = true,
+            "etc" | "run" | "proc" | "dev" | "tmp" | "home" | "app" | "nix" => continue,
+            _ => {}
+        }
+        push(&["--ro-bind", &p(&root.join(&name)), &format!("/{name}")]);
+    }
+    // /etc is composed: upstream entries plus host fonts.
+    push(&["--dir", "/etc"]);
+    for name in top_level_entries(&root.join("etc")) {
+        if name != "fonts" {
+            push(&["--ro-bind", &p(&root.join("etc").join(&name)), &format!("/etc/{name}")]);
+        }
+    }
+    push(&["--ro-bind-try", &p(&desktop.fonts), "/etc/fonts"]);
+
+    let runtime = &host.runtime_dir;
+    push(&["--ro-bind", "/nix/store", "/nix/store"]);
+    push(&["--ro-bind", &p(runtime), GUEST_RUNTIME_DIR]);
+    if !has_lib {
+        push(&["--ro-bind", &p(&runtime.join("lib")), "/lib64"]);
+        push(&["--ro-bind", &p(&runtime.join("lib")), "/lib"]);
+    }
+    push(&["--ro-bind", &p(&contents.join("Libraries")), "/app/lib"]);
+    push(&["--bind", &p(&spec.data_dir), "/home/app"]);
+    push(&["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"]);
+    push(&["--perms", "0700", "--dir", GUEST_XDG_RUNTIME_DIR]);
+    push(&["--ro-bind-try", &p(&transport::broker_socket(&host.socket_dir, &spec.app_id)), GUEST_BROKER_SOCKET]);
+
+    if let Some(wayland) = &spec.display {
+        push(&["--ro-bind", &p(wayland), &format!("{GUEST_XDG_RUNTIME_DIR}/wayland-0")]);
+        push(&["--setenv", "WAYLAND_DISPLAY", "wayland-0"]);
+        push(&["--dev-bind-try", "/dev/dri", "/dev/dri"]);
+        push(&["--ro-bind-try", &p(&desktop.opengl_driver), "/run/opengl-driver"]);
+        push(&["--ro-bind-try", &p(&desktop.icons), "/run/host/share/icons"]);
+        push(&["--setenv", "__EGL_VENDOR_LIBRARY_DIRS", "/run/opengl-driver/share/glvnd/egl_vendor.d"]);
+    }
+
+    let triplet = host_triplet();
+    let ld_path = format!("/app/lib:/usr/lib/{triplet}:/usr/lib:{GUEST_RUNTIME_DIR}/lib");
+    let env: [(&str, &str); 9] = [
+        ("HOME", "/home/app"),
+        ("XDG_RUNTIME_DIR", GUEST_XDG_RUNTIME_DIR),
+        ("XDG_DATA_DIRS", "/usr/share:/run/host/share"),
+        ("GSETTINGS_SCHEMA_DIR", "/usr/share/glib-2.0/schemas"),
+        ("LD_LIBRARY_PATH", &ld_path),
+        ("PATH", "/usr/bin:/bin"),
+        ("LANG", "C.UTF-8"),
+        ("ILIADA_BROKER", GUEST_BROKER_SOCKET),
+        ("ILIADA_APP_ID", spec.app_id.as_str()),
+    ];
+    for (k, v) in env {
+        push(&["--setenv", k, v]);
+    }
+    push(&["--"]);
     a.push(format!("/{}", spec.entry));
     a.extend(spec.args.iter().cloned());
     a
 }
 
+fn top_level_entries(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    v.sort();
+    v
+}
+
 #[derive(Debug)]
 pub struct NamespaceBackend {
     host: HostIsolationConfig,
+    desktop: HostDesktop,
 }
 
 impl NamespaceBackend {
     pub fn new(host: HostIsolationConfig) -> Self {
-        Self { host }
+        Self { host, desktop: HostDesktop::default() }
     }
 }
 
@@ -110,8 +178,8 @@ impl IsolationBackend for NamespaceBackend {
         anyhow::ensure!(cfg!(target_os = "linux"), "namespace sandboxes need Linux");
         tokio::fs::create_dir_all(&spec.data_dir).await?;
         let child = Command::new(&self.host.bwrap)
-            .args(bwrap_args(spec, &self.host))
-            .stdin(Stdio::null())
+            .args(bwrap_args(spec, &self.host, &self.desktop))
+            .stdin(Stdio::inherit())
             .kill_on_drop(true)
             .spawn()
             .context("spawning bwrap")?;
@@ -136,42 +204,65 @@ impl SandboxHandle for NsHandle {
 mod tests {
     use super::*;
 
-    fn spec(network: NetworkPolicy) -> SandboxSpec {
-        SandboxSpec {
+    fn fixture(network: NetworkPolicy, display: bool) -> (tempfile::TempDir, SandboxSpec) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("jq.app/Contents/Root");
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        std::fs::create_dir_all(root.join("etc/jq")).unwrap();
+        std::fs::create_dir_all(root.join("etc/fonts")).unwrap();
+        let spec = SandboxSpec {
             app_id: AppId::new("org.debian.jq").unwrap(),
-            bundle: "/Applications/jq.app".into(),
+            bundle: dir.path().join("jq.app"),
             entry: "usr/bin/jq".into(),
-            data_dir: "/var/lib/iliada/apps/org.debian.jq".into(),
+            data_dir: "/home/alice/.local/share/iliada/apps/org.debian.jq".into(),
             network,
+            display: display.then(|| PathBuf::from("/run/user/1000/wayland-1")),
             vcpus: 1,
             memory_mib: 512,
             args: vec!["--version".into()],
-        }
+        };
+        (dir, spec)
     }
 
-    fn pair(args: &[String], flag: &str, src: &str) -> Option<String> {
-        args.windows(3).find(|w| w[0] == flag && w[1] == src).map(|w| w[2].clone())
+    fn after<'a>(args: &'a [String], flag: &str, src: &str) -> Option<&'a str> {
+        args.windows(3).find(|w| w[0] == flag && w[1] == src).map(|w| w[2].as_str())
     }
 
     #[test]
     fn isolates_by_default() {
-        let a = bwrap_args(&spec(NetworkPolicy::None), &HostIsolationConfig::example());
+        let (dir, spec) = fixture(NetworkPolicy::None, false);
+        let host = HostIsolationConfig::example();
+        let a = bwrap_args(&spec, &host, &HostDesktop::default());
+        let root = dir.path().join("jq.app/Contents/Root");
         assert_eq!(a[0], "--unshare-all");
         assert!(!a.contains(&"--share-net".to_string()));
-        assert_eq!(pair(&a, "--ro-bind", "/Applications/jq.app/Contents/Root").as_deref(), Some("/"));
-        assert_eq!(pair(&a, "--bind", "/var/lib/iliada/apps/org.debian.jq").as_deref(), Some("/home/app"));
+        assert_eq!(after(&a, "--ro-bind", &root.join("usr").display().to_string()), Some("/usr"));
+        assert_eq!(after(&a, "--ro-bind", &root.join("etc/jq").display().to_string()), Some("/etc/jq"));
+        assert!(after(&a, "--ro-bind", &root.join("etc/fonts").display().to_string()).is_none(), "host fonts win");
+        assert_eq!(after(&a, "--ro-bind", &host.runtime_dir.join("lib").display().to_string()), Some("/lib64"));
+        assert_eq!(after(&a, "--bind", "/home/alice/.local/share/iliada/apps/org.debian.jq"), Some("/home/app"));
         assert_eq!(
-            pair(&a, "--ro-bind", "/run/iliada/sandbox/org.debian.jq.vsock_7000").as_deref(),
+            after(&a, "--ro-bind-try", "/run/iliada/sandbox/org.debian.jq.vsock_7000"),
             Some(GUEST_BROKER_SOCKET)
         );
         assert_eq!(&a[a.len() - 2..], ["/usr/bin/jq", "--version"]);
-        // The only writable bind is the data dir.
+        // The only writable bind is the data dir, and no display without a socket.
         assert_eq!(a.iter().filter(|x| *x == "--bind").count(), 1);
+        assert!(!a.iter().any(|x| x.contains("wayland")));
+    }
+
+    #[test]
+    fn gui_apps_get_only_the_wayland_socket() {
+        let (_d, spec) = fixture(NetworkPolicy::None, true);
+        let a = bwrap_args(&spec, &HostIsolationConfig::example(), &HostDesktop::default());
+        assert_eq!(after(&a, "--ro-bind", "/run/user/1000/wayland-1"), Some("/run/user/app/wayland-0"));
+        assert!(!a.iter().any(|x| x.contains("/run/user/1000/bus")), "no host D-Bus session bus");
     }
 
     #[test]
     fn nat_shares_network() {
-        let a = bwrap_args(&spec(NetworkPolicy::Nat), &HostIsolationConfig::example());
+        let (_d, spec) = fixture(NetworkPolicy::Nat, false);
+        let a = bwrap_args(&spec, &HostIsolationConfig::example(), &HostDesktop::default());
         assert!(a.contains(&"--share-net".to_string()));
     }
 }

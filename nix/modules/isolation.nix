@@ -32,11 +32,27 @@ in
     };
     runtime = lib.mkOption {
       type = lib.types.package;
+      # Must provide every soname in crates/iliada-ingest/runtime/iliada-base-1.toml.
       default = pkgs.symlinkJoin {
         name = "iliada-base-1";
-        paths = [ pkgs.glibc pkgs.stdenv.cc.cc.lib ];
+        paths = map lib.getLib (with pkgs; [
+          glibc
+          stdenv.cc.cc # libgcc_s, libstdc++
+          libxcrypt
+          libglvnd # libGL, libEGL, libGLX, libGLESv2 (dispatch to the host's Mesa)
+          libgbm
+          libdrm
+          vulkan-loader
+          wayland
+          libxkbcommon
+          alsa-lib
+          pipewire
+          libpulseaudio
+          fontconfig
+          freetype
+        ]);
       };
-      defaultText = lib.literalExpression "glibc + libgcc/libstdc++";
+      defaultText = lib.literalExpression "glibc, GCC runtime, libglvnd, Wayland, audio and font libraries";
       description = ''
         The runtime base (ABI "iliada-base-1") mapped read-only into every sandbox.
         Must provide the sonames listed in crates/iliada-ingest/runtime/iliada-base-1.toml.

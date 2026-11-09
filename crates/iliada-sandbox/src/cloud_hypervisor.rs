@@ -265,6 +265,7 @@ mod tests {
             entry: "usr/bin/jq".into(),
             data_dir: "/var/lib/iliada/apps/org.debian.jq".into(),
             network,
+            display: None,
             vcpus: 1,
             memory_mib: 512,
             args: vec![],

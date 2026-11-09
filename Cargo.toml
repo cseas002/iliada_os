@@ -17,6 +17,7 @@ iliada-ipc = { path = "crates/iliada-ipc" }
 iliada-broker = { path = "crates/iliada-broker" }
 iliada-guest = { path = "crates/iliada-guest" }
 iliada-sandbox = { path = "crates/iliada-sandbox" }
+iliada-appd = { path = "crates/iliada-appd" }
 
 anyhow = "1"
 thiserror = "2"
