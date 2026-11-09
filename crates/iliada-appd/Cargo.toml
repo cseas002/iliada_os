@@ -13,13 +13,15 @@ path = "src/main.rs"
 
 [dependencies]
 iliada-bundle.workspace = true
+iliada-types.workspace = true
+serde_json.workspace = true
+toml_edit = "0.22"
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 clap.workspace = true
 
 [dev-dependencies]
-iliada-types.workspace = true
 tempfile.workspace = true
 
 [lints]

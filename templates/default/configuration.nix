@@ -29,12 +29,11 @@
     desktop.enable = true;
     # desktop.autoLoginUser = "iliada";
 
-    # Apps: listed in apps.toml, translated into /Applications automatically
-    # and kept up to date. Each runs in its own sandbox.
-    applications.ingest = {
-      enable = true;
-      watchlist = ./apps.toml;
-    };
+    # Apps live in /Applications, each in its own sandbox. Install one by
+    # dragging it (or a downloaded package) into Applications; uninstall by
+    # dragging it to the Trash. No rebuild is ever needed for apps. The list
+    # of installed apps is kept automatically in /etc/iliada/apps.toml.
+    applications.ingest.enable = true;
 
     # Untrusted apps get a micro-VM (falls back to a namespace sandbox until
     # micro-VM support lands). Network access for apps is off by default.

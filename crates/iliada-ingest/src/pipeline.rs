@@ -332,6 +332,9 @@ impl Ingestor {
             }
             fs::remove_dir_all(dest.root())?;
         }
+        // Apps belong to their users: members of the app group may move a
+        // bundle to the Trash and delete it, as on macOS.
+        make_group_writable(layout.root())?;
         fs::rename(layout.root(), dest.root())?;
 
         if schemas {
@@ -487,6 +490,25 @@ impl Ingestor {
 }
 
 const BIN_DIRS: [&str; 5] = ["usr/bin", "bin", "usr/games", "usr/sbin", "sbin"];
+
+/// Add group write (and setgid on directories) throughout a bundle.
+/// Symlinks are skipped; their own mode is meaningless.
+fn make_group_writable(path: &Path) -> Result<()> {
+    let meta = fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() {
+        return Ok(());
+    }
+    let mode = meta.permissions().mode();
+    if meta.is_dir() {
+        fs::set_permissions(path, fs::Permissions::from_mode((mode & 0o777) | 0o2070))?;
+        for e in fs::read_dir(path)?.flatten() {
+            make_group_writable(&e.path())?;
+        }
+    } else {
+        fs::set_permissions(path, fs::Permissions::from_mode((mode & 0o777) | 0o060))?;
+    }
+    Ok(())
+}
 
 /// Debian's convention for architecture-independent support data.
 fn is_data_package(name: &str) -> bool {

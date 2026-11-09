@@ -30,10 +30,15 @@ enum Cmd {
         #[arg(long)]
         exec: Option<String>,
     },
-    /// Watch the sources in a watchlist and re-ingest when they change.
+    /// Keep /Applications in line with an app list, translate dropped
+    /// packages, and update apps when upstream changes.
     Serve {
+        /// The app list (mutable; re-read continuously).
         #[arg(long)]
         watchlist: PathBuf,
+        /// Translate `.deb` files dropped into this directory (usually /Applications).
+        #[arg(long)]
+        drop_dir: Option<PathBuf>,
         #[command(flatten)]
         opts: Opts,
     },
@@ -165,10 +170,10 @@ async fn main() -> Result<()> {
                 std::process::exit(2);
             }
         }
-        Cmd::Serve { watchlist, opts } => {
-            let list = serve::Watchlist::load(&watchlist)?;
+        Cmd::Serve { watchlist, drop_dir, opts } => {
             let ing = Arc::new(Ingestor::new(opts.config(None, true), opts.resolvers()?)?);
-            serve::serve(ing, list).await?;
+            let cfg = serve::ServeConfig { list: watchlist, drop_dir, tick: std::time::Duration::from_secs(2) };
+            serve::serve(ing, cfg).await?;
         }
         Cmd::Inspect { bundle } => {
             let b = Bundle::open(&bundle)?;

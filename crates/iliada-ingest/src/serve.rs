@@ -1,11 +1,18 @@
-//! Watch mode: periodically re-check upstream sources and re-ingest on change.
+//! Watch mode: keep `/Applications` in line with the app list, translate
+//! packages dropped into Applications, and update apps when upstream changes.
+//!
+//! The app list (normally `/etc/iliada/apps.toml`) is *mutable state*: it is
+//! re-read every tick, so an entry added by a restore or by `iliada-appd`
+//! takes effect within seconds, without rebuilding the system.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
+use iliada_bundle::Bundle;
+use iliada_types::AppId;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, mpsc};
 
@@ -13,14 +20,18 @@ use crate::elf::host_deb_arch;
 use crate::pipeline::{Ingestor, Source};
 
 /// ```toml
-/// interval_secs = 3600
-/// concurrency = 2
+/// interval_secs = 21600          # how often to look for upstream updates
 ///
 /// [[watch]]
-/// debian = "jq"
+/// debian = "gnome-calculator"    # a Debian package
 ///
 /// [[watch]]
-/// url = "https://example.org/releases/tool_latest_arm64.deb"
+/// url = "https://example.org/tool_latest_amd64.deb"
+///
+/// [[watch]]                      # installed by hand (drag-and-drop): recorded,
+/// id = "org.example.tool"        # not managed
+/// name = "Tool"
+/// manual = true
 /// ```
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,15 +44,22 @@ pub struct Watchlist {
     pub watches: Vec<Watch>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Watch {
     pub url: Option<String>,
     pub debian: Option<String>,
+    /// App id of the installed bundle (written by iliada-appd).
+    pub id: Option<String>,
+    /// Display name (informational).
+    pub name: Option<String>,
+    /// Installed by hand; no source to install or update from.
+    #[serde(default)]
+    pub manual: bool,
 }
 
 fn default_interval() -> u64 {
-    3600
+    21600
 }
 fn default_concurrency() -> usize {
     2
@@ -49,11 +67,11 @@ fn default_concurrency() -> usize {
 
 impl Watchlist {
     pub fn load(path: &Path) -> Result<Self> {
-        let list: Self =
-            toml::from_str(&std::fs::read_to_string(path)?).with_context(|| format!("parsing {}", path.display()))?;
+        let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let list: Self = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         for w in &list.watches {
-            if w.url.is_some() == w.debian.is_some() {
-                bail!("each [[watch]] needs exactly one of `url` or `debian`");
+            if w.url.is_some() && w.debian.is_some() {
+                anyhow::bail!("a [[watch]] entry may have `url` or `debian`, not both");
             }
         }
         Ok(list)
@@ -61,15 +79,28 @@ impl Watchlist {
 }
 
 impl Watch {
-    fn source(&self) -> Source {
+    /// Entries we can install and update from.
+    fn source(&self) -> Option<Source> {
         match (&self.url, &self.debian) {
-            (Some(u), _) => Source::Url(u.clone()),
-            (_, Some(d)) => Source::Debian(d.clone()),
-            _ => unreachable!("validated in Watchlist::load"),
+            _ if self.manual => None,
+            (Some(u), _) => Some(Source::Url(u.clone())),
+            (_, Some(d)) => Some(Source::Debian(d.clone())),
+            _ => None,
         }
     }
     fn key(&self) -> String {
-        self.url.clone().unwrap_or_else(|| format!("debian:{}", self.debian.as_deref().unwrap_or_default()))
+        match (&self.url, &self.debian) {
+            (Some(u), _) => u.clone(),
+            (_, Some(d)) => format!("debian:{d}"),
+            _ => format!("id:{}", self.id.as_deref().unwrap_or_default()),
+        }
+    }
+    /// The app id this entry installs, when it can be known in advance.
+    pub fn app_id(&self, vendor_prefix: &str) -> Option<AppId> {
+        if let Some(id) = &self.id {
+            return AppId::new(id.clone()).ok();
+        }
+        self.debian.as_deref().and_then(|d| AppId::from_upstream(vendor_prefix, d).ok())
     }
 }
 
@@ -79,58 +110,187 @@ struct State {
     fingerprints: BTreeMap<String, String>,
 }
 
-pub async fn serve(ingestor: Arc<Ingestor>, list: Watchlist) -> Result<()> {
-    let state_path: PathBuf = ingestor.config().out_dir.join(".iliada-watch-state.json");
+/// Where the daemon looks for work.
+#[derive(Debug, Clone)]
+pub struct ServeConfig {
+    pub list: PathBuf,
+    /// Packages (`*.deb`) dropped here are translated and removed.
+    pub drop_dir: Option<PathBuf>,
+    pub tick: Duration,
+}
+
+enum Job {
+    Watch(Watch, String),
+    Drop(PathBuf),
+}
+
+/// Ids of the bundles currently installed in `dir`.
+pub fn installed_ids(dir: &Path) -> BTreeSet<String> {
+    std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.path().extension().is_some_and(|x| x == "app"))
+                .filter_map(|e| Bundle::open(e.path()).ok())
+                .map(|b| b.info.id.to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Regular `.deb` files (not symlinks) waiting in the drop directory.
+pub fn dropped_packages(dir: &Path) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "deb"))
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    v
+}
+
+pub async fn serve(ingestor: Arc<Ingestor>, cfg: ServeConfig) -> Result<()> {
+    let out_dir = ingestor.config().out_dir.clone();
+    let state_path = ingestor.config().cache_dir.join("watch-state.json");
     let state: State =
         std::fs::read(&state_path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
     let state = Arc::new(Mutex::new(state));
-    let (tx, rx) = mpsc::channel::<(Watch, String)>(64);
+    let in_flight: Arc<Mutex<BTreeSet<String>>> = Arc::default();
+    let (tx, rx) = mpsc::channel::<Job>(256);
     let rx = Arc::new(Mutex::new(rx));
 
+    let mut list = Watchlist::load(&cfg.list).unwrap_or_else(|e| {
+        tracing::warn!(error = %format!("{e:#}"), "app list unreadable; starting empty");
+        Watchlist { interval_secs: default_interval(), concurrency: default_concurrency(), watches: vec![] }
+    });
     for worker in 0..list.concurrency.max(1) {
-        let (ing, rx, state, state_path) = (ingestor.clone(), rx.clone(), state.clone(), state_path.clone());
+        let (ing, rx, state, state_path, in_flight) =
+            (ingestor.clone(), rx.clone(), state.clone(), state_path.clone(), in_flight.clone());
         tokio::spawn(async move {
             loop {
-                let Some((watch, fp)) = rx.lock().await.recv().await else { break };
-                match ing.ingest(&watch.source()).await {
-                    Ok(r) => {
-                        tracing::info!(worker, bundle = %r.bundle.display(), version = %r.version, "re-ingested");
-                        let mut s = state.lock().await;
-                        s.fingerprints.insert(watch.key(), fp);
-                        if let Err(e) = std::fs::write(&state_path, serde_json::to_vec_pretty(&*s).unwrap_or_default())
-                        {
-                            tracing::warn!(error = %e, "could not persist watch state");
+                let Some(job) = rx.lock().await.recv().await else { break };
+                match job {
+                    Job::Watch(watch, fp) => {
+                        let Some(source) = watch.source() else { continue };
+                        match ing.ingest(&source).await {
+                            Ok(r) => {
+                                tracing::info!(worker, bundle = %r.bundle.display(), version = %r.version, "installed");
+                                let mut s = state.lock().await;
+                                s.fingerprints.insert(watch.key(), fp);
+                                save_state(&state_path, &s);
+                            }
+                            Err(e) => {
+                                tracing::error!(worker, source = %watch.key(), error = %format!("{e:#}"), "install failed")
+                            }
                         }
+                        in_flight.lock().await.remove(&watch.key());
                     }
-                    Err(e) => {
-                        tracing::error!(worker, source = %watch.key(), error = %format!("{e:#}"), "ingestion failed")
+                    Job::Drop(path) => {
+                        let key = path.display().to_string();
+                        match ing.ingest(&Source::Url(key.clone())).await {
+                            Ok(r) => {
+                                tracing::info!(worker, bundle = %r.bundle.display(), "installed dropped package");
+                                let _ = std::fs::remove_file(&path);
+                            }
+                            Err(e) => {
+                                tracing::error!(worker, package = %key, error = %format!("{e:#}"), "dropped package could not be installed");
+                                // Keep it visible to the user, but stop retrying.
+                                let _ = std::fs::rename(&path, path.with_extension("deb.failed"));
+                            }
+                        }
+                        in_flight.lock().await.remove(&key);
                     }
                 }
             }
         });
     }
 
-    tracing::info!(watches = list.watches.len(), interval = list.interval_secs, "watching upstream sources");
+    let mut list_mtime = mtime(&cfg.list);
+    let mut next_update_check = Instant::now();
+    tracing::info!(list = %cfg.list.display(), drop_dir = ?cfg.drop_dir, "watching");
     loop {
-        ingestor.invalidate_indexes().await;
-        for w in &list.watches {
-            let fp = match fingerprint(&ingestor, w).await {
-                Ok(fp) => fp,
-                Err(e) => {
-                    tracing::warn!(source = %w.key(), error = %format!("{e:#}"), "cannot check source");
-                    continue;
+        // 1. Packages dropped into Applications.
+        if let Some(dir) = &cfg.drop_dir {
+            for p in dropped_packages(dir) {
+                let key = p.display().to_string();
+                if in_flight.lock().await.insert(key) {
+                    tracing::info!(package = %p.display(), "package dropped into Applications");
+                    tx.send(Job::Drop(p)).await?;
                 }
-            };
-            let known = state.lock().await.fingerprints.get(&w.key()).cloned();
-            if known.as_deref() != Some(fp.as_str()) {
-                tracing::info!(source = %w.key(), "change detected, queueing");
-                tx.send((w.clone(), fp)).await?;
             }
         }
+
+        // 2. The app list changed (an app was added by a restore, by hand, or by appd).
+        let m = mtime(&cfg.list);
+        let list_changed = m != list_mtime;
+        if list_changed {
+            list_mtime = m;
+            match Watchlist::load(&cfg.list) {
+                Ok(l) => list = l,
+                Err(e) => tracing::warn!(error = %format!("{e:#}"), "app list unreadable; keeping the previous one"),
+            }
+        }
+
+        // 3. New entries now; upstream updates every interval_secs.
+        let full_check = Instant::now() >= next_update_check;
+        if full_check {
+            ingestor.invalidate_indexes().await;
+            next_update_check = Instant::now() + Duration::from_secs(list.interval_secs.max(60));
+        }
+        if full_check || list_changed {
+            let installed = installed_ids(&out_dir);
+            for w in list.watches.iter().filter(|w| w.source().is_some()) {
+                let known = state.lock().await.fingerprints.get(&w.key()).cloned();
+                if known.is_some() && !full_check {
+                    continue;
+                }
+                let fp = match fingerprint(&ingestor, w).await {
+                    Ok(fp) => fp,
+                    Err(e) => {
+                        tracing::warn!(source = %w.key(), error = %format!("{e:#}"), "cannot check source");
+                        continue;
+                    }
+                };
+                if known.as_deref() == Some(fp.as_str()) {
+                    continue;
+                }
+                // Already installed (e.g. recorded by iliada-appd): adopt it
+                // instead of reinstalling; update only when upstream changes.
+                let present =
+                    w.app_id(&ingestor.config().vendor_prefix).is_some_and(|id| installed.contains(id.as_str()));
+                if known.is_none() && present {
+                    let mut s = state.lock().await;
+                    s.fingerprints.insert(w.key(), fp);
+                    save_state(&state_path, &s);
+                    continue;
+                }
+                if in_flight.lock().await.insert(w.key()) {
+                    tracing::info!(source = %w.key(), "queueing install/update");
+                    tx.send(Job::Watch(w.clone(), fp)).await?;
+                }
+            }
+        }
+
         tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(list.interval_secs)) => {}
+            _ = tokio::time::sleep(cfg.tick) => {}
             _ = tokio::signal::ctrl_c() => { tracing::info!("shutting down"); return Ok(()); }
         }
+    }
+}
+
+fn mtime(p: &Path) -> Option<SystemTime> {
+    std::fs::metadata(p).and_then(|m| m.modified()).ok()
+}
+
+fn save_state(path: &Path, s: &State) {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Err(e) = std::fs::write(path, serde_json::to_vec_pretty(s).unwrap_or_default()) {
+        tracing::warn!(error = %e, "could not persist watch state");
     }
 }
 
@@ -143,6 +303,38 @@ async fn fingerprint(ing: &Ingestor, w: &Watch) -> Result<String> {
             let e = idx.get(pkg).with_context(|| format!("{pkg} not in index"))?;
             Ok(format!("{}@{}", e.version, e.sha256))
         }
-        _ => unreachable!(),
+        _ => anyhow::bail!("entry has no source"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_managed_and_manual_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("apps.toml");
+        std::fs::write(
+            &p,
+            "# my apps\n[[watch]]\ndebian = \"jq\"\n\n[[watch]]\nid = \"org.example.tool\"\nname = \"Tool\"\nmanual = true\n",
+        )
+        .unwrap();
+        let l = Watchlist::load(&p).unwrap();
+        assert_eq!(l.interval_secs, 21600);
+        assert!(l.watches[0].source().is_some());
+        assert_eq!(l.watches[0].app_id("org.debian").unwrap().as_str(), "org.debian.jq");
+        assert!(l.watches[1].source().is_none(), "manual entries are recorded, not managed");
+        std::fs::write(&p, "[[watch]]\ndebian = \"a\"\nurl = \"https://x\"\n").unwrap();
+        assert!(Watchlist::load(&p).is_err());
+    }
+
+    #[test]
+    fn finds_dropped_debs_but_not_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("b.deb"), "x").unwrap();
+        std::fs::write(dir.path().join("a.deb.failed"), "x").unwrap();
+        std::os::unix::fs::symlink("/etc/passwd", dir.path().join("evil.deb")).unwrap();
+        assert_eq!(dropped_packages(dir.path()), vec![dir.path().join("b.deb")]);
     }
 }

@@ -47,9 +47,10 @@
   services.openssh.enable = true;
 
   iliada = {
-    applications.ingest = {
-      enable = true;
-      watchlist = ../../examples/watchlist.toml;
+    applications = {
+      list = "/var/lib/iliada/apps.toml";
+      initialList = ../../examples/watchlist.toml;
+      ingest.enable = true;
     };
     isolation.defaultTier = "micro-vm";
     broker.frontend = "deny";

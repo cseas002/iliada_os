@@ -790,7 +790,9 @@ dependencies = [
  "clap",
  "iliada-bundle",
  "iliada-types",
+ "serde_json",
  "tempfile",
+ "toml_edit",
  "tracing",
  "tracing-subscriber",
 ]

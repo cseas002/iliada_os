@@ -6,8 +6,12 @@
 //! `iliada-run`, so a click in the launcher always lands in a sandbox.
 //!
 //! Exported entries are named `iliada-<app-id>.desktop`; anything else in
-//! the export directory is left alone. Phase 2 adds drag-to-install
-//! validation, signature checks and MIME registration here.
+//! the export directory is left alone. It also keeps the app list
+//! ([`applist`]) equal to what is installed, so installing or trashing an app
+//! is recorded without anyone editing a file. Phase 2 adds signature checks
+//! and MIME registration here.
+
+pub mod applist;
 
 use std::collections::BTreeSet;
 use std::fs;

@@ -205,9 +205,32 @@ justification, runtime base), validated by the same Rust types.
 | Sandbox controller | config generation tested; launching needs Linux/KVM (Phase 2 bring-up) |
 | NixOS modules, dev VM, appliance image | evaluate cleanly; image boot testing is Phase 2 |
 
+## 8b. The user layer: no terminal, configuration that follows you
+
+Users never need a terminal (ADR 0005). The system layer (Nix) is changed by
+the Settings app through `iliada-configd`, which applies it with a
+background rebuild. The user layer (apps, preferences) changes instantly
+and never needs a rebuild. Apps are installed by dragging `.app` bundles or
+downloaded packages into Applications, and uninstalled by dragging them to
+the Trash. `iliada-appd` records every change in `/etc/iliada/apps.toml`.
+
+`/etc/iliada` is a git repository. With backup on, `iliada-syncd` pushes it
+to a private `iliada_<name>` repository. On a new computer the Setup
+Assistant restores it, so apps, preferences and settings come back. Only
+commits signed by the profile's enrolled devices are applied.
+
 ## 9. Roadmap
 
-**Phase 2: a usable desktop**
+**Phase 2: Mac-like, no terminal** (ADR 0005, in this order)
+
+1. Apps without terminal or rebuild: mutable `apps.toml`, drag-to-install,
+   drop-a-package-to-install, drag-to-Trash uninstall, automatic recording.
+2. `iliada-configd` + `settings.toml`: GUI settings applied in the background.
+3. Graphical installer and first-boot Setup Assistant.
+4. `iliada-syncd`: GitHub backup/restore, device enrolment, signed changes.
+5. "Get Apps" catalog; signed `.iliadapp` downloads.
+
+**Phase 2b: isolation and the desktop shell**
 
 1. COSMIC desktop VM, testable remotely (QEMU on the dev server, VNC over SSH).
 2. Guest image (kernel + initrd + guest agent) and the first booted Tier-2 app.

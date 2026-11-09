@@ -1,7 +1,8 @@
-# Apps to install into /Applications and keep up to date.
-# Each entry is translated into a sandboxed .app bundle by the Package
-# Translator; removing an entry here does not delete the installed app.
+# Your apps. Iliada keeps this list up to date for you: apps you drag into
+# Applications are added, apps you drag to the Trash are removed. When this
+# configuration is restored on a new computer, these apps install themselves.
 #
+# You may also add entries by hand (no rebuild needed):
 #   debian = "<package>"   a package from Debian stable
 #   url    = "<https url>" a .deb published by the app's developer
 

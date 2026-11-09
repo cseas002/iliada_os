@@ -28,13 +28,23 @@ in
       default = "btrfs";
       description = "Filesystem of `device`.";
     };
+    list = lib.mkOption {
+      type = lib.types.str;
+      default = "/etc/iliada/apps.toml";
+      description = ''
+        The app list: mutable state, not Nix configuration. iliada-appd records
+        every app installed into or removed from `root`; the Package Translator
+        installs entries that are not installed yet (e.g. after a restore).
+        Changing it never requires a rebuild.
+      '';
+    };
+    initialList = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = "Seed for `list` when it does not exist yet.";
+    };
     ingest = {
-      enable = lib.mkEnableOption "the iliada-ingest daemon that keeps watched apps up to date";
-      watchlist = lib.mkOption {
-        type = lib.types.nullOr lib.types.path;
-        default = null;
-        description = "Watchlist TOML (see examples/watchlist.toml).";
-      };
+      enable = lib.mkEnableOption "the Package Translator daemon (installs apps from the app list and from packages dropped into Applications)";
       extraArgs = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [ ];
@@ -47,17 +57,21 @@ in
   config = lib.mkIf cfg.enable {
     assertions = [
       {
-        assertion = !cfg.ingest.enable || cfg.ingest.watchlist != null;
-        message = "iliada.applications.ingest.enable requires iliada.applications.ingest.watchlist";
-      }
-      {
         assertion = !config.iliada.image.enable || cfg.device != null;
         message = "the immutable image has a tmpfs root; set iliada.applications.device";
       }
     ];
 
     users.groups.iliada-apps = { };
-    systemd.tmpfiles.rules = [ "d ${cfg.root} 2775 root iliada-apps -" ];
+    systemd.tmpfiles.rules = [
+      "d ${cfg.root} 2775 root iliada-apps -"
+      "d ${dirOf cfg.list} 0755 root root -"
+    ]
+    ++ lib.optional (cfg.initialList != null) "C ${cfg.list} - - - - ${cfg.initialList}"
+    ++ [
+      "f ${cfg.list} 0664 root iliada-apps -"
+      "z ${cfg.list} 0664 root iliada-apps -"
+    ];
     fileSystems = lib.mkIf (cfg.device != null) {
       ${cfg.root} = {
         inherit (cfg) device fsType;
@@ -83,10 +97,13 @@ in
           "--applications" cfg.root
           "--export" "/var/lib/iliada-desktop"
           "--iliada-run" "/run/current-system/sw/bin/iliada-run"
+          "--list" cfg.list
+          "--state" "/var/lib/iliada-appd"
         ];
         User = "iliada-appd";
         Group = "iliada-apps";
-        StateDirectory = "iliada-desktop";
+        StateDirectory = [ "iliada-desktop" "iliada-appd" ];
+        ReadWritePaths = [ cfg.list ];
         StateDirectoryMode = "0755";
         UMask = "0022";
         ProtectSystem = "strict";
@@ -121,7 +138,8 @@ in
       serviceConfig = {
         ExecStart = lib.escapeShellArgs ([
           "${config.iliada.package}/bin/iliada-ingest" "serve"
-          "--watchlist" "${cfg.ingest.watchlist}"
+          "--watchlist" cfg.list
+          "--drop-dir" cfg.root
           "--out" cfg.root
           "--cache" "/var/cache/iliada-ingest"
         ] ++ cfg.ingest.extraArgs);

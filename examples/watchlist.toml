@@ -1,4 +1,5 @@
-# Used by: iliada-ingest serve --watchlist examples/watchlist.toml
+# Seed app list for the dev VM (copied to /var/lib/iliada/apps.toml on first boot).
+# Format: see templates/default/apps.toml.
 interval_secs = 3600
 concurrency = 2
 

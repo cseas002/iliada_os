@@ -15,6 +15,12 @@ struct Cli {
     /// The launcher every exported entry executes.
     #[arg(long, default_value = "/run/current-system/sw/bin/iliada-run")]
     iliada_run: PathBuf,
+    /// The app list to keep in line with /Applications (omit to disable).
+    #[arg(long)]
+    list: Option<PathBuf>,
+    /// Private state (which apps this machine has seen installed).
+    #[arg(long, default_value = "/var/lib/iliada-appd")]
+    state: PathBuf,
     /// Sync once and exit instead of watching.
     #[arg(long)]
     once: bool,
@@ -36,6 +42,19 @@ fn main() -> Result<()> {
                 }
             }
             Err(e) => tracing::error!(error = %format!("{e:#}"), "sync failed"),
+        }
+        if let Some(list) = &cli.list {
+            match iliada_appd::applist::sync_list(&cli.applications, list, &cli.state.join("seen.json")) {
+                Ok(r) => {
+                    for id in &r.added {
+                        tracing::info!(app = %id, "recorded in app list");
+                    }
+                    for id in &r.removed {
+                        tracing::info!(app = %id, "removed from app list (uninstalled)");
+                    }
+                }
+                Err(e) => tracing::error!(error = %format!("{e:#}"), "app list update failed"),
+            }
         }
         if cli.once {
             return Ok(());
