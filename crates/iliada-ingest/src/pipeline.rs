@@ -368,6 +368,8 @@ impl Ingestor {
         for name in share_from {
             let dep = staging.path().join("deps").join(name);
             merge_share(&dep.join("usr/share"), &root.join("usr/share"))?;
+            // Licence notices travel with the binaries (many licences require it).
+            merge_copyright(&dep.join("usr/share/doc"), &root.join("usr/share/doc"))?;
             // Plugin directories (gdk-pixbuf loaders, GIO and GTK modules, …) are
             // loaded from their compiled-in paths, so they keep their place in Root.
             if let Some(t) = triplet {
@@ -663,6 +665,30 @@ fn is_plugin_path(rel: &Path) -> bool {
         && c[2].as_os_str().to_string_lossy().ends_with("-linux-gnu")
 }
 
+/// Copy each package's `usr/share/doc/<pkg>/copyright` (documentation is
+/// otherwise skipped). A doc directory that is a symlink to another package's
+/// is kept as a symlink.
+fn merge_copyright(src: &Path, dst: &Path) -> Result<()> {
+    let Ok(rd) = fs::read_dir(src) else { return Ok(()) };
+    for e in rd.flatten() {
+        let target = dst.join(e.file_name());
+        let meta = fs::symlink_metadata(e.path())?;
+        if meta.file_type().is_symlink() {
+            if fs::symlink_metadata(&target).is_err() {
+                fs::create_dir_all(dst)?;
+                std::os::unix::fs::symlink(fs::read_link(e.path())?, &target)?;
+            }
+        } else if meta.is_dir() {
+            let copyright = e.path().join("copyright");
+            if fs::symlink_metadata(&copyright).is_ok() {
+                fs::create_dir_all(&target)?;
+                copy_no_overwrite(&copyright, &target.join("copyright"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Copy only the subdirectories of `src` into `dst` (plain files at the top
 /// level are shared libraries, which go to Contents/Libraries instead).
 fn merge_subdirs(src: &Path, dst: &Path) -> Result<()> {
@@ -827,6 +853,21 @@ fn copy_resources(layout: &BundleLayout, root: &Path, desktop: Option<&DesktopEn
 mod tests {
     use super::*;
     use crate::deb::tests::build_deb;
+
+    #[test]
+    fn copyright_files_are_kept() {
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("doc");
+        fs::create_dir_all(src.join("libfoo1")).unwrap();
+        fs::write(src.join("libfoo1/copyright"), "MIT").unwrap();
+        fs::write(src.join("libfoo1/changelog.gz"), "x").unwrap();
+        std::os::unix::fs::symlink("libfoo1", src.join("libfoo-dev")).unwrap();
+        let dst = d.path().join("out");
+        merge_copyright(&src, &dst).unwrap();
+        assert_eq!(fs::read_to_string(dst.join("libfoo1/copyright")).unwrap(), "MIT");
+        assert!(!dst.join("libfoo1/changelog.gz").exists(), "only the licence notice");
+        assert!(fs::symlink_metadata(dst.join("libfoo-dev")).unwrap().file_type().is_symlink());
+    }
 
     #[test]
     fn plugin_paths() {
