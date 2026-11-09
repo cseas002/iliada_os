@@ -65,6 +65,7 @@ in
   '';
 
   image.repart = {
+    enable = true;
     name = "iliada";
     sectorSize = 512; # UEFI firmware in QEMU/UTM expects 512-byte sectors
     partitions = {
