@@ -98,7 +98,7 @@ impl Default for IngestConfig {
             max_download_bytes: 1 << 30,
             max_unpacked_bytes: 4 << 30,
             full_closure: false,
-            max_dependency_packages: 200,
+            max_dependency_packages: 600,
             use_index: true,
             force: false,
             allow_http: false,
