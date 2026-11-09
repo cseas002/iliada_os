@@ -1,7 +1,7 @@
 # The Iliada desktop: COSMIC (Rust, Wayland, Smithay-based compositor).
 # Iliada-specific shell pieces (trusted prompts, Applications browser,
 # Privacy settings) are layered on top in Phase 2.
-{ config, lib, ... }:
+{ config, lib, pkgs, ... }:
 let
   cfg = config.iliada.desktop;
 in
@@ -28,6 +28,10 @@ in
       })
     ];
     services.desktopManager.cosmic.enable = true;
+    # Apps come only as .app bundles: the Iliada Store replaces COSMIC Store
+    # (which installs Flatpaks and system packages).
+    environment.cosmic.excludePackages = [ pkgs.cosmic-store ];
+    environment.systemPackages = [ (pkgs.callPackage ../store-gui.nix { }) ];
     services.displayManager.cosmic-greeter.enable = true;
     services.displayManager.autoLogin = lib.mkIf (cfg.autoLoginUser != null) {
       enable = true;

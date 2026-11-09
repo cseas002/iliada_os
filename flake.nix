@@ -52,6 +52,9 @@
           default = iliada-tools;
         }
         // lib.optionalAttrs (lib.elem system linuxSystems) {
+          iliada-store-gui = pkgs.callPackage ./nix/store-gui.nix { };
+        }
+        // lib.optionalAttrs (lib.elem system linuxSystems) {
           # Bootable live/installer ISO.
           installer-iso = self.nixosConfigurations."installer-${arch system}".config.system.build.isoImage;
         });
