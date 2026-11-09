@@ -50,6 +50,13 @@ Principles:
 Status: **Phase 1** (architecture + proofs of concept). See
 [docs/architecture.md](docs/architecture.md).
 
+## Install
+
+Iliada 0.1 is a developer preview: build the installer ISO, boot it, and run
+`sudo iliada-install --disk /dev/<disk> --user <name>`. Afterwards the whole
+system is configured in `/etc/iliada` (`configuration.nix` + `apps.toml`).
+See **[docs/install.md](docs/install.md)**.
+
 ## Repository layout
 
 ```
@@ -60,10 +67,14 @@ crates/
   iliada-ipc       guest↔host wire protocol (postcard over vsock / unix)
   iliada-broker    permission broker daemon (bin: iliada-broker)
   iliada-guest     client library used inside sandboxes (+ examples)
-  iliada-sandbox   Tier-1 bubblewrap / Tier-2 cloud-hypervisor controller
+  iliada-sandbox   Tier-1 bubblewrap / Tier-2 cloud-hypervisor controller (bin: iliada-run)
+  iliada-appd      exports GUI bundles to the desktop's app launcher
 nix/
   modules/         the declarative system manifest (iliada.* NixOS options)
-  hosts/           dev-vm (mutable) and appliance (immutable image) systems
+  hosts/           dev-vm, appliance (immutable image) and installer ISO
+  installer/       iliada-install
+templates/default/ the user configuration (nix flake init -t …)
+tests/installer/   end-to-end install test (QEMU/KVM)
   package.nix      Nix package for the Rust workspace
 docs/              architecture, IPC spec, ADRs
 examples/          example bundle, watchlist, isolation config

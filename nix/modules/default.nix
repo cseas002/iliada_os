@@ -21,6 +21,17 @@
     ./ux.nix
   ];
 
+  options.iliada.version = lib.mkOption {
+    type = lib.types.str;
+    default = "0.1.0";
+    readOnly = true;
+    description = "Iliada release version.";
+  };
+
+  # Branding: "Iliada" in /etc/os-release, the boot menu and the greeter.
+  # The distribution ID stays "nixos" so NixOS tooling keeps working.
+  config.system.nixos.distroName = "Iliada";
+
   options.iliada.package = lib.mkOption {
     type = lib.types.package;
     default = pkgs.callPackage ../package.nix { };

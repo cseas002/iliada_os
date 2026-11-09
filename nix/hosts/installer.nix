@@ -21,6 +21,8 @@ in
   imports = [ "${modulesPath}/installer/cd-dvd/installation-cd-graphical-base.nix" ];
 
   networking.hostName = "iliada-installer";
+  image.baseName = lib.mkForce "iliada-${config.iliada.version}-${pkgs.stdenv.hostPlatform.system}";
+  isoImage.volumeID = lib.mkForce "ILIADA_${lib.replaceStrings [ "." ] [ "_" ] config.iliada.version}";
   iliada = {
     desktop = {
       enable = true;

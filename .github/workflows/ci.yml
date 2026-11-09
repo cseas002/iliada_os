@@ -1,9 +1,12 @@
 name: ci
 
+# Runs on release tags only (and on demand from the Actions tab), to keep
+# private-repo Actions minutes low. Day-to-day checks run locally
+# (`cargo xtask ci`) and on the dev server (`nix flake check`).
 on:
   push:
-    branches: [main]
-  pull_request:
+    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
