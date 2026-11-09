@@ -2799,6 +2799,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "iliada-applist"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "iliada-types",
+ "toml_edit 0.22.27",
+]
+
+[[package]]
 name = "iliada-bundle"
 version = "0.1.0"
 dependencies = [
@@ -2852,6 +2861,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "iliada-settings"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "iliada-system",
+ "libcosmic",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "iliada-store"
 version = "0.1.0"
 dependencies = [
@@ -2859,11 +2879,13 @@ dependencies = [
  "clap",
  "futures-util",
  "hex",
+ "iliada-applist",
  "iliada-bundle",
  "iliada-catalog",
  "iliada-ingest",
  "reqwest",
  "ruzstd",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
@@ -2881,6 +2903,26 @@ dependencies = [
  "libcosmic",
  "reqwest",
  "tokio",
+]
+
+[[package]]
+name = "iliada-system"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hex",
+ "iliada-catalog",
+ "iliada-ingest",
+ "reqwest",
+ "ruzstd",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "toml_edit 0.22.27",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
