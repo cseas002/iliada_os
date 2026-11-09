@@ -5,6 +5,7 @@
 #   iliada.isolation     sandbox tiers, VMM, guest kernel, network policy
 #   iliada.broker        the runtime permission broker
 #   iliada.desktop       COSMIC desktop
+#   iliada.workstation   networking, audio, bluetooth, firmware, boot loader
 #   iliada.rustUserland  Rust coreutils, sudo-rs, ntpd-rs, fish
 #   iliada.ux            FHS hiding, privilege model
 { lib, pkgs, ... }:
@@ -15,6 +16,7 @@
     ./isolation.nix
     ./broker.nix
     ./desktop.nix
+    ./workstation.nix
     ./rust-userland.nix
     ./ux.nix
   ];

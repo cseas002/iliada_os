@@ -1,0 +1,14 @@
+# Apps to install into /Applications and keep up to date.
+# Each entry is translated into a sandboxed .app bundle by the Package
+# Translator; removing an entry here does not delete the installed app.
+#
+#   debian = "<package>"   a package from Debian stable
+#   url    = "<https url>" a .deb published by the app's developer
+
+interval_secs = 21600   # check for updates every 6 hours
+
+[[watch]]
+debian = "gnome-calculator"
+
+[[watch]]
+debian = "gnome-text-editor"
