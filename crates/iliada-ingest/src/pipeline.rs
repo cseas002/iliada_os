@@ -17,12 +17,12 @@ use crate::closure::{Closure, LibCandidate, compute_closure};
 use crate::control::Control;
 use crate::deb::open_deb;
 use crate::desktop::{self, DesktopEntry};
-use crate::elf::{ElfObject, host_deb_arch, multiarch_triplet, provided_sonames, scan_tree};
+use crate::elf::{host_deb_arch, multiarch_triplet, provided_sonames, scan_tree};
 use crate::extract::{ExtractLimits, extract_tar, symlink_stays_inside};
 use crate::fetch::Fetcher;
 use crate::index::{IndexLocation, PackageIndex};
 use crate::infer::infer_permissions;
-use crate::launcher::{patch_runpaths, write_launcher};
+use crate::launcher::write_launcher;
 use crate::resolvers::{LibraryResolver, ResolveContext};
 use crate::runtime::RuntimeBase;
 use crate::sandbox::{Confinement, run_confined};
@@ -361,9 +361,10 @@ impl Ingestor {
 
         let exe_name = exe_rel.file_name().context("executable has no file name")?.to_string_lossy().into_owned();
         write_launcher(&layout, &exe_name, &exe_rel, &self.cfg.args, triplet)?;
-        let exec_objects: Vec<PathBuf> =
-            objects.iter().filter(|o| o.is_executable).map(|o: &ElfObject| o.rel_path.clone()).collect();
-        let runpaths_patched = patch_runpaths(&layout, &exec_objects, triplet).await?;
+        // Binaries keep their own RUNPATH (apps such as Audacity and Inkscape
+        // find private libraries through it); the sandbox and the launcher
+        // add the bundled libraries via LD_LIBRARY_PATH.
+        let runpaths_patched = 0;
         let icon = copy_resources(&layout, &root, desktop.as_ref())?;
 
         let mut used_packages: BTreeSet<&str> = used.iter().map(String::as_str).collect();

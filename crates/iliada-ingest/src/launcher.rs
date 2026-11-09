@@ -1,4 +1,4 @@
-//! Entry points: a launcher script, plus optional RUNPATH rewriting.
+//! Entry points: the host-side launcher script.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -43,35 +43,6 @@ pub fn write_launcher(
     fs::write(&path, script).with_context(|| format!("writing {}", path.display()))?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
     Ok(path)
-}
-
-/// If `patchelf` is installed, point each executable's RUNPATH at the bundled
-/// libraries using `$ORIGIN`, so the binary also works without the launcher.
-/// Returns how many files were patched (0 when patchelf is absent).
-pub async fn patch_runpaths(layout: &BundleLayout, executables: &[PathBuf], triplet: Option<&str>) -> Result<usize> {
-    let Ok(patchelf) = which("patchelf") else {
-        tracing::info!("patchelf not found; relying on the launcher's LD_LIBRARY_PATH");
-        return Ok(0);
-    };
-    let mut n = 0;
-    for rel in executables {
-        // Number of directories between the binary and Contents/.
-        let depth = rel.parent().map(|p| p.components().count()).unwrap_or(0) + 1;
-        let up = "../".repeat(depth);
-        let mut rpath = vec![format!("$ORIGIN/{up}Libraries")];
-        if let Some(t) = triplet {
-            rpath.push(format!("$ORIGIN/{up}Root/usr/lib/{t}"));
-        }
-        let file = layout.fhs_root().join(rel);
-        let status =
-            tokio::process::Command::new(&patchelf).arg("--set-rpath").arg(rpath.join(":")).arg(&file).status().await?;
-        if status.success() {
-            n += 1;
-        } else {
-            tracing::warn!(file = %file.display(), "patchelf failed; launcher fallback still applies");
-        }
-    }
-    Ok(n)
 }
 
 pub(crate) fn which(bin: &str) -> Result<PathBuf> {

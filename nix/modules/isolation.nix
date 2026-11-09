@@ -47,10 +47,10 @@ in
       # Must provide every soname in crates/iliada-ingest/runtime/iliada-base-1.toml.
       default = pkgs.symlinkJoin {
         name = "iliada-base-1";
-        # bin/: a POSIX shell and the (Rust) core utilities, so the launcher
+        # bin/: a static busybox (sh, grep, sed, coreutils…), so the launcher
         # scripts many apps ship (/usr/bin/chromium, soffice, …) run unmodified.
-        postBuild = "ln -s dash $out/bin/sh";
-        paths = map lib.getBin (with pkgs; [ dash uutils-coreutils-noprefix gnugrep gnused ]) ++ map lib.getLib (with pkgs; [
+        # Static, so the app's own libraries on LD_LIBRARY_PATH cannot break it.
+        paths = [ pkgs.pkgsStatic.busybox ] ++ map lib.getLib (with pkgs; [
           glibc
           stdenv.cc.cc # libgcc_s, libstdc++
           libxcrypt
