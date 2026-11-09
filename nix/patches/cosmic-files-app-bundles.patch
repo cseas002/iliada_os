@@ -1,31 +1,33 @@
 diff --git a/src/app.rs b/src/app.rs
-index 77aa67d..0d7ff0e 100644
+index 77aa67d..fa9ec86 100644
 --- a/src/app.rs
 +++ b/src/app.rs
-@@ -791,6 +791,23 @@ impl App {
+@@ -789,6 +789,25 @@ impl App {
+     }
+ 
      fn open_file(&mut self, paths: &[impl AsRef<Path>]) -> Task<Message> {
++        // Iliada: application bundles are launched in their sandbox; anything
++        // else continues through the normal path below.
++        if paths.iter().any(|p| crate::tab::is_app_bundle(p.as_ref())) {
++            let mut rest: Vec<PathBuf> = Vec::new();
++            for p in paths {
++                let p = p.as_ref();
++                if crate::tab::is_app_bundle(p) {
++                    let mut command = std::process::Command::new("iliada-run");
++                    command.arg(p);
++                    if let Err(err) = spawn_detached(&mut command) {
++                        log::warn!("failed to launch {}: {}", p.display(), err);
++                    }
++                } else {
++                    rest.push(p.to_owned());
++                }
++            }
++            return if rest.is_empty() { Task::none() } else { self.open_file(&rest) };
++        }
++
          let mut tasks = Vec::new();
  
-+        // Iliada: application bundles are launched in their sandbox.
-+        let (bundles, paths): (Vec<PathBuf>, Vec<PathBuf>) = paths
-+            .iter()
-+            .map(|p| p.as_ref().to_owned())
-+            .partition(|p| crate::tab::is_app_bundle(p));
-+        for bundle in &bundles {
-+            let mut command = std::process::Command::new("iliada-run");
-+            command.arg(bundle);
-+            if let Err(err) = spawn_detached(&mut command) {
-+                log::warn!("failed to launch {}: {}", bundle.display(), err);
-+            }
-+        }
-+        if paths.is_empty() {
-+            return Task::none();
-+        }
-+        let paths = &paths[..];
-+
          // Associate all paths to its MIME type
-         // This allows handling paths as groups if possible, such as launching a single video
-         // player that is passed every path.
 diff --git a/src/tab.rs b/src/tab.rs
 index d462c11..0769632 100644
 --- a/src/tab.rs
