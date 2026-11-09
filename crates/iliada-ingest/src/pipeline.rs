@@ -13,7 +13,7 @@ use iliada_bundle::{
 };
 use iliada_types::AppId;
 
-use crate::advisor::{Advisor, AdvisorContext};
+use crate::closure::{Closure, LibCandidate, compute_closure};
 use crate::control::Control;
 use crate::deb::open_deb;
 use crate::desktop::{self, DesktopEntry};
@@ -23,7 +23,7 @@ use crate::fetch::Fetcher;
 use crate::index::{IndexLocation, PackageIndex};
 use crate::infer::infer_permissions;
 use crate::launcher::{patch_runpaths, write_launcher};
-use crate::resolve::{Closure, LibCandidate, compute_closure};
+use crate::resolvers::{LibraryResolver, ResolveContext};
 use crate::runtime::RuntimeBase;
 use crate::sandbox::{Confinement, run_confined};
 
@@ -119,7 +119,7 @@ pub struct Ingestor {
     cfg: IngestConfig,
     fetcher: Fetcher,
     runtime: RuntimeBase,
-    advisors: Vec<Box<dyn Advisor>>,
+    resolvers: Vec<Box<dyn LibraryResolver>>,
     indexes: tokio::sync::Mutex<HashMap<String, Arc<PackageIndex>>>,
 }
 
@@ -132,9 +132,9 @@ struct DepState {
 }
 
 impl Ingestor {
-    pub fn new(cfg: IngestConfig, advisors: Vec<Box<dyn Advisor>>) -> Result<Self> {
+    pub fn new(cfg: IngestConfig, resolvers: Vec<Box<dyn LibraryResolver>>) -> Result<Self> {
         let fetcher = Fetcher::new(cfg.max_download_bytes, cfg.allow_http)?;
-        Ok(Self { cfg, fetcher, runtime: RuntimeBase::builtin(), advisors, indexes: Default::default() })
+        Ok(Self { cfg, fetcher, runtime: RuntimeBase::builtin(), resolvers, indexes: Default::default() })
     }
 
     pub fn config(&self) -> &IngestConfig {
@@ -222,7 +222,7 @@ impl Ingestor {
         let desktop = desktop::find(&root, &package);
         let exe_rel = choose_executable(&root, &package, desktop.as_ref(), self.cfg.exec_override.as_deref())?;
 
-        // 4. Resolve dependencies through the package index, then advisors.
+        // 4. Resolve dependencies through the package index, then resolvers.
         let mut deps = DepState::default();
         let mut index = None;
         let needs_more = roots.iter().any(|s| !provided.contains(s) && !self.runtime.provides_soname(s));
@@ -234,7 +234,7 @@ impl Ingestor {
         let mut closure = compute_closure(&roots, &provided, &provided_needed, &self.runtime, &deps.available);
         if let Some(idx) = &index {
             // Second chance: some library packages are not named lib* (zlib1g).
-            // Retry skipped direct dependencies before asking any advisor.
+            // Retry skipped direct dependencies before asking any resolver.
             let retry: Vec<String> = deps.skipped.iter().filter(|n| n.contains("lib")).cloned().collect();
             for name in retry {
                 if closure.unresolved.is_empty() {
@@ -246,7 +246,7 @@ impl Ingestor {
             }
         }
         if let Some(idx) = &index {
-            self.consult_advisors(
+            self.consult_resolvers(
                 idx,
                 &control,
                 &arch,
@@ -337,7 +337,7 @@ impl Ingestor {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn consult_advisors(
+    async fn consult_resolvers(
         &self,
         idx: &PackageIndex,
         control: &Control,
@@ -349,11 +349,11 @@ impl Ingestor {
         deps: &mut DepState,
         closure: &mut Closure,
     ) -> Result<()> {
-        for advisor in &self.advisors {
+        for resolver in &self.resolvers {
             if closure.unresolved.is_empty() {
                 break;
             }
-            let ctx = AdvisorContext {
+            let ctx = ResolveContext {
                 package: control.package().unwrap_or_default().to_owned(),
                 version: control.version().unwrap_or_default().to_owned(),
                 arch: arch.to_owned(),
@@ -361,10 +361,10 @@ impl Ingestor {
                 unresolved: closure.unresolved.clone(),
                 already_fetched: deps.fetched.keys().cloned().collect(),
             };
-            let suggestions = match advisor.suggest(&ctx).await {
+            let suggestions = match resolver.suggest(&ctx).await {
                 Ok(s) => s,
                 Err(e) => {
-                    tracing::warn!(advisor = advisor.name(), error = %e, "advisor failed; skipping it");
+                    tracing::warn!(resolver = resolver.name(), error = %e, "resolver failed; skipping it");
                     continue;
                 }
             };
@@ -373,15 +373,15 @@ impl Ingestor {
                     continue;
                 }
                 if idx.get(&s.package).is_none() {
-                    tracing::debug!(advisor = advisor.name(), package = %s.package, "suggested package does not exist");
+                    tracing::debug!(resolver = resolver.name(), package = %s.package, "suggested package does not exist");
                     continue;
                 }
-                self.walk_dependencies(idx, vec![vec![s.package.clone()]], Some(advisor.name()), true, staging, deps)
+                self.walk_dependencies(idx, vec![vec![s.package.clone()]], Some(resolver.name()), true, staging, deps)
                     .await?;
                 if deps.available.contains_key(&s.soname) {
-                    tracing::info!(advisor = advisor.name(), soname = %s.soname, package = %s.package, rationale = %s.rationale, "advisor suggestion verified");
+                    tracing::info!(resolver = resolver.name(), soname = %s.soname, package = %s.package, rationale = %s.rationale, "suggestion verified");
                 } else {
-                    tracing::warn!(advisor = advisor.name(), soname = %s.soname, package = %s.package, "advisor suggestion rejected: package does not ship that soname");
+                    tracing::warn!(resolver = resolver.name(), soname = %s.soname, package = %s.package, "suggestion rejected: package does not ship that soname");
                 }
             }
             *closure = compute_closure(roots, provided, provided_needed, &self.runtime, &deps.available);
@@ -396,7 +396,7 @@ impl Ingestor {
         &self,
         idx: &PackageIndex,
         roots: Vec<Vec<String>>,
-        advised_by: Option<&str>,
+        suggested_by: Option<&str>,
         force_roots: bool,
         staging: &Path,
         st: &mut DepState,
@@ -439,14 +439,14 @@ impl Ingestor {
                 let d = dest.clone();
                 tokio::task::spawn_blocking(move || scan_tree(&d)).await??
             };
-            let advised = if is_root { advised_by.map(str::to_owned) } else { None };
+            let suggested = if is_root { suggested_by.map(str::to_owned) } else { None };
             for o in objs.into_iter().filter(|o| o.is_shared_lib) {
                 if let Some(soname) = o.soname.clone() {
                     st.available.entry(soname).or_insert(LibCandidate {
                         package: entry.name.clone(),
                         path: dest.join(&o.rel_path),
                         needed: o.needed,
-                        advised_by: advised.clone(),
+                        suggested_by: suggested.clone(),
                     });
                 }
             }

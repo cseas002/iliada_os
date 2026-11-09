@@ -68,6 +68,18 @@ this design they are the same mechanism.
   drag-to-install is a copy and drag-to-trash is a delete. Phase 2 adds
   `iliada-appd`, which validates a dropped bundle, registers its `.desktop`
   entry and MIME types, and refuses unsigned bundles in strict mode.
+* **Desktop: COSMIC** (`iliada.desktop`). System76's COSMIC is a
+  Wayland desktop written in Rust. Its compositor (`cosmic-comp`) is built on
+  the Smithay library. We build on it rather than writing a compositor,
+  because Iliada needs compositor-level features that GNOME and KDE make
+  hard to add:
+  - permission prompts drawn by the compositor, which no app can cover or imitate;
+  - windows from micro-VMs labelled with their app identity (cf. Qubes borders);
+  - per-app clipboard and screenshot mediation through the broker.
+
+  Iliada's own pieces sit on top: an Applications browser, Privacy settings
+  (view and revoke grants), and the update UI. COSMIC's default top panel plus
+  dock is already close to the Mac layout.
 * **FHS hiding** (`iliada.ux.hideFhs`) uses the freedesktop `/.hidden`
   convention so file managers show only the user's world. Developers can still
   see everything.
@@ -121,9 +133,9 @@ train users to click Allow.
 
 **Verified boot** comes from Pillar 1: dm-verity on the store plus a signed UKI.
 
-## 6. Pillar 4: ingestion
+## 6. Pillar 4: the Package Translator
 
-`iliada-ingest` (ADR 0004):
+`iliada-ingest`, the **Package Translator** (ADR 0004):
 
 1. **Fetch** over HTTPS with a size cap and SHA-256. A `debian:<pkg>` source is
    resolved via the suite's `Packages` index and checked against the hash
@@ -140,9 +152,11 @@ train users to click Allow.
    graphics, audio, fonts); bundled from dependency packages found by walking
    `Depends` (only `lib*` packages, then a second chance for oddly named ones
    such as `zlib1g`); or unresolved.
-5. **Advise.** Unresolved sonames go to advisors: a rule-based one (Debian
-   naming policy plus known exceptions), then optionally **Claude**
-   (`--features claude`). An advisor's answer is a hypothesis: the package is
+5. **Suggest.** Unresolved sonames go to library resolvers: naming rules
+   (Debian policy plus known exceptions), then optionally the **AI library
+   resolver** (`--features ai`, `--resolver ai`; it calls a Claude model via
+   the Anthropic API and needs `ANTHROPIC_API_KEY`). A suggestion is a
+   hypothesis: the package is
    downloaded, hash-checked and accepted only if it really ships that soname.
    A wrong or malicious suggestion costs at most an extra download.
 6. **Bundle.** The upstream tree goes into `Contents/Root`, the needed
@@ -151,7 +165,12 @@ train users to click Allow.
    the three manifests. Permission *declarations* are inferred conservatively
    from linked libraries (PulseAudio → may ask for the mic), and every use is
    still prompted. `Provenance.toml` records every package, URL, hash and
-   soname resolution, including which advisor influenced what.
+   soname resolution, including which resolver (and which model) influenced
+   what.
+
+The API key belongs to whoever runs translation: an Iliada build service
+that publishes bundles, or a developer translating locally. End-user
+machines receive finished bundles and never need a key.
 
 *Why no static linking:* a prebuilt dynamically linked ELF cannot be relinked
 statically after the fact. Bundling plus RUNPATH is what AppImage, Flatpak
@@ -169,7 +188,8 @@ justification, runtime base), validated by the same Rust types.
 | Boundary | Enforced by |
 |---|---|
 | Upstream package → host during ingestion | pure-Rust parsers, path checks, Landlock, size caps |
-| AI advisor → bundle contents | mechanical verification (index hash + DT_SONAME) |
+| AI library resolver → bundle contents | mechanical verification (index hash + DT_SONAME) |
+| On-device assistant → system | broker prompts it cannot answer; its own sandbox and capability list (§10) |
 | App → host resources | sandbox (namespaces / KVM) + broker as the only channel |
 | App → user | compositor-owned prompts; app text sanitised and labelled |
 | Disk → running system | dm-verity root hash in a signed UKI |
@@ -179,17 +199,52 @@ justification, runtime base), validated by the same Rust types.
 | Area | State |
 |---|---|
 | Bundle format + validation | done, tested |
-| Ingestion (.deb → .app), index, advisors, provenance | done; tested offline and against Debian trixie (jq, gnome-calculator) |
+| Package Translator (.deb → .app), index, resolvers, provenance | done; tested offline and against Debian trixie (jq, gnome-calculator) |
 | Landlock confinement of extraction | done; enforced on Linux |
 | IPC protocol, broker, guest client | done; end-to-end tests over real sockets |
 | Sandbox controller | config generation tested; launching needs Linux/KVM (Phase 2 bring-up) |
 | NixOS modules, dev VM, appliance image | evaluate cleanly; image boot testing is Phase 2 |
 
-## 9. Phase 2 (next)
+## 9. Roadmap
 
-1. Guest image (kernel + initrd + guest agent) and the first booted Tier-2 app.
-2. Wayland/virtio-gpu display path; PipeWire bridging for media grants.
-3. Compositor-owned prompt frontend; broker as a per-user service.
-4. Bundle signing, with grant keys tied to signing keys; `iliada-appd`.
-5. OpenPGP verification of Debian `InRelease`; Flatpak and AppImage sources.
-6. Recipe repository; seccomp profiles; GTK/Qt in the runtime base.
+**Phase 2: a usable desktop**
+
+1. COSMIC desktop VM, testable remotely (QEMU on the dev server, VNC over SSH).
+2. Guest image (kernel + initrd + guest agent) and the first booted Tier-2 app.
+3. Wayland/virtio-gpu display path from micro-VMs; PipeWire bridging for media grants.
+4. Compositor-owned prompt frontend in cosmic-comp; broker as a per-user service.
+5. Bundle signing, with grants tied to signing keys; `iliada-appd`
+   (drag-to-install, MIME and `.desktop` registration).
+6. OpenPGP verification of Debian `InRelease`; Flatpak and AppImage sources.
+7. Recipe repository; seccomp profiles; GTK/Qt in the runtime base.
+
+**Phase 3: polish and reach**
+
+1. aarch64 builds (ARM laptops, UTM on Apple Silicon).
+2. Installer, first-run setup, the update server, Secure Boot key management.
+3. The on-device assistant (§10).
+
+## 10. Future: the on-device assistant
+
+An optional assistant built into the system, helping users with the OS
+itself. For example: "why can't this app see my Downloads folder?", "set up
+my printer", "make the text bigger", "what did this update change?". It
+replaces the forum search and the terminal commands that Linux usually
+demands.
+
+It is designed under the same rules as everything else:
+
+* **It cannot grant permissions.** Broker prompts are answered only by the
+  person at the keyboard, through the compositor's trusted surface. The
+  assistant may *explain* a prompt, never click it.
+* **It is an app, not root.** It runs sandboxed like any other app, with an
+  explicit, small set of system actions (open a Settings page, change a
+  declared preference, start an update check). Each action is exposed as a
+  typed tool and shown to the user before it runs.
+* **Its sources are labelled.** Content from apps, web pages or documents is
+  treated as data, not instructions, so prompt injection cannot become a
+  system action.
+* **Local first.** Prefer an on-device model. A cloud model is opt-in and
+  shows the user what leaves the machine.
+* **Everything is logged.** Assistant actions appear in the same audit log as
+  broker decisions.

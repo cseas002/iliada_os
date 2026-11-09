@@ -13,7 +13,7 @@ converted afterwards.
   `LD_LIBRARY_PATH`.
 * Define a small **runtime base** (`iliada-base-1`) of sonames the platform
   guarantees, and bundle everything else.
-* AI is an **advisor**, never an authority: its output is verified against
+* AI (the **AI library resolver**) proposes, but never decides: its output is verified against
   the package index hash and the library's DT_SONAME before use, and recorded
   in `Provenance.toml`.
 * Never execute maintainer scripts; extract with pure-Rust parsers under

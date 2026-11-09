@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Every package whose files ended up in the bundle is listed with its
 /// download URL and SHA-256, and every soname the executables need is listed
 /// with how it was satisfied — including any suggestion that came from the
-/// AI advisor, so a reviewer can see exactly what the model influenced.
+/// AI library resolver, so a reviewer can see exactly what the model influenced.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Provenance {
@@ -51,12 +51,12 @@ pub enum PackageRole {
 pub struct LibraryRecord {
     pub soname: String,
     pub status: ResolutionStatus,
-    /// Package that supplied the library (bundled / advised).
+    /// Package that supplied the library (bundled / suggested).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<String>,
-    /// Which advisor proposed the package, when status = advised.
+    /// Which resolver proposed the package (e.g. `ai (claude-opus-5-5)`), when status = suggested.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub advisor: Option<String>,
+    pub suggested_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,8 +68,8 @@ pub enum ResolutionStatus {
     Runtime,
     /// Copied from a dependency package found via the package index.
     Bundled,
-    /// Copied from a package an advisor proposed, after mechanical verification.
-    Advised,
+    /// Copied from a package a resolver suggested, after mechanical verification.
+    Suggested,
     /// Nothing satisfied it; the app may fail to start.
     Unresolved,
 }

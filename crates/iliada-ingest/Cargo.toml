@@ -13,8 +13,8 @@ path = "src/main.rs"
 
 [features]
 default = []
-# Enables the Claude-backed dependency advisor (needs ANTHROPIC_API_KEY at runtime).
-claude = []
+# Enables the AI library resolver (Anthropic API; needs ANTHROPIC_API_KEY at runtime).
+ai = []
 
 [dependencies]
 iliada-types.workspace = true

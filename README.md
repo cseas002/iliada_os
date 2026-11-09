@@ -2,6 +2,28 @@
 
 An immutable, micro-isolated Linux OS with a Mac-like app model.
 
+## Vision
+
+Iliada is a desktop OS for people who never want to think about their OS.
+It should feel like a Mac: apps are single bundles you drag in and out, the
+system never half-breaks after an update, and there is no command line or
+administrator password in everyday use. Underneath, it treats every
+third-party app as potentially hostile. Each app runs isolated, and it can
+touch your camera, microphone, files or location only after you say yes.
+
+Principles:
+
+1. **The system is read-only and verifiable.** Updates replace it atomically
+   and can always be rolled back.
+2. **Apps are self-contained and isolated.** An app can't see other apps, your
+   files, or your devices unless you grant it.
+3. **The user decides, and only the user.** Neither apps nor AI can grant
+   permissions on the user's behalf.
+4. **AI helps, but never acts as an authority.** AI suggestions are verified
+   mechanically or confirmed by the user before they take effect.
+5. **Everything is declarative.** The whole system is defined in Nix, and
+   the daemons are written in Rust.
+
 * **Immutable base.** The system is composed with Nix and shipped as a signed,
   read-only image (dm-verity `/nix/store`, UKI, tmpfs root). Updates are atomic
   A/B swaps via `systemd-sysupdate` with automatic fallback.
@@ -12,9 +34,13 @@ An immutable, micro-isolated Linux OS with a Mac-like app model.
   own cloud-hypervisor micro-VM (Tier 2). Their only way to reach the camera,
   microphone, files, location or clipboard is the **permission broker**, which
   asks the user, Android-style.
-* **Ingestion.** `iliada-ingest` turns upstream packages (`.deb` today) into
-  `.app` bundles: dependency resolution, provenance, and an optional AI advisor
-  whose suggestions are always verified mechanically.
+* **Package Translator.** `iliada-ingest` turns upstream packages (`.deb`
+  today) into `.app` bundles. It resolves dependencies, records provenance,
+  and has an optional **AI library resolver** whose suggestions are always
+  verified mechanically.
+* **Desktop.** COSMIC (Rust, Wayland), extended with Iliada's own shell
+  pieces: an Applications browser, trusted permission prompts, and Privacy
+  settings.
 
 Status: **Phase 1** (architecture + proofs of concept). See
 [docs/architecture.md](docs/architecture.md).
@@ -64,8 +90,17 @@ nix run .#nixosConfigurations.dev-vm-x86_64.config.system.build.vm
 nix build .#nixosConfigurations.appliance-x86_64.config.system.build.image
 ```
 
-Optional AI advisor for ingestion: `cargo run -p iliada-ingest --features claude
--- run <src> --advisor claude` with `ANTHROPIC_API_KEY` set.
+Optional AI library resolver (Anthropic API): `cargo run -p iliada-ingest
+--features ai -- run <src> --resolver ai` with `ANTHROPIC_API_KEY` set. The key
+belongs to whoever runs package translation (a build service or a developer).
+End-user machines receive finished bundles and need no key.
+
+## Roadmap
+
+See [docs/architecture.md §9](docs/architecture.md#9-roadmap). Next up: the
+first app booted in its own micro-VM, the COSMIC desktop VM, and the trusted
+permission prompt. Further out: an **on-device assistant** that helps users
+with their system, under strict rules about what it may do.
 
 ## License
 

@@ -159,7 +159,7 @@ mod tests {
                 soname: "libc.so.6".into(),
                 status: ResolutionStatus::Runtime,
                 package: None,
-                advisor: None,
+                suggested_by: None,
             }],
         };
         Bundle::write_manifests(&layout, &info, &Permissions::default(), Some(&prov)).unwrap();

@@ -14,8 +14,8 @@ pub struct LibCandidate {
     /// Absolute path to the real file in the staging area.
     pub path: PathBuf,
     pub needed: Vec<String>,
-    /// Set when the package was proposed by an advisor.
-    pub advised_by: Option<String>,
+    /// Set when the package was suggested by a resolver (naming rules / AI).
+    pub suggested_by: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -42,11 +42,11 @@ pub fn compute_closure(
         if !seen.insert(soname.clone()) {
             continue;
         }
-        let record = |status, package: Option<&str>, advisor: Option<&str>| LibraryRecord {
+        let record = |status, package: Option<&str>, suggested_by: Option<&str>| LibraryRecord {
             soname: soname.clone(),
             status,
             package: package.map(str::to_owned),
-            advisor: advisor.map(str::to_owned),
+            suggested_by: suggested_by.map(str::to_owned),
         };
         if provided.contains(&soname) {
             out.records.push(record(ResolutionStatus::Provided, None, None));
@@ -54,8 +54,8 @@ pub fn compute_closure(
         } else if runtime.provides_soname(&soname) {
             out.records.push(record(ResolutionStatus::Runtime, None, None));
         } else if let Some(c) = available.get(&soname) {
-            let status = if c.advised_by.is_some() { ResolutionStatus::Advised } else { ResolutionStatus::Bundled };
-            out.records.push(record(status, Some(&c.package), c.advised_by.as_deref()));
+            let status = if c.suggested_by.is_some() { ResolutionStatus::Suggested } else { ResolutionStatus::Bundled };
+            out.records.push(record(status, Some(&c.package), c.suggested_by.as_deref()));
             out.bundle.push(soname.clone());
             queue.extend(c.needed.iter().cloned());
         } else {
@@ -73,12 +73,12 @@ pub fn compute_closure(
 mod tests {
     use super::*;
 
-    fn cand(pkg: &str, needed: &[&str], advised: Option<&str>) -> LibCandidate {
+    fn cand(pkg: &str, needed: &[&str], suggested: Option<&str>) -> LibCandidate {
         LibCandidate {
             package: pkg.into(),
             path: PathBuf::from("/x"),
             needed: needed.iter().map(|s| s.to_string()).collect(),
-            advised_by: advised.map(Into::into),
+            suggested_by: suggested.map(Into::into),
         }
     }
 
@@ -93,7 +93,7 @@ mod tests {
         assert_eq!(c.bundle, ["libjq.so.1", "libonig.so.5"]);
         assert!(c.unresolved.is_empty());
         let onig = c.records.iter().find(|r| r.soname == "libonig.so.5").unwrap();
-        assert_eq!(onig.status, ResolutionStatus::Advised);
+        assert_eq!(onig.status, ResolutionStatus::Suggested);
         assert_eq!(c.records.iter().find(|r| r.soname == "libm.so.6").unwrap().status, ResolutionStatus::Runtime);
     }
 

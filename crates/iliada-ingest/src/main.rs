@@ -4,12 +4,16 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use iliada_bundle::{Bundle, IsolationTier, ResolutionStatus};
-use iliada_ingest::advisor::{Advisor, RuleAdvisor};
 use iliada_ingest::pipeline::default_cache_dir;
+use iliada_ingest::resolvers::{LibraryResolver, NamingRules};
 use iliada_ingest::{IngestConfig, Ingestor, Source, serve};
 
 #[derive(Parser, Debug)]
-#[command(name = "iliada-ingest", version, about = "Turn upstream packages into Iliada .app bundles")]
+#[command(
+    name = "iliada-ingest",
+    version,
+    about = "Iliada Package Translator: turn upstream packages into .app bundles"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -52,8 +56,9 @@ struct Opts {
     /// Debian architecture (default: the package's own, else this host's).
     #[arg(long)]
     arch: Option<String>,
-    #[arg(long, value_enum, default_value_t = AdvisorChoice::Rules)]
-    advisor: AdvisorChoice,
+    /// How to resolve libraries the package index walk could not find.
+    #[arg(long, value_enum, default_value_t = ResolverChoice::Rules)]
+    resolver: ResolverChoice,
     #[arg(long, value_enum, default_value_t = Tier::MicroVm)]
     isolation: Tier,
     /// Follow dependencies into non-library packages too.
@@ -70,11 +75,12 @@ struct Opts {
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
-enum AdvisorChoice {
+enum ResolverChoice {
     None,
     Rules,
-    /// Rules first, then Claude for what is left (needs the `claude` feature and ANTHROPIC_API_KEY).
-    Claude,
+    /// Naming rules first, then the AI library resolver for what is left
+    /// (needs the `ai` cargo feature and ANTHROPIC_API_KEY).
+    Ai,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -105,22 +111,22 @@ impl Opts {
         }
     }
 
-    fn advisors(&self) -> Result<Vec<Box<dyn Advisor>>> {
-        let mut v: Vec<Box<dyn Advisor>> = Vec::new();
-        if matches!(self.advisor, AdvisorChoice::Rules | AdvisorChoice::Claude) {
-            v.push(Box::new(RuleAdvisor));
+    fn resolvers(&self) -> Result<Vec<Box<dyn LibraryResolver>>> {
+        let mut v: Vec<Box<dyn LibraryResolver>> = Vec::new();
+        if matches!(self.resolver, ResolverChoice::Rules | ResolverChoice::Ai) {
+            v.push(Box::new(NamingRules));
         }
-        if matches!(self.advisor, AdvisorChoice::Claude) {
-            #[cfg(feature = "claude")]
+        if matches!(self.resolver, ResolverChoice::Ai) {
+            #[cfg(feature = "ai")]
             {
                 let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(300)).build()?;
-                match iliada_ingest::advisor::ClaudeAdvisor::from_env(client) {
+                match iliada_ingest::resolvers::AiLibraryResolver::from_env(client) {
                     Some(a) => v.push(Box::new(a)),
-                    None => anyhow::bail!("--advisor claude needs ANTHROPIC_API_KEY to be set"),
+                    None => anyhow::bail!("--resolver ai needs ANTHROPIC_API_KEY to be set"),
                 }
             }
-            #[cfg(not(feature = "claude"))]
-            anyhow::bail!("this build has no Claude advisor; rebuild with `--features claude`");
+            #[cfg(not(feature = "ai"))]
+            anyhow::bail!("this build has no AI library resolver; rebuild with `--features ai`");
         }
         Ok(v)
     }
@@ -134,7 +140,7 @@ async fn main() -> Result<()> {
         .init();
     match Cli::parse().cmd {
         Cmd::Run { source, opts, exec } => {
-            let ing = Ingestor::new(opts.config(exec, false), opts.advisors()?)?;
+            let ing = Ingestor::new(opts.config(exec, false), opts.resolvers()?)?;
             let r = ing.ingest(&Source::parse(&source)).await?;
             println!("bundle      {}", r.bundle.display());
             println!("app id      {}", r.app_id);
@@ -144,7 +150,7 @@ async fn main() -> Result<()> {
             println!("packages    {}", r.packages.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", "));
             println!("libraries");
             for l in &r.libraries {
-                let via = match (&l.package, &l.advisor) {
+                let via = match (&l.package, &l.suggested_by) {
                     (Some(p), Some(a)) => format!("{p} (suggested by {a}, verified)"),
                     (Some(p), None) => p.clone(),
                     _ => String::new(),
@@ -161,7 +167,7 @@ async fn main() -> Result<()> {
         }
         Cmd::Serve { watchlist, opts } => {
             let list = serve::Watchlist::load(&watchlist)?;
-            let ing = Arc::new(Ingestor::new(opts.config(None, true), opts.advisors()?)?);
+            let ing = Arc::new(Ingestor::new(opts.config(None, true), opts.resolvers()?)?);
             serve::serve(ing, list).await?;
         }
         Cmd::Inspect { bundle } => {

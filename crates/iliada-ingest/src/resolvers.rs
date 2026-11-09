@@ -1,6 +1,8 @@
-//! Advisors propose Debian packages for sonames the index walk could not satisfy.
+//! Library resolvers propose Debian packages for sonames the index walk
+//! could not satisfy: [`NamingRules`] (Debian policy heuristics) and, with
+//! the `ai` feature, the [`AiLibraryResolver`].
 //!
-//! An advisor's output is a *hypothesis*. The pipeline only accepts a
+//! A resolver's output is a *hypothesis*. The pipeline only accepts a
 //! suggestion after fetching the named package (SHA-256 checked against the
 //! index) and confirming that it really ships a shared object with that
 //! DT_SONAME. A wrong or malicious suggestion can therefore at worst cause an
@@ -10,7 +12,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 #[derive(Debug, Clone)]
-pub struct AdvisorContext {
+pub struct ResolveContext {
     pub package: String,
     pub version: String,
     pub arch: String,
@@ -27,9 +29,9 @@ pub struct Suggestion {
 }
 
 #[async_trait]
-pub trait Advisor: Send + Sync + std::fmt::Debug {
+pub trait LibraryResolver: Send + Sync + std::fmt::Debug {
     fn name(&self) -> &str;
-    async fn suggest(&self, ctx: &AdvisorContext) -> Result<Vec<Suggestion>>;
+    async fn suggest(&self, ctx: &ResolveContext) -> Result<Vec<Suggestion>>;
 }
 
 /// Debian Policy §8.1 naming heuristics: `libfoo.so.5` usually lives in
@@ -37,7 +39,7 @@ pub trait Advisor: Send + Sync + std::fmt::Debug {
 /// (`libfoo2.so.0` → `libfoo2-0`); the 2024 64-bit time_t transition appended
 /// `t64` to many names.
 #[derive(Debug, Default)]
-pub struct RuleAdvisor;
+pub struct NamingRules;
 
 /// Well-known libraries whose packages break the naming convention.
 const EXCEPTIONS: &[(&str, &[&str])] = &[
@@ -51,7 +53,7 @@ const EXCEPTIONS: &[(&str, &[&str])] = &[
     ("libSDL2-2.0.so.0", &["libsdl2-2.0-0"]),
 ];
 
-impl RuleAdvisor {
+impl NamingRules {
     pub fn candidates(soname: &str) -> Vec<String> {
         if let Some((_, pkgs)) = EXCEPTIONS.iter().find(|(s, _)| *s == soname) {
             return pkgs.iter().map(|p| (*p).to_owned()).collect();
@@ -78,11 +80,11 @@ impl RuleAdvisor {
 }
 
 #[async_trait]
-impl Advisor for RuleAdvisor {
+impl LibraryResolver for NamingRules {
     fn name(&self) -> &str {
-        "rules"
+        "naming-rules"
     }
-    async fn suggest(&self, ctx: &AdvisorContext) -> Result<Vec<Suggestion>> {
+    async fn suggest(&self, ctx: &ResolveContext) -> Result<Vec<Suggestion>> {
         Ok(ctx
             .unresolved
             .iter()
@@ -110,23 +112,25 @@ pub fn plausible_soname(s: &str) -> bool {
     s.len() <= 128 && s.contains(".so") && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b))
 }
 
-#[cfg(feature = "claude")]
-pub use claude::ClaudeAdvisor;
+#[cfg(feature = "ai")]
+pub use ai::AiLibraryResolver;
 
-#[cfg(feature = "claude")]
-mod claude {
+#[cfg(feature = "ai")]
+mod ai {
     use super::*;
     use anyhow::{Context, bail};
     use serde::Deserialize;
     use serde_json::json;
 
-    /// Asks Claude for package suggestions using structured JSON output.
+    /// The AI library resolver: asks a model (Claude, via the Anthropic API)
+    /// which package ships each unresolved soname, using structured JSON output.
     #[derive(Debug)]
-    pub struct ClaudeAdvisor {
+    pub struct AiLibraryResolver {
         client: reqwest::Client,
         api_key: String,
         model: String,
         base_url: String,
+        label: String,
     }
 
     #[derive(Deserialize)]
@@ -140,26 +144,28 @@ mod claude {
         rationale: String,
     }
 
-    impl ClaudeAdvisor {
+    impl AiLibraryResolver {
         /// `None` when `ANTHROPIC_API_KEY` is not set.
         pub fn from_env(client: reqwest::Client) -> Option<Self> {
             let api_key = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty())?;
+            let model = std::env::var("ILIADA_AI_MODEL").unwrap_or_else(|_| "claude-opus-5-5".into());
             Some(Self {
                 client,
                 api_key,
-                model: std::env::var("ILIADA_ADVISOR_MODEL").unwrap_or_else(|_| "claude-opus-5-5".into()),
+                label: format!("ai ({model})"),
+                model,
                 base_url: std::env::var("ANTHROPIC_BASE_URL").unwrap_or_else(|_| "https://api.anthropic.com".into()),
             })
         }
     }
 
     #[async_trait]
-    impl Advisor for ClaudeAdvisor {
+    impl LibraryResolver for AiLibraryResolver {
         fn name(&self) -> &str {
-            "claude"
+            &self.label
         }
 
-        async fn suggest(&self, ctx: &AdvisorContext) -> Result<Vec<Suggestion>> {
+        async fn suggest(&self, ctx: &ResolveContext) -> Result<Vec<Suggestion>> {
             let sonames: Vec<&str> =
                 ctx.unresolved.iter().map(String::as_str).filter(|s| plausible_soname(s)).collect();
             if sonames.is_empty() {
@@ -231,10 +237,10 @@ mod claude {
             }
             match value["stop_reason"].as_str() {
                 Some("refusal") => {
-                    tracing::warn!("Claude declined the advisor request; continuing without it");
+                    tracing::warn!("the model declined the request; continuing without AI suggestions");
                     return Ok(vec![]);
                 }
-                Some("max_tokens") => bail!("Claude advisor hit max_tokens before finishing"),
+                Some("max_tokens") => bail!("AI library resolver hit max_tokens before finishing"),
                 _ => {}
             }
             let text: String = value["content"]
@@ -244,7 +250,8 @@ mod claude {
                 .filter(|b| b["type"] == "text")
                 .filter_map(|b| b["text"].as_str())
                 .collect();
-            let answer: Answer = serde_json::from_str(&text).context("Claude advisor returned non-conforming JSON")?;
+            let answer: Answer =
+                serde_json::from_str(&text).context("AI library resolver returned non-conforming JSON")?;
             Ok(answer
                 .suggestions
                 .into_iter()
@@ -261,10 +268,10 @@ mod tests {
 
     #[test]
     fn naming_heuristics() {
-        assert_eq!(RuleAdvisor::candidates("libonig.so.5"), ["libonig5t64", "libonig5", "libonig-5t64", "libonig-5"]);
-        assert_eq!(RuleAdvisor::candidates("libgtk-3.so.0"), ["libgtk-3-0t64", "libgtk-3-0"]);
-        assert!(RuleAdvisor::candidates("notalib").is_empty());
-        assert_eq!(RuleAdvisor::candidates("libz.so.1"), ["zlib1g"]);
+        assert_eq!(NamingRules::candidates("libonig.so.5"), ["libonig5t64", "libonig5", "libonig-5t64", "libonig-5"]);
+        assert_eq!(NamingRules::candidates("libgtk-3.so.0"), ["libgtk-3-0t64", "libgtk-3-0"]);
+        assert!(NamingRules::candidates("notalib").is_empty());
+        assert_eq!(NamingRules::candidates("libz.so.1"), ["zlib1g"]);
     }
 
     #[test]
