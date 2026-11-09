@@ -38,6 +38,50 @@ fn value(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).collect()
 }
 
+/// Fields copied from the app's own desktop entry (shipped in `Resources/`).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Upstream {
+    pub comment: Option<String>,
+    pub generic_name: Option<String>,
+    pub keywords: Option<String>,
+    /// The Wayland app id / X11 class its windows use. Lets the desktop
+    /// connect a running window to this entry (icon, dock pinning).
+    pub wm_class: Option<String>,
+}
+
+pub fn upstream_entry(b: &Bundle) -> Upstream {
+    let Some(file) = fs::read_dir(b.layout.resources())
+        .ok()
+        .and_then(|rd| rd.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "desktop")))
+    else {
+        return Upstream::default();
+    };
+    let mut u = Upstream {
+        // GTK/Qt apps use the desktop file id as their app id by convention.
+        wm_class: file.file_stem().map(|s| s.to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+    let text = fs::read_to_string(&file).unwrap_or_default();
+    let mut main = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            main = line == "[Desktop Entry]";
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=').filter(|_| main) else { continue };
+        let v = Some(value(v.trim()));
+        match k.trim() {
+            "Comment" => u.comment = v,
+            "GenericName" => u.generic_name = v,
+            "Keywords" => u.keywords = v,
+            "StartupWMClass" => u.wm_class = v,
+            _ => {}
+        }
+    }
+    u
+}
+
 /// Is this a GUI app that belongs in the launcher? Command-line tools
 /// (no desktop entry, no categories) are not exported.
 pub fn is_gui(b: &Bundle) -> bool {
@@ -59,6 +103,17 @@ pub fn desktop_entry(b: &Bundle, iliada_run: &Path) -> String {
         let p = b.layout.contents().join(icon);
         if p.is_file() {
             out += &format!("Icon={}\n", value(&p.display().to_string()));
+        }
+    }
+    let up = upstream_entry(b);
+    for (key, v) in [
+        ("Comment", &up.comment),
+        ("GenericName", &up.generic_name),
+        ("Keywords", &up.keywords),
+        ("StartupWMClass", &up.wm_class),
+    ] {
+        if let Some(v) = v {
+            out += &format!("{key}={v}\n");
         }
     }
     if !b.info.categories.is_empty() {
@@ -126,7 +181,11 @@ mod tests {
         fs::write(l.executables().join("x"), "#!/bin/sh\n").unwrap();
         fs::write(l.resources().join("icon.svg"), "<svg/>").unwrap();
         if gui {
-            fs::write(l.resources().join("x.desktop"), "[Desktop Entry]\n").unwrap();
+            fs::write(
+                l.resources().join("org.gnome.Calculator.desktop"),
+                "[Desktop Entry]\nName=Calculator\nComment=Perform arithmetic\nKeywords=math;sum;\n[Desktop Action x]\nComment=ignored\n",
+            )
+            .unwrap();
         }
         let info = Info {
             id: AppId::new(id).unwrap(),
@@ -158,6 +217,9 @@ mod tests {
         let text = fs::read_to_string(export.join("applications/iliada-org.debian.gnome-calculator.desktop")).unwrap();
         assert!(text.contains(&format!("Exec=\"/run/current-system/sw/bin/iliada-run\" \"{}\"", calc.display())));
         assert!(text.contains("Categories=Utility;"));
+        assert!(text.contains("Comment=Perform arithmetic\n"), "only [Desktop Entry] keys are copied");
+        assert!(text.contains("Keywords=math;sum;"));
+        assert!(text.contains("StartupWMClass=org.gnome.Calculator"), "window ↔ entry matching");
         assert!(text.contains("Icon=") && text.contains("icon.svg"));
 
         // Idempotent.
