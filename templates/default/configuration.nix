@@ -1,8 +1,9 @@
 # ┌─────────────────────────────────────────────────────────────────────┐
 # │ Iliada system configuration                                         │
 # │                                                                     │
-# │ Everything about this computer is declared here. Apply changes with │
-# │   sudo nixos-rebuild switch --flake /etc/iliada#iliada              │
+# │ Everything about this computer is declared here. Most changes are   │
+# │ made in Iliada Settings; after editing this file, apply it with     │
+# │   iliada system apply                                               │
 # │ Every switch is atomic; the boot menu keeps previous versions, so   │
 # │ a bad change is undone by rebooting into the one before it.         │
 # └─────────────────────────────────────────────────────────────────────┘
@@ -20,14 +21,15 @@
     description = "Iliada User";
     # wheel: may administer the system · iliada-apps: may install apps
     extraGroups = [ "wheel" "iliada-apps" "networkmanager" ];
-    initialPassword = "iliada"; # change it after first login with `passwd`
+    initialPassword = "iliada"; # the installer replaces this with your password
   };
 
   # ── Iliada ──────────────────────────────────────────────────────────
   iliada = {
     # Command-line tools and services (SSH server, printing) live in
-    # settings.toml; change them with `iliada tool add vim`,
-    # `iliada service enable ssh`, or by editing the file and `iliada apply`.
+    # settings.toml; change them in Iliada Settings, with `iliada tool add
+    # vim` / `iliada service enable ssh`, or by editing the file and
+    # running `iliada system apply`.
     settingsFile = ./settings.toml;
 
     # The COSMIC desktop, plus networking, sound, bluetooth and firmware.

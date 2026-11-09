@@ -1,5 +1,5 @@
 # Your Iliada system. Edit configuration.nix, then apply it with:
-#   sudo nixos-rebuild switch --flake /etc/iliada#iliada
+#   iliada system apply
 {
   description = "My Iliada system";
 
