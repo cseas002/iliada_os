@@ -128,6 +128,9 @@ struct DepState {
     fetched: BTreeMap<String, PackageRecord>,
     /// Arch-independent data packages (`*-common`, `*-data`) whose files are merged into Root.
     data: BTreeSet<String>,
+    /// Sonames needed by plugin modules (gdk-pixbuf loaders, GIO/GTK modules…)
+    /// that live in `usr/lib/<triplet>/<dir>/` of each package.
+    plugin_needed: BTreeMap<String, BTreeSet<String>>,
     available: BTreeMap<String, LibCandidate>,
     skipped: BTreeSet<String>,
     missing: BTreeSet<String>,
@@ -261,6 +264,25 @@ impl Ingestor {
             )
             .await?;
         }
+        // Plugin modules of the packages in use need their own libraries too.
+        let in_use = |c: &Closure| -> BTreeSet<String> {
+            c.records.iter().filter_map(|r| r.package.clone()).chain(deps.data.iter().cloned()).collect()
+        };
+        let mut roots = roots;
+        loop {
+            let extra: BTreeSet<String> = in_use(&closure)
+                .iter()
+                .filter_map(|p| deps.plugin_needed.get(p))
+                .flatten()
+                .filter(|s| !roots.contains(*s))
+                .cloned()
+                .collect();
+            if extra.is_empty() {
+                break;
+            }
+            roots.extend(extra);
+            closure = compute_closure(&roots, &provided, &provided_needed, &self.runtime, &deps.available);
+        }
         for s in &closure.unresolved {
             tracing::warn!(soname = %s, "unresolved shared library; the app may fail to start");
         }
@@ -278,7 +300,13 @@ impl Ingestor {
         let mut share_from: Vec<&String> = deps.data.iter().collect();
         share_from.extend(used.iter());
         for name in share_from {
-            merge_share(&staging.path().join("deps").join(name).join("usr/share"), &root.join("usr/share"))?;
+            let dep = staging.path().join("deps").join(name);
+            merge_share(&dep.join("usr/share"), &root.join("usr/share"))?;
+            // Plugin directories (gdk-pixbuf loaders, GIO and GTK modules, …) are
+            // loaded from their compiled-in paths, so they keep their place in Root.
+            if let Some(t) = triplet {
+                merge_subdirs(&dep.join("usr/lib").join(t), &root.join("usr/lib").join(t))?;
+            }
         }
         let schemas = compile_schemas(staging.path(), &root).await?;
 
@@ -460,6 +488,11 @@ impl Ingestor {
                 tokio::task::spawn_blocking(move || scan_tree(&d)).await??
             };
             let suggested = if is_root { suggested_by.map(str::to_owned) } else { None };
+            let plugins: BTreeSet<String> =
+                objs.iter().filter(|o| is_plugin_path(&o.rel_path)).flat_map(|o| o.needed.iter().cloned()).collect();
+            if !plugins.is_empty() {
+                st.plugin_needed.insert(entry.name.clone(), plugins);
+            }
             for o in objs.into_iter().filter(|o| o.is_shared_lib) {
                 if let Some(soname) = o.soname.clone() {
                     st.available.entry(soname).or_insert(LibCandidate {
@@ -514,6 +547,29 @@ fn make_group_writable(path: &Path) -> Result<()> {
 /// Debian's convention for architecture-independent support data.
 fn is_data_package(name: &str) -> bool {
     name.ends_with("-common") || name.ends_with("-data") || name == "gsettings-desktop-schemas"
+}
+
+/// Is this ELF a plugin module (`usr/lib/<triplet>/<dir>/…`) rather than a
+/// library on the loader path?
+fn is_plugin_path(rel: &Path) -> bool {
+    let c: Vec<_> = rel.components().collect();
+    c.len() >= 5
+        && c[0].as_os_str() == "usr"
+        && c[1].as_os_str() == "lib"
+        && c[2].as_os_str().to_string_lossy().ends_with("-linux-gnu")
+}
+
+/// Copy only the subdirectories of `src` into `dst` (plain files at the top
+/// level are shared libraries, which go to Contents/Libraries instead).
+fn merge_subdirs(src: &Path, dst: &Path) -> Result<()> {
+    let Ok(rd) = fs::read_dir(src) else { return Ok(()) };
+    for e in rd.flatten() {
+        let is_dir = fs::symlink_metadata(e.path()).is_ok_and(|m| m.is_dir());
+        if is_dir {
+            copy_no_overwrite(&e.path(), &dst.join(e.file_name()))?;
+        }
+    }
+    Ok(())
 }
 
 /// Directories under usr/share that are documentation, not runtime data.
@@ -667,6 +723,16 @@ fn copy_resources(layout: &BundleLayout, root: &Path, desktop: Option<&DesktopEn
 mod tests {
     use super::*;
     use crate::deb::tests::build_deb;
+
+    #[test]
+    fn plugin_paths() {
+        assert!(is_plugin_path(Path::new(
+            "usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-png.so"
+        )));
+        assert!(is_plugin_path(Path::new("usr/lib/aarch64-linux-gnu/gio/modules/libdconfsettings.so")));
+        assert!(!is_plugin_path(Path::new("usr/lib/x86_64-linux-gnu/libgtk-3.so.0")));
+        assert!(!is_plugin_path(Path::new("usr/bin/gnome-2048")));
+    }
 
     #[test]
     fn source_parsing() {

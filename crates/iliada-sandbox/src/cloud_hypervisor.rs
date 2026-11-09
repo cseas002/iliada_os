@@ -266,6 +266,7 @@ mod tests {
             data_dir: "/var/lib/iliada/apps/org.debian.jq".into(),
             network,
             display: None,
+            env: vec![],
             vcpus: 1,
             memory_mib: 512,
             args: vec![],

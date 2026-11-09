@@ -50,6 +50,8 @@ pub struct SandboxSpec {
     pub network: NetworkPolicy,
     /// Host Wayland socket to give the app a window connection (GUI apps).
     pub display: Option<PathBuf>,
+    /// Extra environment for the app (set by sandboxed triggers).
+    pub env: Vec<(String, String)>,
     pub vcpus: u8,
     pub memory_mib: u32,
     pub args: Vec<String>,
@@ -76,6 +78,7 @@ impl SandboxSpec {
             data_dir,
             network,
             display: None,
+            env: vec![],
             vcpus: host.default_vcpus,
             memory_mib: host.default_memory_mib,
             args: vec![],

@@ -67,6 +67,14 @@ pub fn host_triplet() -> &'static str {
 
 /// Build the full bubblewrap argument vector (everything after `bwrap`).
 pub fn bwrap_args(spec: &SandboxSpec, host: &HostIsolationConfig, desktop: &HostDesktop) -> Vec<String> {
+    let mut a = bwrap_prefix(spec, host, desktop);
+    a.push(format!("/{}", spec.entry));
+    a.extend(spec.args.iter().cloned());
+    a
+}
+
+/// Everything up to and including `--`; the program and its arguments follow.
+fn bwrap_prefix(spec: &SandboxSpec, host: &HostIsolationConfig, desktop: &HostDesktop) -> Vec<String> {
     let contents = spec.bundle.join("Contents");
     let root = contents.join("Root");
     let p = |x: &Path| x.display().to_string();
@@ -137,10 +145,52 @@ pub fn bwrap_args(spec: &SandboxSpec, host: &HostIsolationConfig, desktop: &Host
     for (k, v) in env {
         push(&["--setenv", k, v]);
     }
+    for (k, v) in &spec.env {
+        push(&["--setenv", k, v]);
+    }
     push(&["--"]);
-    a.push(format!("/{}", spec.entry));
-    a.extend(spec.args.iter().cloned());
     a
+}
+
+/// Sandboxed triggers.
+///
+/// Debian runs some generators at install time, as root (`postinst`
+/// triggers). Iliada never runs app code outside the app's sandbox, so these
+/// run *inside* it, on first launch and whenever the bundle changes. Their
+/// output lives in the app's private data directory.
+///
+/// Currently: `gdk-pixbuf-query-loaders` (GTK 3 needs it to load any image,
+/// including its own icons).
+pub fn run_triggers(spec: &mut SandboxSpec, host: &HostIsolationConfig, desktop: &HostDesktop) -> Result<()> {
+    let triplet = host_triplet();
+    let rel = format!("usr/lib/{triplet}/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders");
+    let tool = spec.bundle.join("Contents/Root").join(&rel);
+    if !tool.is_file() {
+        return Ok(());
+    }
+    let cache_dir = spec.data_dir.join(".cache/iliada");
+    let cache = cache_dir.join("gdk-pixbuf-loaders.cache");
+    let stamp = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    let bundle_time = stamp(&spec.bundle.join("Contents/Info.toml"));
+    let fresh = matches!((stamp(&cache), bundle_time), (Some(c), Some(b)) if c >= b);
+    if !fresh {
+        std::fs::create_dir_all(&cache_dir)?;
+        let mut args = bwrap_prefix(spec, host, desktop);
+        args.push(format!("/{rel}"));
+        let out = std::process::Command::new(&host.bwrap)
+            .args(&args)
+            .stdin(Stdio::null())
+            .output()
+            .context("running gdk-pixbuf-query-loaders in the sandbox")?;
+        if out.status.success() && !out.stdout.is_empty() {
+            std::fs::write(&cache, &out.stdout)?;
+        } else {
+            tracing::warn!(app = %spec.app_id, "gdk-pixbuf-query-loaders failed; images may not load");
+            return Ok(());
+        }
+    }
+    spec.env.push(("GDK_PIXBUF_MODULE_FILE".into(), "/home/app/.cache/iliada/gdk-pixbuf-loaders.cache".into()));
+    Ok(())
 }
 
 fn top_level_entries(dir: &Path) -> Vec<String> {
@@ -177,8 +227,10 @@ impl IsolationBackend for NamespaceBackend {
     async fn launch(&self, spec: &SandboxSpec) -> Result<Box<dyn SandboxHandle>> {
         anyhow::ensure!(cfg!(target_os = "linux"), "namespace sandboxes need Linux");
         tokio::fs::create_dir_all(&spec.data_dir).await?;
+        let mut spec = spec.clone();
+        run_triggers(&mut spec, &self.host, &self.desktop)?;
         let child = Command::new(&self.host.bwrap)
-            .args(bwrap_args(spec, &self.host, &self.desktop))
+            .args(bwrap_args(&spec, &self.host, &self.desktop))
             .stdin(Stdio::inherit())
             .kill_on_drop(true)
             .spawn()
@@ -217,6 +269,7 @@ mod tests {
             data_dir: "/home/alice/.local/share/iliada/apps/org.debian.jq".into(),
             network,
             display: display.then(|| PathBuf::from("/run/user/1000/wayland-1")),
+            env: vec![],
             vcpus: 1,
             memory_mib: 512,
             args: vec!["--version".into()],
