@@ -72,6 +72,15 @@ in
             "com.system76.CosmicSettings",
         ]
         EOF
+        # Alt+Space opens the Assistant from anywhere (Super+Space stays the
+        # keyboard-layout switch).
+        keys=$out/share/cosmic/com.system76.CosmicSettings.Shortcuts/v1
+        mkdir -p $keys
+        cat > $keys/custom <<'EOF'
+        {
+            (modifiers: [Alt], key: "space"): Spawn("iliada-assistant-app"),
+        }
+        EOF
       ''))
     ];
     services.displayManager.cosmic-greeter.enable = true;

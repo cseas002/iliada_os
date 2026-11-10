@@ -1,21 +1,47 @@
 //! Assistant: ask Iliada to do things ("install Firefox and turn on SSH").
 //!
-//! A chat window over `iliada-assistant`. In Ask mode each action appears
-//! as a card with Allow / Don't Allow; in Auto mode actions run and are
-//! listed as they happen.
+//! A quick panel over `iliada-assistant`, opened from anywhere with
+//! Alt+Space (or from Applications): a large "Ask Iliada…" field, the
+//! conversation below it, Esc to close. In Ask mode each action appears as
+//! a card with Allow / Don't Allow; in Auto mode actions run and are listed
+//! as they happen. Only one panel runs: opening it again brings it forward.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use cosmic::app::{Settings, Task};
-use cosmic::iced::{Alignment, Length, Size};
+use cosmic::iced::keyboard::{Key, key::Named};
+use cosmic::iced::widget::scrollable::{RelativeOffset, snap_to};
+use cosmic::iced::{Alignment, Length, Size, Subscription};
 use cosmic::widget;
 use cosmic::{ApplicationExt, Core, Element, executor};
 use iliada_system::client;
 use iliada_system::protocol::{AssistantMode, AssistantSettings};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
+/// Things people commonly ask, shown before the first question.
+const SUGGESTIONS: [&str; 5] = [
+    "Switch to dark mode",
+    "Install Firefox",
+    "Set the volume to 40%",
+    "What's taking up space on my disk?",
+    "Turn on the SSH server",
+];
+
+/// The running panel listens here; a second start just asks it to come forward.
+fn socket_path() -> Option<PathBuf> {
+    Some(PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?).join("iliada-assistant.sock"))
+}
+
 fn main() -> cosmic::iced::Result {
-    let settings = Settings::default().size(Size::new(720.0, 640.0));
+    if let Some(path) = socket_path() {
+        if std::os::unix::net::UnixStream::connect(&path).is_ok() {
+            // Already open: the connection itself asks it to come forward.
+            return Ok(());
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+    let settings = Settings::default().size(Size::new(760.0, 560.0));
     cosmic::app::run::<App>(settings, ())
 }
 
@@ -35,12 +61,17 @@ enum Message {
     Ready(Result<AssistantSettings, String>),
     Input(String),
     Send,
+    Suggest(&'static str),
     Note(String),
     Approve(String, Pending),
     Answer(bool),
     /// The answer, and what the conversation has cost so far.
     Reply(Result<String, String>, f64),
     OpenSettings,
+    /// Esc.
+    Close,
+    /// Opened again (Alt+Space): come forward.
+    Show,
 }
 
 struct App {
@@ -53,6 +84,8 @@ struct App {
     approval: Option<(String, Pending)>,
     /// What this conversation has cost (US dollars).
     spent: f64,
+    scroll: widget::Id,
+    field: widget::Id,
 }
 
 /// Bridges the assistant's callbacks to the window.
@@ -70,6 +103,22 @@ impl iliada_assistant::Frontend for Window {
     fn progress(&self, text: &str) {
         let _ = self.tx.send(Message::Note(text.to_owned()));
     }
+}
+
+/// Accepts "come forward" requests from later starts.
+fn show_requests() -> impl futures_util::Stream<Item = Message> {
+    futures_util::stream::unfold(None::<tokio::net::UnixListener>, |listener| async move {
+        let listener = match listener {
+            Some(l) => l,
+            None => match socket_path().map(tokio::net::UnixListener::bind) {
+                Some(Ok(l)) => l,
+                // No socket: never yield (a second start opens a second panel).
+                _ => std::future::pending().await,
+            },
+        };
+        let _ = listener.accept().await;
+        Some((Message::Show, Some(listener)))
+    })
 }
 
 impl App {
@@ -103,7 +152,12 @@ impl App {
                 Some((m, if done { S::Run(mpsc::unbounded_channel().1) } else { S::Run(rx) }))
             }
         });
-        cosmic::task::stream(stream)
+        Task::batch([cosmic::task::stream(stream), self.to_end()])
+    }
+
+    /// Keep the newest message in view.
+    fn to_end(&self) -> Task<Message> {
+        snap_to(self.scroll.clone(), RelativeOffset::END.into())
     }
 
     fn bubble<'a>(&'a self, line: &'a Line) -> Element<'a, Message> {
@@ -111,15 +165,38 @@ impl App {
         let (text, mine, class): (&str, bool, cosmic::theme::Container) = match line {
             Line::You(t) => (t, true, cosmic::theme::Container::Primary),
             Line::Assistant(t) => (t, false, cosmic::theme::Container::Card),
-            Line::Note(t) => return widget::text::caption(t.as_str()).into(),
+            Line::Note(t) => {
+                return widget::row::with_capacity(2)
+                    .push(widget::icon::from_name("emblem-system-symbolic").size(14).icon())
+                    .push(widget::text::caption(t.as_str()))
+                    .spacing(spacing.space_xxs)
+                    .align_y(Alignment::Center)
+                    .into();
+            }
             Line::Error(t) => (t, false, cosmic::theme::Container::Card),
         };
-        let b = widget::container(widget::text::body(text)).padding(spacing.space_s).class(class).max_width(520);
+        let b = widget::container(widget::text::body(text)).padding(spacing.space_s).class(class).max_width(560);
         let row = widget::row::with_capacity(2);
         if mine {
             row.push(widget::space::horizontal()).push(b).into()
         } else {
             row.push(b).push(widget::space::horizontal()).into()
+        }
+    }
+
+    fn status_line(&self) -> String {
+        match self.settings.as_ref().and_then(|s| s.as_ref().ok()) {
+            Some(s) => {
+                let mode = match s.effective_mode() {
+                    AssistantMode::Ask => "asks first",
+                    AssistantMode::Auto => "acts on its own",
+                };
+                let full = if s.full_access { " · full access" } else { "" };
+                let cost = if self.spent > 0.0 { format!(" · ${:.4}", self.spent) } else { String::new() };
+                let model = s.model.rsplit('/').next().unwrap_or(&s.model);
+                format!("{model} · {mode}{full}{cost}")
+            }
+            None => String::new(),
         }
     }
 }
@@ -147,8 +224,11 @@ impl cosmic::Application for App {
             busy: false,
             approval: None,
             spent: 0.0,
+            scroll: widget::Id::unique(),
+            field: widget::Id::unique(),
         };
-        app.set_header_title("Assistant".into());
+        // A panel, not a document window: no title bar.
+        app.core.window.show_headerbar = false;
         let title = match app.core.main_window_id() {
             Some(id) => app.set_window_title("Assistant".into(), id),
             None => Task::none(),
@@ -156,7 +236,19 @@ impl cosmic::Application for App {
         let load = cosmic::task::future(async {
             Message::Ready(client::status().await.map(|s| s.assistant).map_err(|e| format!("{e:#}")))
         });
-        (app, Task::batch([title, load]))
+        let focus = widget::text_input::focus(app.field.clone());
+        (app, Task::batch([title, load, focus]))
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        let keys = cosmic::iced::event::listen_with(|event, _status, _window| match event {
+            cosmic::iced::Event::Keyboard(cosmic::iced::keyboard::Event::KeyPressed {
+                key: Key::Named(Named::Escape),
+                ..
+            }) => Some(Message::Close),
+            _ => None,
+        });
+        Subscription::batch([keys, Subscription::run(show_requests)])
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -178,8 +270,27 @@ impl cosmic::Application for App {
                     return self.ask(text);
                 }
             }
-            Message::Note(n) => self.lines.push(Line::Note(n)),
-            Message::Approve(action, pending) => self.approval = Some((action, pending)),
+            Message::Suggest(text) => {
+                if !self.busy && self.assistant.is_some() {
+                    return self.ask(text.to_owned());
+                }
+            }
+            Message::Note(n) => {
+                // "✓ Install Firefox" replaces "Install Firefox…".
+                if let Some(Line::Note(last)) = self.lines.last()
+                    && let Some(action) = last.strip_suffix('…')
+                    && (n.strip_prefix("✓ ") == Some(action)
+                        || n.strip_prefix("✗ ").is_some_and(|rest| rest.starts_with(action)))
+                {
+                    self.lines.pop();
+                }
+                self.lines.push(Line::Note(n));
+                return self.to_end();
+            }
+            Message::Approve(action, pending) => {
+                self.approval = Some((action, pending));
+                return self.to_end();
+            }
             Message::Answer(allow) => {
                 if let Some((action, pending)) = self.approval.take() {
                     if let Some(tx) = pending.lock().expect("approval lock").take() {
@@ -189,6 +300,7 @@ impl cosmic::Application for App {
                         self.lines.push(Line::Note(format!("You didn't allow: {action}")));
                     }
                 }
+                return self.to_end();
             }
             Message::Reply(r, spent) => {
                 self.busy = false;
@@ -197,9 +309,27 @@ impl cosmic::Application for App {
                     Err(e) => Line::Error(e),
                 });
                 self.spent = spent;
+                return Task::batch([self.to_end(), widget::text_input::focus(self.field.clone())]);
             }
             Message::OpenSettings => {
                 let _ = std::process::Command::new("iliada-settings").spawn();
+            }
+            Message::Close => {
+                // Never in the middle of an action: it would be cut off.
+                if !self.busy {
+                    if let Some(p) = socket_path() {
+                        let _ = std::fs::remove_file(p);
+                    }
+                    std::process::exit(0);
+                }
+            }
+            Message::Show => {
+                if let Some(id) = self.core.main_window_id() {
+                    return Task::batch([
+                        cosmic::iced::window::gain_focus(id),
+                        widget::text_input::focus(self.field.clone()),
+                    ]);
+                }
             }
         }
         Task::none()
@@ -207,25 +337,34 @@ impl cosmic::Application for App {
 
     fn view(&self) -> Element<'_, Message> {
         let spacing = cosmic::theme::spacing();
-        let mut col = widget::column::with_capacity(self.lines.len() + 2).spacing(spacing.space_s);
-        let mode = match self.settings.as_ref().and_then(|s| s.as_ref().ok()) {
-            Some(s) => {
-                let mode = match s.effective_mode() {
-                    AssistantMode::Ask => "asks before every action",
-                    AssistantMode::Auto => "acts on its own",
-                };
-                let full = if s.full_access { " · full access" } else { "" };
-                let cost = if self.spent > 0.0 { format!(" · ${:.4} so far", self.spent) } else { String::new() };
-                format!("{} · {mode}{full}{cost}", s.model)
-            }
-            None => String::new(),
+        // The ask field: the Iliada helmet, then a large input.
+        let field: Element<_> = if self.assistant.is_some() {
+            widget::text_input("Ask Iliada…", &self.input)
+                .id(self.field.clone())
+                .on_input(Message::Input)
+                .on_submit(|_| Message::Send)
+                .size(20)
+                .padding([spacing.space_s, spacing.space_m])
+                .width(Length::Fill)
+                .into()
+        } else {
+            widget::button::suggested("Set up the assistant in Iliada Settings").on_press(Message::OpenSettings).into()
         };
-        col = col.push(widget::text::caption(mode));
+        let top = widget::row::with_capacity(2)
+            .push(widget::icon::from_name("iliada").size(40).icon())
+            .push(field)
+            .spacing(spacing.space_s)
+            .align_y(Alignment::Center);
+
+        let mut col = widget::column::with_capacity(self.lines.len() + 3).spacing(spacing.space_s);
         if self.lines.is_empty() && self.assistant.is_some() {
             col = col.push(widget::text::body(
-                "Ask me to install or remove apps, add command-line tools, turn on the SSH server or printing, \
-                 update apps or Iliada, back up, change what an app may use, switch to dark mode or set the volume.",
+                "Ask in your own words. I can install and remove apps, change settings, turn services on, \
+                 send email and more.",
             ));
+            let chips: Vec<Element<_>> =
+                SUGGESTIONS.iter().map(|s| widget::button::standard(*s).on_press(Message::Suggest(s)).into()).collect();
+            col = col.push(widget::flex_row(chips).row_spacing(spacing.space_xs).column_spacing(spacing.space_xs));
         }
         for l in &self.lines {
             col = col.push(self.bubble(l));
@@ -234,7 +373,7 @@ impl cosmic::Application for App {
             col = col.push(
                 widget::container(
                     widget::column::with_capacity(2)
-                        .push(widget::text::heading(format!("The assistant wants to: {action}")))
+                        .push(widget::text::heading(format!("May I? {action}")))
                         .push(
                             widget::row::with_capacity(2)
                                 .push(widget::button::standard("Don't Allow").on_press(Message::Answer(false)))
@@ -248,28 +387,26 @@ impl cosmic::Application for App {
                 .width(Length::Fill),
             );
         } else if self.busy {
-            col = col.push(widget::progress_bar::circular::Circular::new().size(20.0));
+            col = col.push(
+                widget::row::with_capacity(2)
+                    .push(widget::progress_bar::circular::Circular::new().size(18.0))
+                    .push(widget::text::caption("Working on it…"))
+                    .spacing(spacing.space_xs)
+                    .align_y(Alignment::Center),
+            );
         }
-        let input: Element<_> = if self.assistant.is_some() {
-            widget::row::with_capacity(2)
-                .push(
-                    widget::text_input("What should I do?", &self.input)
-                        .on_input(Message::Input)
-                        .on_submit(|_| Message::Send)
-                        .width(Length::Fill),
-                )
-                .push(widget::button::suggested("Send").on_press_maybe((!self.busy).then_some(Message::Send)))
-                .spacing(spacing.space_s)
-                .align_y(Alignment::Center)
-                .into()
-        } else {
-            widget::button::standard("Open Iliada Settings → Assistant").on_press(Message::OpenSettings).into()
-        };
-        widget::column::with_capacity(2)
-            .push(widget::scrollable(col).height(Length::Fill))
-            .push(input)
+
+        let footer = widget::row::with_capacity(3)
+            .push(widget::text::caption(self.status_line()))
+            .push(widget::space::horizontal())
+            .push(widget::text::caption(if self.busy { "Working…" } else { "Enter to ask · Esc to close" }));
+
+        let body = widget::column::with_capacity(3)
+            .push(top)
+            .push(widget::scrollable(col).id(self.scroll.clone()).height(Length::Fill))
+            .push(footer)
             .spacing(spacing.space_m)
-            .padding(spacing.space_m)
-            .into()
+            .padding(spacing.space_l);
+        widget::container(body).class(cosmic::theme::Container::Background).into()
     }
 }
