@@ -901,6 +901,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "iliada-assistant"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "iliada-bundle",
+ "iliada-store",
+ "iliada-system",
+ "iliada-types",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "iliada-broker"
 version = "0.1.0"
 dependencies = [
@@ -960,7 +977,9 @@ name = "iliada-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
+ "iliada-assistant",
  "iliada-store",
  "iliada-system",
  "serde_json",

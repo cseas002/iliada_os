@@ -149,6 +149,7 @@ impl Service {
                 last_error: b.last_error,
             },
             system_update: self.updates.lock().expect("updates lock").clone(),
+            assistant: settings::assistant(&doc),
         }
     }
 
@@ -206,6 +207,17 @@ impl Service {
                     return Ok(json!({ "changed": false }));
                 }
                 self.change_settings(&doc, &format!("{} {name}", if on { "Enable" } else { "Disable" }), &log).await
+            }
+            Request::SetAssistant { settings: a } => {
+                // Not a system change: written and recorded, no rebuild.
+                let mut doc = self.read_settings()?;
+                if !settings::set_assistant(&mut doc, &a)? {
+                    return Ok(json!({ "changed": false }));
+                }
+                std::fs::write(self.settings_path(), doc.to_string())?;
+                init::commit_all(&self.dir, "Assistant settings")?;
+                self.back_up_quietly().await;
+                Ok(json!({ "changed": true }))
             }
             Request::Apply => {
                 apply::rebuild(&self.dir, &log).await?;

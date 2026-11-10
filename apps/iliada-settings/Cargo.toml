@@ -17,10 +17,16 @@ path = "src/bin/iliada-setup.rs"
 name = "iliada-prompt"
 path = "src/bin/iliada-prompt.rs"
 
+[[bin]]
+name = "iliada-assistant-app"
+path = "src/bin/iliada-assistant-app.rs"
+
 [dependencies]
 iliada-system.workspace = true
 iliada-bundle.workspace = true
 iliada-types.workspace = true
+iliada-assistant.workspace = true
+async-trait = "0.1"
 tokio.workspace = true
 futures-util.workspace = true
 libcosmic.workspace = true

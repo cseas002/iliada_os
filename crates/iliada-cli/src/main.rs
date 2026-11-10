@@ -5,6 +5,8 @@
 //!   iliada service list | service enable <name> | service disable <name>
 //!   iliada system update | system apply | system status
 //!   iliada backup status | sign-in | enable <name> | now | list | restore <owner/iliada_name> | sign-out
+//!   iliada ask "install firefox and turn on ssh"      (or just `iliada ask` for a conversation)
+//!   iliada assistant status | on | off | mode ask|auto | model <id> | key
 //!
 //! Apps are `.app` bundles from the Store (no rebuild, no root). Everything
 //! else goes through the Iliada system service, which checks that you are an
@@ -58,6 +60,30 @@ enum Cmd {
         #[command(subcommand)]
         cmd: BackupCmd,
     },
+    /// Ask the assistant to do something (no text: a conversation).
+    Ask { text: Vec<String> },
+    /// The assistant's settings.
+    Assistant {
+        #[command(subcommand)]
+        cmd: AssistantCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum AssistantCmd {
+    Status,
+    On,
+    Off,
+    /// ask: every action needs your OK; auto: it acts on its own.
+    Mode {
+        mode: String,
+    },
+    /// The Claude model it uses.
+    Model {
+        model: String,
+    },
+    /// Set your API key (read from the terminal, not the command line).
+    Key,
 }
 
 #[derive(Subcommand)]
@@ -274,7 +300,94 @@ async fn main() -> Result<()> {
             eprintln!("Done.");
         }
         Cmd::Backup { cmd } => backup(cmd, v).await?,
+        Cmd::Ask { text } => ask(text.join(" ")).await?,
+        Cmd::Assistant { cmd } => assistant(cmd, v).await?,
     }
+    Ok(())
+}
+
+struct Terminal;
+
+#[async_trait::async_trait]
+impl iliada_assistant::Frontend for Terminal {
+    async fn approve(&self, action: &str) -> bool {
+        eprint!("  The assistant wants to: {action}. Allow? [y/N] ");
+        let mut line = String::new();
+        let _ = std::io::stdin().read_line(&mut line);
+        matches!(line.trim(), "y" | "Y" | "yes" | "Yes")
+    }
+    fn progress(&self, text: &str) {
+        eprintln!("  {text}");
+    }
+}
+
+async fn ask(text: String) -> Result<()> {
+    let settings = client::status().await?.assistant;
+    let mut a = iliada_assistant::Assistant::new(&settings)?;
+    if !text.trim().is_empty() {
+        println!("{}", a.send(&text, &Terminal).await?);
+        return Ok(());
+    }
+    let mode = match a.mode() {
+        iliada_system::protocol::AssistantMode::Ask => "it asks before doing anything",
+        iliada_system::protocol::AssistantMode::Auto => "it acts on its own",
+    };
+    eprintln!("Iliada assistant ({}; {mode}). An empty line ends.", settings.model);
+    loop {
+        eprint!("> ");
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line)? == 0 || line.trim().is_empty() {
+            return Ok(());
+        }
+        match a.send(line.trim(), &Terminal).await {
+            Ok(answer) => println!("{answer}\n"),
+            Err(e) => eprintln!("{e:#}\n"),
+        }
+    }
+}
+
+async fn assistant(cmd: AssistantCmd, v: bool) -> Result<()> {
+    use iliada_system::protocol::{AUTO_MODELS, AssistantMode};
+    let mut s = client::status().await?.assistant;
+    match cmd {
+        AssistantCmd::Status => {
+            let key = if iliada_assistant::api::load_key().is_some() { "set" } else { "not set" };
+            let mode = match (s.mode, s.effective_mode()) {
+                (AssistantMode::Auto, AssistantMode::Auto) => "auto (acts on its own)",
+                (AssistantMode::Auto, AssistantMode::Ask) => "ask (auto needs a stronger model)",
+                _ => "ask (every action needs your OK)",
+            };
+            println!("Assistant: {}", if s.enabled { "on" } else { "off" });
+            println!("Mode:      {mode}");
+            println!("Model:     {}", s.model);
+            println!("API key:   {key}");
+            return Ok(());
+        }
+        AssistantCmd::Key => {
+            eprint!("Anthropic API key (from console.anthropic.com): ");
+            let mut k = String::new();
+            std::io::stdin().read_line(&mut k)?;
+            anyhow::ensure!(k.trim().starts_with("sk-"), "that doesn't look like an API key");
+            iliada_assistant::api::save_key(&k)?;
+            eprintln!("Saved (only you can read it).");
+            return Ok(());
+        }
+        AssistantCmd::On => s.enabled = true,
+        AssistantCmd::Off => s.enabled = false,
+        AssistantCmd::Mode { mode } => {
+            s.mode = match mode.as_str() {
+                "ask" => AssistantMode::Ask,
+                "auto" => AssistantMode::Auto,
+                _ => anyhow::bail!("mode is \"ask\" or \"auto\""),
+            };
+            if s.mode == AssistantMode::Auto && !AUTO_MODELS.contains(&s.model.as_str()) {
+                eprintln!("Note: {} is not trusted to act on its own; it stays in ask mode.", s.model);
+            }
+        }
+        AssistantCmd::Model { model } => s.model = model,
+    }
+    system(Request::SetAssistant { settings: s }, v).await?;
+    eprintln!("Saved.");
     Ok(())
 }
 

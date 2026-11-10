@@ -11,7 +11,10 @@ use futures_util::StreamExt;
 use iliada_settings::{Progress, ago, open_url, run};
 use iliada_system::client;
 use iliada_bundle::decisions::{Decision, Decisions};
-use iliada_system::protocol::{Backup, Event, Request, Status};
+use iliada_system::protocol::{AUTO_MODELS, AssistantMode, AssistantSettings, Backup, Event, Request, Status};
+
+/// Models offered in Settings (the first is the default).
+const MODELS: [&str; 4] = ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5"];
 use iliada_types::{Capability, FileScope};
 
 fn main() -> cosmic::iced::Result {
@@ -26,6 +29,7 @@ enum Page {
     Tools,
     Services,
     Privacy,
+    Assistant,
     About,
 }
 
@@ -110,6 +114,9 @@ enum Message {
     Ask(Confirm),
     Permission(String, Capability, bool),
     ExtraIsolation(String, bool),
+    AssistantSet(AssistantSettings),
+    AssistantKey(String),
+    SaveKey,
     Confirmed,
     Cancel,
     Dismiss,
@@ -135,6 +142,8 @@ struct App {
     privacy: Vec<AppPermissions>,
     decisions: Decisions,
     extra_isolation: Vec<String>,
+    key_input: String,
+    key_set: bool,
 }
 
 fn load_status() -> Task<Message> {
@@ -170,6 +179,7 @@ fn success(request: &Request, result: &serde_json::Value) -> Option<String> {
         Request::BackupEnable { .. } | Request::BackupNow => "Backed up.".into(),
         Request::Restore { .. } => "Restored. Your apps are being installed in the background.".into(),
         Request::BackupSignOut => "Signed out. Backups are off.".into(),
+        Request::SetAssistant { .. } if changed => "Saved.".into(),
         _ => return None,
     })
 }
@@ -458,6 +468,77 @@ impl App {
         settings::view_column(items).into()
     }
 
+    fn assistant(&self, s: &Status) -> Element<'_, Message> {
+        let ok = self.can_change();
+        let a = s.assistant.clone();
+        let on = {
+            let a = a.clone();
+            ok.then(|| move |enabled| Message::AssistantSet(AssistantSettings { enabled, ..a.clone() }))
+        };
+        let main = settings::section().title("Assistant").add(
+            settings::item::builder("Use the assistant")
+                .description("Ask Iliada to do things for you in plain words, in the Assistant app. It uses Claude, from Anthropic, with your own API key.")
+                .toggler_maybe(a.enabled, on),
+        );
+        let mut items: Vec<Element<_>> = vec![main.into()];
+        if a.enabled {
+            let mode_item = |mode: AssistantMode, title: &'static str, desc: &'static str| {
+                let next = AssistantSettings { mode, ..a.clone() };
+                settings::item::builder(title).description(desc).control(widget::radio(
+                    widget::text::body(""),
+                    mode,
+                    Some(a.mode),
+                    move |_| Message::AssistantSet(next.clone()),
+                ))
+            };
+            let trusted = AUTO_MODELS.contains(&a.model.as_str());
+            let mut modes = settings::section()
+                .title("What it may do")
+                .add(mode_item(AssistantMode::Ask, "Ask me first", "It shows every action and does it only if you allow it."))
+                .add(mode_item(
+                    AssistantMode::Auto,
+                    "Act on its own",
+                    "It installs, removes and changes things without asking. Only with a model trusted for it.",
+                ));
+            if a.mode == AssistantMode::Auto && !trusted {
+                modes = modes.add(info(
+                    format!("{} isn't trusted to act on its own", a.model),
+                    Some("It will ask first until you choose Opus, Fable or Sonnet.".into()),
+                ));
+            }
+            items.push(modes.into());
+            let selected = MODELS.iter().position(|m| *m == a.model);
+            let model_a = a.clone();
+            let model = settings::section().title("Model").add(
+                settings::item::builder("Claude model")
+                    .description("Opus is the default: careful and reliable. Haiku is faster and cheaper, and always asks first.")
+                    .control(widget::dropdown(&MODELS[..], selected, move |i| {
+                        Message::AssistantSet(AssistantSettings { model: MODELS[i].to_owned(), ..model_a.clone() })
+                    })),
+            );
+            items.push(model.into());
+            let key_row = widget::row::with_capacity(2)
+                .push(
+                    widget::secure_input("sk-ant-…", self.key_input.as_str(), None, true)
+                        .on_input(Message::AssistantKey)
+                        .on_submit(|_| Message::SaveKey)
+                        .width(Length::Fill),
+                )
+                .push(widget::button::suggested("Save key").on_press(Message::SaveKey))
+                .spacing(cosmic::theme::spacing().space_xs)
+                .align_y(Alignment::Center);
+            let key = settings::section()
+                .title("API key")
+                .add(info(
+                    if self.key_set { "Your API key is saved" } else { "Add your Anthropic API key" },
+                    Some("From console.anthropic.com. Kept only for you on this computer; never backed up.".into()),
+                ))
+                .add(settings::item_row(vec![key_row.into()]));
+            items.push(key.into());
+        }
+        settings::view_column(items).into()
+    }
+
     fn about(&self, s: &Status) -> Element<'_, Message> {
         let section = settings::section()
             .title("This computer")
@@ -513,6 +594,7 @@ impl cosmic::Application for App {
             ("Command-line tools", "utilities-terminal-symbolic", Page::Tools),
             ("Services", "network-server-symbolic", Page::Services),
             ("Privacy", "security-high-symbolic", Page::Privacy),
+            ("Assistant", "user-available-symbolic", Page::Assistant),
             ("About", "help-about-symbolic", Page::About),
         ];
         for (i, (text, icon, page)) in pages.into_iter().enumerate() {
@@ -536,6 +618,8 @@ impl cosmic::Application for App {
             privacy: Vec::new(),
             decisions: Decisions::default(),
             extra_isolation: Vec::new(),
+            key_input: String::new(),
+            key_set: iliada_assistant::api::load_key().is_some(),
         };
         app.set_header_title("Iliada Settings".into());
         let title = match app.core.main_window_id() {
@@ -653,6 +737,20 @@ impl cosmic::Application for App {
             }
             Message::Backups(b) => self.backups = Some(b),
             Message::Ask(c) => self.confirm = Some(c),
+            Message::AssistantSet(a) => return self.start(Request::SetAssistant { settings: a }),
+            Message::AssistantKey(k) => self.key_input = k,
+            Message::SaveKey => {
+                let k = self.key_input.trim().to_owned();
+                if !k.starts_with("sk-") {
+                    self.error = Some("That doesn't look like an Anthropic API key (they start with sk-).".into());
+                } else if let Err(e) = iliada_assistant::api::save_key(&k) {
+                    self.error = Some(format!("Could not save the key: {e}"));
+                } else {
+                    self.key_input.clear();
+                    self.key_set = true;
+                    self.notice = Some("API key saved. Only you can read it; it is never backed up.".into());
+                }
+            }
             Message::ExtraIsolation(app, on) => {
                 self.extra_isolation.retain(|a| *a != app);
                 if on {
@@ -718,6 +816,7 @@ impl cosmic::Application for App {
                     Page::Tools => self.tools(s),
                     Page::Services => self.services(s),
                     Page::Privacy => self.privacy(),
+                    Page::Assistant => self.assistant(s),
                     Page::About => self.about(s),
                 });
                 widget::scrollable(

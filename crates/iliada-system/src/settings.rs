@@ -75,6 +75,45 @@ pub fn remove_tools(doc: &mut DocumentMut, names: &[String]) -> Vec<String> {
     removed
 }
 
+/// `[assistant]`: enabled, mode ("ask" / "auto"), model.
+pub fn assistant(doc: &DocumentMut) -> crate::protocol::AssistantSettings {
+    use crate::protocol::{AssistantMode, AssistantSettings};
+    let d = AssistantSettings::default();
+    let Some(t) = doc.get("assistant") else { return d };
+    AssistantSettings {
+        enabled: t.get("enabled").and_then(Item::as_bool).unwrap_or(d.enabled),
+        mode: match t.get("mode").and_then(Item::as_str) {
+            Some("auto") => AssistantMode::Auto,
+            _ => AssistantMode::Ask,
+        },
+        model: t.get("model").and_then(Item::as_str).map(str::to_owned).unwrap_or(d.model),
+    }
+}
+
+/// A Claude model id: letters, digits, '-' and '.'.
+pub fn valid_model(s: &str) -> bool {
+    (1..=64).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+}
+
+pub fn set_assistant(doc: &mut DocumentMut, a: &crate::protocol::AssistantSettings) -> Result<bool> {
+    if !valid_model(&a.model) {
+        bail!("{:?} is not a model name", a.model);
+    }
+    if assistant(doc) == *a {
+        return Ok(false);
+    }
+    if !doc.contains_key("assistant") {
+        doc["assistant"] = Item::Table(Table::new());
+    }
+    doc["assistant"]["enabled"] = value(a.enabled);
+    doc["assistant"]["mode"] = value(match a.mode {
+        crate::protocol::AssistantMode::Ask => "ask",
+        crate::protocol::AssistantMode::Auto => "auto",
+    });
+    doc["assistant"]["model"] = value(a.model.as_str());
+    Ok(true)
+}
+
 pub fn service(doc: &DocumentMut, name: &str) -> bool {
     doc.get("services").and_then(|s| s.get(name)).and_then(Item::as_bool).unwrap_or(false)
 }
@@ -110,5 +149,14 @@ mod tests {
         assert!(s.starts_with("# my settings"));
         assert!(s.contains("ssh = true"));
         assert!(add_tools(&mut doc, &["rm -rf /".into()]).is_err());
+
+        use crate::protocol::{AssistantMode, AssistantSettings};
+        assert!(!assistant(&doc).enabled);
+        let a = AssistantSettings { enabled: true, mode: AssistantMode::Auto, model: "claude-opus-5-5".into() };
+        assert!(set_assistant(&mut doc, &a).unwrap());
+        assert_eq!(assistant(&doc), a);
+        assert!(!set_assistant(&mut doc, &a).unwrap());
+        let weak = AssistantSettings { model: "claude-haiku-5-5".into(), ..a };
+        assert_eq!(weak.effective_mode(), AssistantMode::Ask, "Auto needs a trusted model");
     }
 }

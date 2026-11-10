@@ -19,6 +19,8 @@ pub enum Request {
     RemoveTools { packages: Vec<String> },
     /// Turn a system service on or off and apply.
     SetService { name: String, on: bool },
+    /// Change the AI assistant's settings (no rebuild).
+    SetAssistant { settings: AssistantSettings },
     /// Apply /etc/iliada as it is.
     Apply,
     /// Install missing Store apps from the app list and update the rest now.
@@ -57,6 +59,7 @@ impl Request {
             Request::AddTools { .. } => "Installing tools",
             Request::RemoveTools { .. } => "Removing tools",
             Request::SetService { .. } | Request::Apply => "Applying settings",
+            Request::SetAssistant { .. } => "Saving assistant settings",
             Request::UpdateApps => "Updating apps",
             Request::UpdateSystem => "Updating Iliada",
             Request::BackupSignIn => "Signing in to GitHub",
@@ -99,6 +102,47 @@ pub struct Status {
     pub services: Vec<ServiceInfo>,
     pub backup: BackupInfo,
     pub system_update: UpdateInfo,
+    #[serde(default)]
+    pub assistant: AssistantSettings,
+}
+
+/// `[assistant]` in settings.toml. The API key is per user, never here (this
+/// file is backed up).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssistantSettings {
+    pub enabled: bool,
+    pub mode: AssistantMode,
+    pub model: String,
+}
+
+impl Default for AssistantSettings {
+    fn default() -> Self {
+        AssistantSettings { enabled: false, mode: AssistantMode::Ask, model: DEFAULT_MODEL.into() }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssistantMode {
+    /// Every action is shown first and runs only if the user approves it.
+    Ask,
+    /// Actions run on their own (only with a model in [`AUTO_MODELS`]).
+    Auto,
+}
+
+pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
+
+/// Models trusted to act without approval. Others may still be used, in Ask mode.
+pub const AUTO_MODELS: [&str; 3] = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"];
+
+impl AssistantSettings {
+    /// The mode that actually applies: Auto only with a trusted model.
+    pub fn effective_mode(&self) -> AssistantMode {
+        match self.mode {
+            AssistantMode::Auto if AUTO_MODELS.contains(&self.model.as_str()) => AssistantMode::Auto,
+            _ => AssistantMode::Ask,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

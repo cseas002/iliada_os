@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Assistant
+Comment=Ask Iliada to do things for you
+Exec=iliada-assistant-app
+Icon=user-available
+Categories=Utility;System;
+Keywords=ai;claude;help;ask;
+StartupNotify=true
+StartupWMClass=org.iliada.Assistant

@@ -31,7 +31,8 @@ rustPlatform.buildRustPackage {
     install -Dm644 -t $out/share/applications \
       apps/iliada-store-gui/res/org.iliada.Store.desktop \
       apps/iliada-settings/res/org.iliada.Settings.desktop \
-      apps/iliada-settings/res/org.iliada.Setup.desktop
+      apps/iliada-settings/res/org.iliada.Setup.desktop \
+      apps/iliada-settings/res/org.iliada.Assistant.desktop
     # The installer's entries are only linked in on the live system.
     install -Dm644 -t $out/share/iliada/installer apps/iliada-installer/res/*.desktop
   '';

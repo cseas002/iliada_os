@@ -1,0 +1,27 @@
+[package]
+name = "iliada-assistant"
+description = "The Iliada assistant: Claude, acting only through Iliada's own operations (apps, tools, services, updates, backups, permissions)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+iliada-system.workspace = true
+iliada-store.workspace = true
+iliada-bundle.workspace = true
+iliada-types.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true
