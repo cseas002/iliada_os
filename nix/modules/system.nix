@@ -42,6 +42,11 @@ in
         type = lib.types.bool;
         default = false;
       };
+      devAccess = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Keep developer SSH access (nix/hosts/utm-dev.nix) in the written configuration.";
+      };
     };
   };
 
@@ -96,7 +101,8 @@ in
           "--full-name" cfg.firstBoot.fullName
           "--hostname" config.networking.hostName
           "--timezone" (if config.time.timeZone == null then "UTC" else config.time.timeZone)
-        ] ++ lib.optional cfg.firstBoot.autoLogin "--auto-login");
+        ] ++ lib.optional cfg.firstBoot.autoLogin "--auto-login"
+          ++ lib.optional cfg.firstBoot.devAccess "--dev-access");
       };
     };
   };

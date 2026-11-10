@@ -32,6 +32,8 @@ pub struct InitOptions {
     pub hostname: String,
     pub timezone: String,
     pub auto_login: bool,
+    /// Keep developer SSH access (the utm-dev image).
+    pub dev_access: bool,
     /// `x86_64-linux` or `aarch64-linux`.
     pub system: String,
 }
@@ -225,7 +227,17 @@ pub fn init(o: &InitOptions, log: &mut dyn FnMut(&str)) -> Result<()> {
                 .with_context(|| format!("moving {} (run nixos-generate-config first)", generated.display()))?;
             let _ = std::fs::remove_dir_all(o.root.join("etc/nixos"));
         }
-        Profile::Vm => std::fs::write(&hardware, VM_HARDWARE)?,
+        Profile::Vm => {
+            let text = if o.dev_access {
+                VM_HARDWARE.replace(
+                    "imports = [ iliada.nixosModules.vm-guest ];",
+                    "imports = [ iliada.nixosModules.vm-guest iliada.nixosModules.dev-access ];",
+                )
+            } else {
+                VM_HARDWARE.to_owned()
+            };
+            std::fs::write(&hardware, text)?
+        }
     }
     std::fs::write(dir.join(".gitignore"), GITIGNORE)?;
 
@@ -281,6 +293,7 @@ mod tests {
             hostname: "alex-laptop".into(),
             timezone: "Europe/Athens".into(),
             auto_login: true,
+            dev_access: false,
             system: "aarch64-linux".into(),
         }
     }

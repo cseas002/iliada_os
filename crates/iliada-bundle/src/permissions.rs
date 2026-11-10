@@ -19,12 +19,7 @@ use crate::BundleError;
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Permissions {
-    #[serde(
-        default,
-        rename = "request",
-        skip_serializing_if = "Vec::is_empty",
-        deserialize_with = "known_requests"
-    )]
+    #[serde(default, rename = "request", skip_serializing_if = "Vec::is_empty", deserialize_with = "known_requests")]
     pub requests: Vec<PermissionRequest>,
 }
 

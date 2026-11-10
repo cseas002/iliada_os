@@ -46,7 +46,21 @@
       };
 
       packages = forAll allSystems (pkgs:
-        let system = pkgs.stdenv.hostPlatform.system; in
+        let
+          system = pkgs.stdenv.hostPlatform.system;
+          utmImage = host: pkgs.callPackage ./nix/utm-image.nix {
+            image =
+              let image = self.nixosConfigurations."${host}-${arch system}".config.system.build.image; in
+              # Built on an x86 machine, the ARM image runs under emulation,
+              # where `unshare --map-root-user` fails; fakeroot alone gives
+              # the files their owners.
+              if system == "aarch64-linux" then
+                image.overrideAttrs (old: {
+                  buildPhase = lib.replaceStrings [ "unshare --map-root-user fakeroot" ] [ "fakeroot" ] old.buildPhase;
+                })
+              else image;
+          };
+        in
         rec {
           iliada-tools = pkgs.callPackage ./nix/package.nix { };
           default = iliada-tools;
@@ -59,18 +73,9 @@
           # Bootable live/installer ISO.
           installer-iso = self.nixosConfigurations."installer-${arch system}".config.system.build.isoImage;
           # Ready-to-run VM disk (UTM on Apple Silicon: the aarch64 one).
-          utm-image = pkgs.callPackage ./nix/utm-image.nix {
-            image =
-              let image = self.nixosConfigurations."utm-${arch system}".config.system.build.image; in
-              # Built on an x86 machine, the ARM image runs under emulation,
-              # where `unshare --map-root-user` fails; fakeroot alone gives
-              # the files their owners.
-              if system == "aarch64-linux" then
-                image.overrideAttrs (old: {
-                  buildPhase = lib.replaceStrings [ "unshare --map-root-user fakeroot" ] [ "fakeroot" ] old.buildPhase;
-                })
-              else image;
-          };
+          utm-image = utmImage "utm";
+          # The same, reachable and updatable from the developer's Mac.
+          utm-dev-image = utmImage "utm-dev";
         });
 
       overlays.default = final: _prev: { iliada-tools = final.callPackage ./nix/package.nix { }; };
@@ -79,6 +84,8 @@
       nixosModules.default = import ./nix/modules;
       # A VM started from the ready-to-run image (disks, boot, guest tools).
       nixosModules.vm-guest = import ./nix/profiles/vm-guest.nix;
+      # Developer SSH access to a test VM (keys in nix/hosts/dev-keys/).
+      nixosModules.dev-access = import ./nix/profiles/dev-access.nix;
 
       # dev-vm-*:    mutable dev system; `nix run .#nixosConfigurations.dev-vm-x86_64.config.system.build.vm`
       # appliance-*: the immutable image (dm-verity store, A/B updates);
@@ -86,6 +93,7 @@
       nixosConfigurations = perLinux "dev-vm" [ ./nix/hosts/dev-vm.nix ]
         // perLinux "appliance" [ ./nix/hosts/appliance.nix ]
         // perLinux "utm" [ ./nix/hosts/utm.nix ]
+        // perLinux "utm-dev" [ ./nix/hosts/utm-dev.nix ]
         // installers;
 
       devShells = forAll allSystems (pkgs: {

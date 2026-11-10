@@ -58,6 +58,9 @@ enum Cmd {
         timezone: String,
         #[arg(long)]
         auto_login: bool,
+        /// Keep developer SSH access (the utm-dev image).
+        #[arg(long)]
+        dev_access: bool,
         /// Do nothing if /etc/iliada is already set up (first boot).
         #[arg(long)]
         if_missing: bool,
@@ -526,7 +529,18 @@ async fn main() -> Result<()> {
         .init();
     match Cli::parse().cmd {
         Cmd::Serve { state } => serve(state).await,
-        Cmd::Init { root, source, profile, user, full_name, hostname, timezone, auto_login, if_missing } => {
+        Cmd::Init {
+            root,
+            source,
+            profile,
+            user,
+            full_name,
+            hostname,
+            timezone,
+            auto_login,
+            dev_access,
+            if_missing,
+        } => {
             if if_missing && root.join("etc/iliada/flake.nix").exists() {
                 return Ok(());
             }
@@ -542,6 +556,7 @@ async fn main() -> Result<()> {
                 hostname,
                 timezone,
                 auto_login,
+                dev_access,
                 system: init::host_system(),
             };
             init::init(&o, &mut |l| eprintln!("{l}"))
