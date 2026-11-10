@@ -80,10 +80,19 @@ pub fn all() -> Vec<Tool> {
             acts: true,
         },
         Tool {
+            name: "list_software",
+            description: "The Store's command-line software (Python, Node.js, ffmpeg, …) and background services (nginx, PostgreSQL, …): id, name, kind, and whether each is installed or on. Any other nixpkgs package can also be installed with add_tools.",
+            schema: none(),
+            acts: false,
+        },
+        Tool {
             name: "set_service",
-            description: "Turn a system service on or off: \"ssh\" (remote login) or \"printing\". Rebuilds the system.",
+            description: "Turn a background service on or off. Rebuilds the system.",
             schema: obj(
-                json!({ "name": { "type": "string", "enum": ["ssh", "printing"] }, "on": { "type": "boolean" } }),
+                json!({
+                    "name": { "type": "string", "enum": iliada_system::settings::SERVICES.iter().map(|(n, _)| *n).collect::<Vec<_>>() },
+                    "on": { "type": "boolean" }
+                }),
                 &["name", "on"],
             ),
             acts: true,
@@ -157,12 +166,8 @@ pub fn describe(name: &str, input: &Value) -> String {
         "remove_tools" => format!("Uninstall the command-line tools {}", list(input, "packages").join(", ")),
         "set_service" => format!(
             "Turn {} {}",
-            match s(input, "name") {
-                "ssh" => "the SSH server",
-                "printing" => "printing",
-                other => other,
-            },
-            if input["on"].as_bool() == Some(true) { "on" } else { "off" }
+            if input["on"].as_bool() == Some(true) { "on" } else { "off" },
+            iliada_system::software::find(s(input, "name")).map(|i| i.name).unwrap_or(s(input, "name"))
         ),
         "update_iliada" => "Update Iliada".into(),
         "back_up_now" => "Back up now".into(),
@@ -263,6 +268,22 @@ pub async fn run(store: &Store, name: &str, input: &Value) -> Result<String> {
             let on = input["on"].as_bool().context("\"on\" must be true or false")?;
             system(Request::SetService { name: s(input, "name").to_owned(), on }).await?
         }
+        "list_software" => {
+            use iliada_system::software::{CATALOG, Kind};
+            let st = client::status().await?;
+            Value::Array(
+                CATALOG
+                    .iter()
+                    .map(|i| {
+                        let on = match i.kind {
+                            Kind::Software => st.tools.iter().any(|t| t == i.id),
+                            Kind::Service => st.services.iter().any(|x| x.name == i.id && x.on),
+                        };
+                        json!({ "id": i.id, "name": i.name, "kind": i.kind, "summary": i.summary, "installed_or_on": on })
+                    })
+                    .collect(),
+            )
+        }
         "check_for_iliada_update" => system(Request::CheckSystemUpdate).await?,
         "update_iliada" => system(Request::UpdateSystem).await?,
         "back_up_now" => system(Request::BackupNow).await?,
@@ -324,6 +345,6 @@ mod tests {
         }
         assert!(acts("install_app") && acts("set_service") && !acts("get_status") && !acts("search_store"));
         assert!(!acts("no_such_tool"));
-        assert_eq!(describe("set_service", &json!({ "name": "ssh", "on": true })), "Turn the SSH server on");
+        assert_eq!(describe("set_service", &json!({ "name": "ssh", "on": true })), "Turn on SSH server");
     }
 }
