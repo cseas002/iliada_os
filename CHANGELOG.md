@@ -14,7 +14,9 @@
 - **GitHub backup and restore**: `/etc/iliada` pushed to a private
   `iliada_<name>` repository after every change; restoring brings back apps
   and settings on a new computer.
-- **Iliada updates**: signed release manifests; Settings → Updates.
+- **Iliada updates**: signed release manifests; Settings → Updates. Tested end to end
+  with a privately served release. A change to the update address or the
+  version takes effect without a restart.
 
 **Apps, software, services.**
 - **Apps for ARM computers** (Apple Silicon in UTM, Raspberry Pi): the Store
