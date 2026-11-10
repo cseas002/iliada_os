@@ -17,7 +17,34 @@ use iliada_system::protocol::{AssistantMode, AssistantSettings, Backup, Event, P
 /// an Anthropic key; "vendor/model" ones an OpenRouter key.
 const MODELS: [&str; 5] =
     ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5", "deepseek/deepseek-v4-flash"];
+use iliada_assistant::email::{EmailAccount, Security};
 use iliada_types::{Capability, FileScope};
+
+const SECURITY_NAMES: [&str; 2] = ["SSL/TLS (port 465)", "STARTTLS (port 587)"];
+
+fn security_index(s: Security) -> usize {
+    usize::from(s == Security::Starttls)
+}
+
+/// The email account being edited in Settings → Assistant.
+#[derive(Debug, Default)]
+struct EmailForm {
+    address: String,
+    server: String,
+    security: Security,
+    password: String,
+    /// The server was filled in from the address (so it follows it).
+    suggested: bool,
+}
+
+impl EmailForm {
+    fn load() -> Self {
+        match iliada_assistant::email::load() {
+            Some(a) => EmailForm { address: a.address, server: a.server, security: a.security, ..Default::default() },
+            None => EmailForm::default(),
+        }
+    }
+}
 
 fn main() -> cosmic::iced::Result {
     let settings = Settings::default().size(Size::new(900.0, 680.0));
@@ -121,6 +148,12 @@ enum Message {
     AssistantSet(AssistantSettings),
     AssistantKey(String),
     SaveKey,
+    EmailAddress(String),
+    EmailServer(String),
+    EmailSecurity(usize),
+    EmailPassword(String),
+    SaveEmail,
+    RemoveEmail,
     Confirmed,
     Cancel,
     Dismiss,
@@ -147,6 +180,7 @@ struct App {
     decisions: Decisions,
     extra_isolation: Vec<String>,
     key_input: String,
+    email: EmailForm,
 }
 
 fn load_status() -> Task<Message> {
@@ -594,8 +628,75 @@ impl App {
                 key = key.add(info(format!("Spent so far: ${spent:.4}"), None));
             }
             items.push(key.into());
+            items.push(self.email_section());
         }
         settings::view_column(items).into()
+    }
+
+    /// The account the assistant sends email from (per user, like the key).
+    fn email_section(&self) -> Element<'_, Message> {
+        let space = cosmic::theme::spacing().space_xs;
+        let saved = iliada_assistant::email::load();
+        let mut section = settings::section().title("Email").add(info(
+            match &saved {
+                Some(a) => format!("The assistant sends email as {}", a.address),
+                None => "Let the assistant send email for you".to_owned(),
+            },
+            Some(
+                "From your own email account. You see every email before it is sent. For Gmail, iCloud and Yahoo use an app password from your account's security settings.".to_owned(),
+            ),
+        ));
+        let field = |label: &'static str, input: Element<'static, Message>| -> Element<'static, Message> {
+            widget::row::with_capacity(2)
+                .push(widget::text::body(label).width(Length::Fixed(140.0)))
+                .push(input)
+                .spacing(space)
+                .align_y(Alignment::Center)
+                .into()
+        };
+        section = section
+            .add(settings::item_row(vec![field(
+                "Email address",
+                widget::text_input("you@example.com", self.email.address.clone())
+                    .on_input(Message::EmailAddress)
+                    .width(Length::Fill)
+                    .into(),
+            )]))
+            .add(settings::item_row(vec![field(
+                "Outgoing server",
+                widget::text_input("smtp.example.com", self.email.server.clone())
+                    .on_input(Message::EmailServer)
+                    .width(Length::Fill)
+                    .into(),
+            )]))
+            .add(settings::item_row(vec![field(
+                "Connection",
+                widget::dropdown(
+                    &SECURITY_NAMES[..],
+                    Some(security_index(self.email.security)),
+                    Message::EmailSecurity,
+                )
+                .into(),
+            )]))
+            .add(settings::item_row(vec![field(
+                "Password",
+                widget::secure_input(
+                    if iliada_assistant::email::has_password() { "Saved (type to change)" } else { "Password" },
+                    self.email.password.clone(),
+                    None,
+                    true,
+                )
+                .on_input(Message::EmailPassword)
+                .on_submit(|_| Message::SaveEmail)
+                .width(Length::Fill)
+                .into(),
+            )]));
+        let mut buttons = widget::row::with_capacity(2).spacing(space);
+        if saved.is_some() {
+            buttons = buttons.push(widget::button::standard("Remove").on_press(Message::RemoveEmail));
+        }
+        buttons = buttons.push(widget::button::suggested("Save").on_press(Message::SaveEmail));
+        section.add(settings::item_row(vec![widget::space::horizontal().into(), buttons.into()])).into()
     }
 
     fn about(&self, s: &Status) -> Element<'_, Message> {
@@ -675,6 +776,7 @@ impl cosmic::Application for App {
             decisions: Decisions::default(),
             extra_isolation: Vec::new(),
             key_input: String::new(),
+            email: EmailForm::load(),
         };
         app.set_header_title("Iliada Settings".into());
         let title = match app.core.main_window_id() {
@@ -794,6 +896,62 @@ impl cosmic::Application for App {
             Message::Ask(c) => self.confirm = Some(c),
             Message::AssistantSet(a) => return self.start(Request::SetAssistant { settings: a }),
             Message::AssistantKey(k) => self.key_input = k,
+            Message::EmailAddress(a) => {
+                // Known providers: fill in their server (until it's edited).
+                if self.email.server.is_empty() || self.email.suggested {
+                    match EmailAccount::suggested(&a) {
+                        Some(s) => {
+                            self.email.server = s.server;
+                            self.email.security = s.security;
+                            self.email.suggested = true;
+                        }
+                        None if self.email.suggested => {
+                            self.email.server.clear();
+                            self.email.suggested = false;
+                        }
+                        None => {}
+                    }
+                }
+                self.email.address = a;
+            }
+            Message::EmailServer(s) => {
+                self.email.server = s;
+                self.email.suggested = false;
+            }
+            Message::EmailSecurity(i) => {
+                self.email.security = if i == 1 { Security::Starttls } else { Security::Tls };
+            }
+            Message::EmailPassword(p) => self.email.password = p,
+            Message::SaveEmail => {
+                let account = EmailAccount {
+                    address: self.email.address.trim().to_owned(),
+                    server: self.email.server.trim().to_owned(),
+                    security: self.email.security,
+                    ..Default::default()
+                };
+                let password = (!self.email.password.is_empty()).then_some(self.email.password.as_str());
+                if password.is_none() && !iliada_assistant::email::has_password() {
+                    self.error = Some("Type the email account's password first.".into());
+                } else {
+                    match iliada_assistant::email::save(&account, password) {
+                        Err(e) => self.error = Some(format!("Could not save the email account: {e:#}")),
+                        Ok(()) => {
+                            self.email.password.clear();
+                            self.notice = Some(format!(
+                                "The assistant can now send email as {}. Only you can read the password.",
+                                account.address
+                            ));
+                        }
+                    }
+                }
+            }
+            Message::RemoveEmail => match iliada_assistant::email::remove() {
+                Err(e) => self.error = Some(format!("Could not remove the email account: {e:#}")),
+                Ok(()) => {
+                    self.email = EmailForm::default();
+                    self.notice = Some("The email account was removed.".into());
+                }
+            },
             Message::SaveKey => {
                 let k = self.key_input.trim().to_owned();
                 match iliada_assistant::api::save_key(&k) {
