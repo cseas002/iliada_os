@@ -47,12 +47,23 @@ fn parse() -> Option<Ask> {
     (!a.app.is_empty() && !a.wants.is_empty()).then_some(a)
 }
 
+const WIDTH: f32 = 480.0;
+
+/// Tall enough for the question and the app's reason: wrapped lines are
+/// estimated from the text (the content also scrolls, so nothing is cut).
+fn height(a: &Ask) -> f32 {
+    let lines = |text: &str, per_line: usize| text.chars().count().div_ceil(per_line).max(1) as f32;
+    let title = lines(&format!("“{}” would like to {}.", a.app, a.wants), 34);
+    let purpose = if a.purpose.is_empty() { 0.0 } else { lines(&a.purpose, 62) };
+    (250.0 + 30.0 * title + 20.0 * purpose).clamp(320.0, 640.0)
+}
+
 fn main() {
     let Some(ask) = parse() else {
         eprintln!("usage: iliada-prompt --app NAME --wants TEXT [--purpose TEXT] [--icon PATH]");
         std::process::exit(2);
     };
-    let settings = Settings::default().size(Size::new(460.0, 300.0)).resizable(None);
+    let settings = Settings::default().size(Size::new(WIDTH, height(&ask))).resizable(None);
     let _ = cosmic::app::run::<App>(settings, ask);
     // The window was closed without an answer.
     std::process::exit(2);
@@ -106,18 +117,30 @@ impl cosmic::Application for App {
         };
         let mut col = widget::column::with_capacity(5)
             .push(icon)
-            .push(widget::text::title4(format!("“{}” would like to {}.", self.ask.app, self.ask.wants)))
+            .push(
+                widget::text::title4(format!("“{}” would like to {}.", self.ask.app, self.ask.wants))
+                    .width(Length::Fill)
+                    .align_x(Alignment::Center),
+            )
             .spacing(spacing.space_s)
             .align_x(Alignment::Center);
         if !self.ask.purpose.is_empty() {
-            col = col.push(widget::text::caption(self.ask.purpose.as_str()));
+            col = col.push(
+                widget::text::caption(self.ask.purpose.as_str()).width(Length::Fill).align_x(Alignment::Center),
+            );
         }
-        col = col.push(widget::text::caption("You can change this later in Iliada Settings → Privacy."));
+        col = col.push(
+            widget::text::caption("You can change this later in Iliada Settings → Privacy.")
+                .width(Length::Fill)
+                .align_x(Alignment::Center),
+        );
         let buttons = widget::row::with_capacity(2)
             .push(widget::button::standard("Don't Allow").on_press(Message::Answer(false)))
             .push(widget::button::suggested("Allow").on_press(Message::Answer(true)))
             .spacing(spacing.space_s);
         col = col.push(buttons);
-        widget::container(col).center(Length::Fill).padding(spacing.space_m).into()
+        widget::scrollable(widget::container(col).center_x(Length::Fill).padding(spacing.space_m))
+            .height(Length::Fill)
+            .into()
     }
 }
