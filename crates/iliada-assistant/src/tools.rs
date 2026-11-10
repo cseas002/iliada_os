@@ -179,6 +179,23 @@ pub fn all() -> Vec<Tool> {
             full_access: false,
         },
         Tool {
+            name: "send_email",
+            description: "Send an email from the person's own email account (set up in Settings → Assistant → Email). \
+                Plain text. The person always sees the email and approves it before it is sent. Write it as they \
+                would, and only send what they asked for.",
+            schema: obj(
+                json!({
+                    "to": { "type": "array", "items": { "type": "string" }, "description": "Email addresses" },
+                    "cc": { "type": "array", "items": { "type": "string" } },
+                    "subject": { "type": "string" },
+                    "body": { "type": "string" }
+                }),
+                &["to", "subject", "body"],
+            ),
+            acts: true,
+            full_access: false,
+        },
+        Tool {
             name: "run_command",
             description: "Run a command on this computer as the user, with bash (Iliada is NixOS-based; fish is the \
                 user's shell). For anything the other tools can't do: reading or changing the user's files, \
@@ -211,6 +228,12 @@ pub fn definitions(full_access: bool) -> Value {
 
 pub fn acts(name: &str) -> bool {
     all().iter().any(|t| t.name == name && t.acts)
+}
+
+/// Shown to the person before it runs even in Auto mode: what leaves the
+/// computer in their name.
+pub fn always_asks(name: &str) -> bool {
+    name == "send_email"
 }
 
 pub fn needs_full_access(name: &str) -> bool {
@@ -251,6 +274,16 @@ pub fn describe(name: &str, input: &Value) -> String {
         },
         "open_link" => format!("Open {}", s(input, "url")),
         "run_command" => format!("Run the command: {}", s(input, "command")),
+        "send_email" => {
+            let cc = list(input, "cc");
+            format!(
+                "Send this email to {}{}\nSubject: {}\n\n{}",
+                list(input, "to").join(", "),
+                if cc.is_empty() { String::new() } else { format!(" (copy to {})", cc.join(", ")) },
+                s(input, "subject"),
+                s(input, "body")
+            )
+        }
         "back_up_now" => "Back up now".into(),
         "set_permission" => format!(
             "{} {} {}",
@@ -440,6 +473,16 @@ pub async fn run(store: &Store, name: &str, input: &Value) -> Result<String> {
                 .spawn()
                 .context("opening the link")?;
             json!({ "opened": url })
+        }
+        "send_email" => {
+            let email = crate::email::Email {
+                to: list(input, "to"),
+                cc: list(input, "cc"),
+                subject: s(input, "subject").to_owned(),
+                body: s(input, "body").to_owned(),
+            };
+            crate::email::send(&email).await?;
+            json!({ "sent_to": email.to, "cc": email.cc, "subject": email.subject })
         }
         "run_command" => {
             let command = s(input, "command");

@@ -19,9 +19,13 @@ serde_json.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+toml.workspace = true
+# Email from the user's own account (rustls, like the rest of Iliada).
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "hostname", "tokio1-rustls-tls"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util", "net"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

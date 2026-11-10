@@ -7,6 +7,7 @@
 //!   iliada backup status | sign-in | enable <name> | now | list | restore <owner/iliada_name> | sign-out
 //!   iliada ask "install firefox and turn on ssh"      (or just `iliada ask` for a conversation)
 //!   iliada assistant status | on | off | mode ask|auto | model <id> | key
+//!   iliada assistant email status | set <address> [--server …] | test <to> | remove
 //!
 //! Apps are `.app` bundles from the Store (no rebuild, no root). Everything
 //! else goes through the Iliada system service, which checks that you are an
@@ -88,6 +89,40 @@ enum AssistantCmd {
     },
     /// Set your API key (read from the terminal, not the command line).
     Key,
+    /// Your email account, which the assistant sends email from.
+    Email {
+        #[command(subcommand)]
+        cmd: EmailCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum EmailCmd {
+    Status,
+    /// Set the account (the password is read from the terminal). Common
+    /// providers (Gmail, Outlook, iCloud, …) need only the address.
+    Set {
+        address: String,
+        /// The name shown with your address.
+        #[arg(long)]
+        name: Option<String>,
+        /// Outgoing (SMTP) server.
+        #[arg(long)]
+        server: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
+        /// tls (port 465), starttls (587), or none (a server on this computer only).
+        #[arg(long)]
+        security: Option<String>,
+        /// Sign-in name, if it isn't the address.
+        #[arg(long)]
+        username: Option<String>,
+    },
+    /// Send a test email.
+    Test {
+        to: String,
+    },
+    Remove,
 }
 
 #[derive(Subcommand)]
@@ -373,6 +408,9 @@ async fn ask(text: String) -> Result<()> {
 
 async fn assistant(cmd: AssistantCmd, v: bool) -> Result<()> {
     use iliada_system::protocol::{AssistantMode, Provider};
+    if let AssistantCmd::Email { cmd } = cmd {
+        return email(cmd).await;
+    }
     let mut s = client::status().await?.assistant;
     match cmd {
         AssistantCmd::Status => {
@@ -398,6 +436,7 @@ async fn assistant(cmd: AssistantCmd, v: bool) -> Result<()> {
             eprintln!("{} key saved (only you can read it).", p.name());
             return Ok(());
         }
+        AssistantCmd::Email { .. } => unreachable!("handled above"),
         AssistantCmd::On => s.enabled = true,
         AssistantCmd::Off => s.enabled = false,
         AssistantCmd::Mode { mode } => {
@@ -421,6 +460,65 @@ async fn assistant(cmd: AssistantCmd, v: bool) -> Result<()> {
     }
     system(Request::SetAssistant { settings: s }, v).await?;
     eprintln!("Saved.");
+    Ok(())
+}
+
+async fn email(cmd: EmailCmd) -> Result<()> {
+    use iliada_assistant::email::{self, Email, EmailAccount, Security};
+    match cmd {
+        EmailCmd::Status => match email::load() {
+            None => println!("No email account (iliada assistant email set you@example.com)."),
+            Some(a) => {
+                println!("Address:  {}", a.address);
+                println!("Server:   {}:{} ({:?})", a.server, a.port(), a.security);
+                println!("Password: {}", if email::has_password() { "saved" } else { "not set" });
+            }
+        },
+        EmailCmd::Set { address, name, server, port, security, username } => {
+            let mut a = EmailAccount::suggested(&address)
+                .unwrap_or_else(|| EmailAccount { address: address.clone(), ..Default::default() });
+            if let Some(s) = server {
+                a.server = s;
+            }
+            anyhow::ensure!(!a.server.is_empty(), "give the outgoing mail server with --server");
+            if let Some(s) = security {
+                a.security = match s.as_str() {
+                    "tls" => Security::Tls,
+                    "starttls" => Security::Starttls,
+                    "none" => Security::None,
+                    _ => anyhow::bail!("security is tls, starttls or none"),
+                };
+            }
+            a.port = port.or(a.port);
+            a.name = name.unwrap_or_default();
+            a.username = username.unwrap_or_default();
+            a.validate()?;
+            let password = if a.security == Security::None {
+                None
+            } else {
+                eprint!("Password for {} (for Gmail, iCloud and others: an app password): ", a.username());
+                let mut p = String::new();
+                std::io::stdin().read_line(&mut p)?;
+                Some(p.trim_end_matches(['\n', '\r']).to_owned())
+            };
+            email::save(&a, password.as_deref())?;
+            eprintln!("Saved (only you can read it).");
+        }
+        EmailCmd::Test { to } => {
+            let e = Email {
+                to: vec![to.clone()],
+                subject: "Iliada test email".into(),
+                body: "This is a test email sent by Iliada.".into(),
+                ..Default::default()
+            };
+            email::send(&e).await?;
+            eprintln!("Sent to {to}.");
+        }
+        EmailCmd::Remove => {
+            email::remove()?;
+            eprintln!("Removed.");
+        }
+    }
     Ok(())
 }
 

@@ -13,6 +13,7 @@
 //! (`~/.config/iliada/anthropic-key`, `openrouter-key`).
 
 pub mod api;
+pub mod email;
 pub mod tools;
 
 use anyhow::{Context, Result};
@@ -28,7 +29,8 @@ const SYSTEM: &str = "You are the assistant built into Iliada, a Mac-like operat
 You help the person using this computer by doing things for them with the tools you have: \
 installing, opening and removing apps from the Iliada Store, installing command-line software \
 (Python, Node.js, …), turning background services (SSH server, printing, nginx, databases, …) on and off, updating apps and Iliada, backing up, \
-changing app permissions, switching dark or light appearance, the volume, and opening links.";
+changing app permissions, switching dark or light appearance, the volume, opening links, and sending email \
+from their own account (they see each email before it goes).";
 
 const LIMITED: &str =
     "Those tools are all you can do; you cannot run commands, read or change files, or browse the web.";
@@ -161,7 +163,8 @@ impl Assistant {
                     Err(anyhow::anyhow!("{name} needs full access (Settings → Assistant)"))
                 } else if tools::acts(name) {
                     let action = tools::describe(name, input);
-                    if self.mode == AssistantMode::Ask && !ui.approve(&action).await {
+                    let ask = self.mode == AssistantMode::Ask || tools::always_asks(name);
+                    if ask && !ui.approve(&action).await {
                         audit(self.log.as_deref(), &self.api.model, self.mode, name, input, "declined");
                         Err(anyhow::anyhow!("the person declined: {action}"))
                     } else {
@@ -426,5 +429,27 @@ mod tests {
         assert!(!reqs[0]["tools"].as_array().unwrap().iter().any(|t| t["name"] == "run_command"));
         let r = &reqs[1]["messages"][2]["content"][0];
         assert!(r["content"].as_str().unwrap().contains("full access"), "{r}");
+    }
+
+    #[tokio::test]
+    async fn emails_are_shown_first_even_in_auto_mode() {
+        let first = json!({ "stop_reason": "tool_use", "content": [
+            { "type": "tool_use", "id": "t1", "name": "send_email",
+              "input": { "to": ["bob@example.org"], "subject": "Hi", "body": "Hello Bob" } } ] });
+        let second = json!({ "stop_reason": "end_turn", "content": [ { "type": "text", "text": "Not sent." } ] });
+        let (url, seen) = fake_api(vec![first, second]).await;
+        let mut cfg = StoreConfig::from_env().unwrap();
+        cfg.catalog = "/nonexistent/catalog.json".into();
+        cfg.apps_dir = std::env::temp_dir().join("iliada-assistant-test-apps");
+        cfg.app_list = None;
+        let api = api::Api::with_url("sk-test".into(), "claude-opus-5-5".into(), url);
+        let mut a = Assistant::with_parts(api, AssistantMode::Auto, false, Store::new(cfg).unwrap());
+        let ui = Decline(Mutex::new(Vec::new()));
+        a.send("email bob", &ui).await.unwrap();
+        let asked = ui.0.lock().unwrap();
+        assert_eq!(asked.len(), 1);
+        assert!(asked[0].contains("bob@example.org") && asked[0].contains("Hello Bob"), "{}", asked[0]);
+        let reqs = seen.lock().unwrap();
+        assert!(reqs[1]["messages"][2]["content"][0]["content"].as_str().unwrap().contains("declined"));
     }
 }
