@@ -2808,6 +2808,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "iliada-assistant"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "iliada-bundle",
+ "iliada-store",
+ "iliada-system",
+ "iliada-types",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "iliada-bundle"
 version = "0.1.0"
 dependencies = [
@@ -2875,7 +2892,9 @@ dependencies = [
 name = "iliada-settings"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "futures-util",
+ "iliada-assistant",
  "iliada-bundle",
  "iliada-system",
  "iliada-types",
