@@ -382,6 +382,8 @@ mod tests {
         let a = virtiofsd_args(Path::new("/s"), Path::new("/a"), true, (1000, 100));
         assert!(a.contains(&"--readonly".to_string()));
         assert!(a.contains(&"--uid-map=:0:1000:1:".to_string()), "guest root is the user");
-        assert!(!virtiofsd_args(Path::new("/s"), Path::new("/d"), false, (1000, 100)).contains(&"--readonly".to_string()));
+        assert!(
+            !virtiofsd_args(Path::new("/s"), Path::new("/d"), false, (1000, 100)).contains(&"--readonly".to_string())
+        );
     }
 }

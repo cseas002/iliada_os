@@ -58,6 +58,8 @@ pub struct Assistant {
     store: Store,
     tools: Value,
     messages: Vec<Value>,
+    /// Where actions are logged (`None`: not logged).
+    log: Option<std::path::PathBuf>,
 }
 
 impl Assistant {
@@ -71,12 +73,13 @@ impl Assistant {
             store: Store::new(StoreConfig::from_env()?)?,
             tools: tools::definitions(),
             messages: Vec::new(),
+            log: log_path(),
         })
     }
 
     /// From parts (tests, other frontends).
     pub fn with_parts(claude: api::Claude, mode: AssistantMode, store: Store) -> Self {
-        Assistant { claude, mode, store, tools: tools::definitions(), messages: Vec::new() }
+        Assistant { claude, mode, store, tools: tools::definitions(), messages: Vec::new(), log: None }
     }
 
     pub fn mode(&self) -> AssistantMode {
@@ -103,12 +106,19 @@ impl Assistant {
                 let result = if tools::acts(name) {
                     let action = tools::describe(name, input);
                     if self.mode == AssistantMode::Ask && !ui.approve(&action).await {
-                        audit(&self.claude.model, self.mode, name, input, "declined");
+                        audit(self.log.as_deref(), &self.claude.model, self.mode, name, input, "declined");
                         Err(anyhow::anyhow!("the person declined: {action}"))
                     } else {
                         ui.progress(&format!("{action}…"));
                         let r = tools::run(&self.store, name, input).await;
-                        audit(&self.claude.model, self.mode, name, input, if r.is_ok() { "done" } else { "failed" });
+                        audit(
+                            self.log.as_deref(),
+                            &self.claude.model,
+                            self.mode,
+                            name,
+                            input,
+                            if r.is_ok() { "done" } else { "failed" },
+                        );
                         ui.progress(&match &r {
                             Ok(_) => format!("✓ {action}"),
                             Err(e) => format!("✗ {action}: {e:#}"),
@@ -129,16 +139,22 @@ impl Assistant {
     }
 }
 
-/// Every action the assistant takes (or was refused) is appended to
 /// `~/.local/share/iliada/assistant-log.jsonl`.
-fn audit(model: &str, mode: AssistantMode, tool: &str, input: &Value, outcome: &str) {
+fn log_path() -> Option<std::path::PathBuf> {
+    let base = match std::env::var_os("XDG_DATA_HOME") {
+        Some(x) => std::path::PathBuf::from(x),
+        None => std::path::PathBuf::from(std::env::var_os("HOME")?).join(".local/share"),
+    };
+    Some(base.join("iliada/assistant-log.jsonl"))
+}
+
+/// Every action the assistant takes (or was refused) is appended to the log.
+fn audit(path: Option<&std::path::Path>, model: &str, mode: AssistantMode, tool: &str, input: &Value, outcome: &str) {
     use std::io::Write;
-    let Some(home) = std::env::var_os("HOME") else { return };
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from(home).join(".local/share"));
-    let path = base.join("iliada/assistant-log.jsonl");
-    let _ = std::fs::create_dir_all(base.join("iliada"));
+    let Some(path) = path else { return };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
     let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let line = json!({ "time": time, "model": model, "mode": mode, "tool": tool, "input": input, "outcome": outcome });
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
