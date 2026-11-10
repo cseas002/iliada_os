@@ -95,6 +95,10 @@ struct Recipe {
     /// Any other permissions, as in Permissions.toml.
     #[serde(default)]
     permissions: Vec<iliada_bundle::PermissionRequest>,
+    /// Files to put in place in the app (destination = source), what a
+    /// Debian maintainer script would have done.
+    #[serde(default)]
+    copy: BTreeMap<String, String>,
     summary: String,
     category: String,
     source: RecipeSource,
@@ -172,6 +176,7 @@ async fn build(recipes: &Path, out: &Path, only: &[String], base: &str, cache: O
             include: recipe.include.clone(),
             args: recipe.args.clone(),
             env: recipe.env.clone(),
+            copies: recipe.copy.clone(),
             permissions: recipe
                 .folders
                 .iter()

@@ -110,6 +110,11 @@ fn bwrap_prefix(spec: &SandboxSpec, host: &HostIsolationConfig, desktop: &HostDe
         }
     }
     push(&["--ro-bind-try", &p(&desktop.fonts), "/etc/fonts"]);
+    // Who "the user" is, for programs that look it up (getpwuid): one entry,
+    // the app's own user, at /home/app. Written by `write_identity`.
+    let id = identity_dir(&spec.data_dir);
+    push(&["--ro-bind-try", &p(&id.join("passwd")), "/etc/passwd"]);
+    push(&["--ro-bind-try", &p(&id.join("group")), "/etc/group"]);
     if spec.network == NetworkPolicy::Nat {
         // Name resolution and TLS roots from the host, read-only.
         for f in ["resolv.conf", "hosts", "ssl"] {
@@ -190,6 +195,22 @@ fn bwrap_prefix(spec: &SandboxSpec, host: &HostIsolationConfig, desktop: &HostDe
     }
     push(&["--"]);
     a
+}
+
+fn identity_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join(".cache/iliada")
+}
+
+/// Write the app's `/etc/passwd` and `/etc/group`: its user (the owner of
+/// its data directory) and nothing about the host's other accounts.
+pub fn write_identity(data_dir: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::metadata(data_dir)?;
+    let dir = identity_dir(data_dir);
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("passwd"), format!("app:x:{}:{}:App:/home/app:/bin/sh\n", m.uid(), m.gid()))?;
+    std::fs::write(dir.join("group"), format!("app:x:{}:\n", m.gid()))?;
+    Ok(())
 }
 
 /// The camera devices present now.
@@ -281,6 +302,7 @@ impl IsolationBackend for NamespaceBackend {
     async fn launch(&self, spec: &SandboxSpec) -> Result<Box<dyn SandboxHandle>> {
         anyhow::ensure!(cfg!(target_os = "linux"), "namespace sandboxes need Linux");
         tokio::fs::create_dir_all(&spec.data_dir).await?;
+        write_identity(&spec.data_dir)?;
         let mut spec = spec.clone();
         run_triggers(&mut spec, &self.host, &self.desktop)?;
         let child = Command::new(&self.host.bwrap)
@@ -383,6 +405,21 @@ mod tests {
         assert_eq!(after(&a, "--ro-bind", "/run/user/1000/pulse/native"), Some("/run/user/app/pulse/native"));
         assert_eq!(after(&a, "--bind", "/home/alex/Documents/report.odt"), Some("/home/alex/Documents/report.odt"));
         assert!(!a.iter().any(|x| x.contains("/home/alex/Documents/") && !x.ends_with("report.odt")));
+    }
+
+    #[test]
+    fn identity_files_describe_only_the_app_user() {
+        let t = tempfile::tempdir().unwrap();
+        write_identity(t.path()).unwrap();
+        let passwd = std::fs::read_to_string(t.path().join(".cache/iliada/passwd")).unwrap();
+        assert!(passwd.starts_with("app:x:") && passwd.contains(":/home/app:"), "{passwd}");
+        assert_eq!(passwd.lines().count(), 1);
+        let (_d, spec) = fixture(NetworkPolicy::None, false);
+        let a = bwrap_args(&spec, &HostIsolationConfig::example(), &HostDesktop::default());
+        assert!(
+            a.windows(3)
+                .any(|w| w[0] == "--ro-bind-try" && w[1].ends_with(".cache/iliada/passwd") && w[2] == "/etc/passwd")
+        );
     }
 
     #[test]

@@ -233,6 +233,7 @@ impl IsolationBackend for CloudHypervisorBackend {
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
         }
         tokio::fs::create_dir_all(&spec.data_dir).await?;
+        crate::namespace::write_identity(&spec.data_dir)?;
         let plan = plan(spec, &self.host, &dir, &resolved_desktop());
         tokio::fs::write(dir.join("spec/spec.json"), serde_json::to_vec_pretty(&plan.guest)?).await?;
 

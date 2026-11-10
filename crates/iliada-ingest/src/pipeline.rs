@@ -69,6 +69,11 @@ pub struct IngestConfig {
     pub args: Vec<String>,
     /// Environment always set for the app.
     pub env: std::collections::BTreeMap<String, String>,
+    /// Files to put in place inside the app's tree after unpacking
+    /// (destination → source, both relative to the tree): what a Debian
+    /// maintainer script would have copied at install time, which Iliada
+    /// never runs.
+    pub copies: std::collections::BTreeMap<String, String>,
     /// Permissions the recipe declares (in addition to the inferred ones);
     /// a declared permission is still asked for when the app first runs.
     pub permissions: Vec<iliada_bundle::PermissionRequest>,
@@ -101,6 +106,7 @@ impl Default for IngestConfig {
             include: vec![],
             args: vec![],
             env: Default::default(),
+            copies: Default::default(),
             permissions: vec![],
             max_download_bytes: 1 << 30,
             max_unpacked_bytes: 4 << 30,
@@ -438,6 +444,9 @@ impl Ingestor {
             categories: desktop.as_ref().map(|d| d.categories.clone()).unwrap_or_default(),
             mime_types: desktop.as_ref().map(|d| d.mime_types.clone()).unwrap_or_default(),
         };
+        for (dst, src) in &self.cfg.copies {
+            copy_within(&layout.fhs_root(), src, dst).with_context(|| format!("recipe copy {src} -> {dst}"))?;
+        }
         let mut permissions = infer_permissions(closure.records.iter().map(|r| r.soname.as_str()));
         for req in &self.cfg.permissions {
             // The recipe's own declaration (and purpose) wins over an inferred one.
@@ -687,6 +696,28 @@ fn is_plugin_path(rel: &Path) -> bool {
 /// Copy each package's `usr/share/doc/<pkg>/copyright` (documentation is
 /// otherwise skipped). A doc directory that is a symlink to another package's
 /// is kept as a symlink.
+/// Copy `src` to `dst` inside `root` (both relative; no `..`), replacing a
+/// symlink at `dst` (Debian often ships one pointing at the file a
+/// maintainer script generates).
+fn copy_within(root: &Path, src: &str, dst: &str) -> Result<()> {
+    let safe = |p: &str| {
+        let p = Path::new(p);
+        !p.is_absolute() && p.components().all(|c| matches!(c, std::path::Component::Normal(_)))
+    };
+    ensure!(safe(src) && safe(dst), "paths must be relative and stay inside the app");
+    let (from, to) = (root.join(src), root.join(dst));
+    let meta = fs::symlink_metadata(&from).with_context(|| format!("{src} is not in the app"))?;
+    ensure!(meta.is_file(), "{src} is not a regular file");
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if fs::symlink_metadata(&to).is_ok() {
+        fs::remove_file(&to)?;
+    }
+    fs::copy(&from, &to)?;
+    Ok(())
+}
+
 /// A dependency's library in a program's own directory (LibreOffice's
 /// `usr/lib/libreoffice/program`), not on the standard loader path: its path
 /// inside the package. Such libraries keep their place in the app's tree,
@@ -884,6 +915,23 @@ fn copy_resources(layout: &BundleLayout, root: &Path, desktop: Option<&DesktopEn
     let name = format!("icon.{ext}");
     fs::copy(root.join(rel), layout.resources().join(&name))?;
     Ok(Some(format!("Resources/{name}")))
+}
+
+#[cfg(test)]
+mod copy_within_tests {
+    #[test]
+    fn copies_inside_the_tree_only() {
+        let t = tempfile::tempdir().unwrap();
+        let r = t.path();
+        std::fs::create_dir_all(r.join("usr/share/.registry")).unwrap();
+        std::fs::write(r.join("usr/share/.registry/main.xcd"), "x").unwrap();
+        std::fs::create_dir_all(r.join("etc/app")).unwrap();
+        std::os::unix::fs::symlink("/etc/app/main.xcd", r.join("etc/app/link")).unwrap();
+        super::copy_within(r, "usr/share/.registry/main.xcd", "etc/app/main.xcd").unwrap();
+        assert_eq!(std::fs::read_to_string(r.join("etc/app/main.xcd")).unwrap(), "x");
+        assert!(super::copy_within(r, "../outside", "etc/x").is_err());
+        assert!(super::copy_within(r, "usr/share/.registry/main.xcd", "/etc/passwd").is_err());
+    }
 }
 
 #[cfg(test)]
