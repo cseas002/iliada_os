@@ -217,24 +217,25 @@ justification, runtime base), validated by the same Rust types.
 | Area | State |
 |---|---|
 | Bundle format + validation | done, tested |
-| Package Translator (.deb → .app), index, resolvers, provenance | done; 12 apps published |
+| Package Translator (.deb → .app), index, resolvers, provenance | done; 15 apps published for x86-64, 14 for ARM (LibreOffice Writer x86-64 only for now) |
 | Landlock confinement of extraction | done; enforced on Linux |
 | IPC protocol, broker, guest client | done; end-to-end tests over real sockets |
 | Tier-1 sandbox (`iliada-run`) | done; every published app runs sandboxed from the launcher |
+| Apps for each processor (x86-64, ARM) | done; ARM builds launch-tested in the ARM image under emulation (14 of 15 open); `iliada-run` explains, in a window, when an app is for another processor (validated in the x86 VM) |
 | Permissions: first-launch prompts, Settings → Privacy, opened files | built; unit-tested |
 | Tier-2 micro-VMs (guest init, initrd, virtio-fs, waypipe, passt, sound relay) | works: Firefox in its own VM loads HTTPS pages (its own content sandbox runs too); Text Editor opens and saves a double-clicked file; Firefox's sound reaches the desktop's sound server; Calculator saves its settings |
 | Desktop (COSMIC), app registry (`iliada-appd`) | done |
 | Apps without rebuild (drag a .app in, Trash, auto-recorded list) | done; validated in the VM |
-| Iliada Store (GUI + CLI), signed catalog, automatic updates | done; validated in the VM |
+| Iliada Store (GUI + CLI), signed catalog, automatic updates | done; validated in the VM. `catalog-2.json` (an archive per processor) validated in the x86 VM against the published catalog; `catalog.json` unchanged for 0.1 |
 | System service (`iliada-systemd`): tools, services, apply, no sudo | done; validated in the VM (GUI and CLI) |
 | Iliada Settings (updates, backup, tools, services, privacy) | done; validated in the VM |
 | Setup Assistant (first login) | done; shown on first login in the VM |
 | GitHub backup and restore | built; needs a GitHub OAuth app to test |
-| Assistant (Ask / Auto, Settings → Assistant, `iliada ask`) | built; needs an API key to test |
+| Assistant (Ask / Auto, Settings → Assistant, `iliada ask`, the Assistant app) | live-tested in the x86 VM with DeepSeek V4 Flash (OpenRouter): app install, dark/light, volume, commands, email (local mail server; approval and decline), a prompt-injected file not obeyed; Settings → Assistant and the app clicked through |
 | Store: Software and Services (not apps) | built |
 | Iliada updates (signed release manifest) | built; needs a public release to test |
 | Graphical installer, `iliada-install`, config template | built; the script's end-to-end install test passes |
-| Ready-to-run VM image (UTM on Apple Silicon, QEMU) | x86 validated; ARM building |
+| Ready-to-run VM image (UTM on Apple Silicon, QEMU) | x86 validated; ARM image boots (emulated here) and runs the ARM apps once the sandbox group fix is in |
 | Rust userland (uutils, sudo-rs, ntpd-rs, fish) | done |
 | Immutable appliance image | evaluates; build and boot not yet tested |
 
@@ -266,8 +267,9 @@ then continues the backup's.
 
 1. Test GitHub backup and restore end to end (needs the GitHub OAuth app).
 2. Publish a signed Iliada release (`iliada-catalog release`) so updates work.
-3. Republish the apps with their declared folders and sound (LibreOffice
-   Writer, VLC and Sudoku, replacing 2048, work).
+3. LibreOffice Writer on ARM (its ARM build stops at start-up with a UNO
+   exception; the x86-64 build works).
+4. The Assistant as a keyboard-first panel (a shortcut from anywhere).
 
 **Later**
 
@@ -288,19 +290,34 @@ and turn on the SSH server", "why can't GIMP see my Pictures?") and it does
 it, instead of a forum search and terminal commands.
 
 * **Configuration.** `[assistant]` in `settings.toml`: `enabled`, `mode`
-  (`ask` or `auto`) and `model`; changed in Settings → Assistant or with
-  `iliada assistant`, without a rebuild, and backed up like the rest. The
-  API key is the user's own, kept in `~/.config/iliada/anthropic-key`, and
-  never backed up.
+  (`ask` or `auto`), `model` and `full_access`; changed in Settings →
+  Assistant or with `iliada assistant`, without a rebuild, and backed up
+  like the rest. Models: Claude (Anthropic key) or any OpenRouter model
+  (`vendor/model`, e.g. `deepseek/deepseek-v4-flash`, OpenRouter key). The
+  keys are the user's own, in `~/.config/iliada/anthropic-key` /
+  `openrouter-key` (0600), never backed up. What it has cost is kept in
+  `~/.local/share/iliada/assistant-spend.json` and shown in Settings.
 * **Ask mode** (default): every action is shown ("Install Firefox") and runs
-  only if the user allows it. **Auto mode**: it acts on its own. Auto is only
-  honoured with a model trusted for unsupervised work (Claude Opus 5.5,
-  Fable 5.1, Sonnet 5.5); with any other model it asks first.
-* **A small, typed toolset.** Iliada's own operations: Store apps, software
-  and services, updates, backup, app permissions. No shell, no files, no
-  web. System changes go through the system service, so the assistant can
-  never do more than the user it works for (a non-administrator's assistant
-  cannot install software).
+  only if the user allows it. **Auto mode**: it acts on its own, with any
+  model (Settings notes that models other than Opus, Fable and Sonnet make
+  more mistakes on their own).
+* **A typed toolset.** Iliada's own operations: Store apps, software and
+  services, updates, backup, app permissions; dark/light appearance,
+  volume, opening links; **email** from the user's own account. System
+  changes go through the system service, so the assistant can never do more
+  than the user it works for (a non-administrator's assistant cannot
+  install software).
+* **Full access** (off by default): it may also run commands as the user
+  (`run_command`: bash in their home, output cut, time limit), so it can do
+  anything the user can without an administrator's password. Text that
+  comes back from tools is information, never instructions.
+* **Email.** `send_email` sends plain-text mail through the user's own SMTP
+  account (Settings → Assistant → Email or `iliada assistant email`;
+  `~/.config/iliada/email.toml` and `email-password`, 0600, never backed
+  up; TLS or STARTTLS, plain only to a server on this computer). Every
+  email is shown to the person before it is sent, **even in Auto mode**:
+  it leaves the computer in their name, and a prompt-injected document must
+  not be able to mail anything out on its own.
 * **It cannot answer permission prompts.** Those are drawn by Iliada for the
   person at the keyboard. It can change a decision only through Settings'
   own operation, as the user could, and says so.

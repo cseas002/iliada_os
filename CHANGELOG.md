@@ -17,11 +17,17 @@
 - **Iliada updates**: signed release manifests; Settings → Updates.
 
 **Apps, software, services.**
+- **Apps for ARM computers** (Apple Silicon in UTM, Raspberry Pi): the Store
+  offers the build for your computer's processor (14 apps on ARM so far),
+  and an app made for another kind of computer says so instead of failing
+  silently. Iliada 0.1 keeps reading the old catalog.
+- Apps start for every user (the sandbox group was missing on installed
+  systems and the UTM image, so apps failed there).
 - The Store has **Software** (Python, Node.js, ffmpeg…) and **Services**
   (nginx, PostgreSQL, MariaDB, Redis, Docker, SSH, printing), labeled as not
   apps; they install through the system service.
-- New apps: Sudoku (replaces 2048), VLC. LibreOffice Writer works (it had
-  picked up Debian's headless core).
+- New apps in the Store: LibreOffice Writer, VLC, Sudoku (replaces 2048).
+  LibreOffice Writer works (it had picked up Debian's headless core).
 - Recipes can declare folders, permissions and `copy` steps (what a Debian
   install script would have done; Iliada never runs those).
 - Apps see a one-user `/etc/passwd` (theirs) and a home with the usual folders.
@@ -44,11 +50,20 @@
 
 **The assistant.**
 - Ask Iliada in plain words (Assistant app, `iliada ask`). **Ask** mode
-  approves every action; **Auto** mode acts on its own with a trusted model
-  (Claude Opus 5.5 by default). Only Iliada's own operations; every action
+  approves every action; **Auto** mode acts on its own. Claude (Opus 5.5 by
+  default) or any OpenRouter model, such as DeepSeek V4 Flash at a fraction
+  of a cent per request; what it has cost is shown in Settings. Every action
   logged. Configured in `settings.toml`; your API key stays on your computer.
+- It switches dark/light appearance, sets the volume, opens links, and with
+  **full access** (your choice) runs commands as you.
+- **Email** from your own account (Settings → Assistant → Email). You see
+  every email before it goes, even in Auto mode.
+- Text in files and command output is never taken as instructions; it tells
+  you when a file tried.
 
 **For testers and developers.**
+- The Iliada logo: a Greek helmet with a horsehair crest, shown by
+  `fastfetch` (and `neofetch`).
 - Ready-to-run VM images (UTM on Apple Silicon, QEMU) that set up
   `/etc/iliada` on first boot.
 - `utm-dev` image and `scripts/dev-push.sh`: update a running test VM in
