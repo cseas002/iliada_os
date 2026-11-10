@@ -119,7 +119,7 @@ def main():
         # Flush everything to the virtual disk, then stop the VM. (Shutting the
         # live session down cleanly is slow and irrelevant to the result.)
         con.read_until(r"(> |[$#] )", 60)
-        con.send("sync; echo FLUSHED-$((40+2))\n")
+        con.send("bash -c 'sync; echo FLUSHED-$((40+2))'\n")
         con.read_until(r"FLUSHED-42", 120)
         time.sleep(2)
     finally:
