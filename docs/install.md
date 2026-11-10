@@ -1,8 +1,29 @@
 # Installing and configuring Iliada
 
-Iliada 0.1 is a **developer preview**. It installs like NixOS: you boot an
-installer, and the whole system is then described by one configuration
-folder, `/etc/iliada`.
+Iliada is a **developer preview**. Try it in a virtual machine (Option 0),
+or install it from a USB stick. Either way the whole system is described by
+one configuration folder, `/etc/iliada`, and changed from Iliada Settings.
+
+## Option 0: a ready-to-run virtual machine (no installation)
+
+A disk image that boots straight to the desktop: `iliada.qcow2`.
+
+```sh
+nix build github:cseas002/iliada_os#packages.aarch64-linux.utm-image   # Apple Silicon (UTM)
+nix build github:cseas002/iliada_os#packages.x86_64-linux.utm-image    # x86 (UTM, QEMU, Proxmox)
+```
+
+**UTM on a Mac:**
+1. **+** → **Virtualize** → **Linux**. Leave the boot ISO empty → Continue.
+2. Memory **4096 MB**, CPU cores **2–4** → Continue. Storage: any size (it is
+   replaced next) → Continue → Continue.
+3. Summary: name it "Iliada", tick **Open VM Settings** → Save.
+4. In the settings, **Drives**: delete the drive UTM made, then **New…** →
+   **Import…** → choose `iliada.qcow2` (interface VirtIO) → Save.
+5. Start it. You are logged in as `iliada` (password `iliada`).
+
+On first boot Iliada writes `/etc/iliada` itself, so Settings can change and
+update the VM like an installed system. The disk grows to 40 GB on its own.
 
 ## Option A: fresh install (installer ISO)
 
@@ -19,16 +40,19 @@ internet during installation.
    sudo dd if=result/iso/*.iso of=/dev/sdX bs=4M status=progress conv=fsync
    ```
    Or use balenaEtcher. For a VM, attach the ISO as a CD.
-3. **Boot it** (UEFI). You land in a COSMIC live session.
-4. **Install** from a terminal:
-   ```sh
-   lsblk                                     # find your disk
-   sudo iliada-install --disk /dev/nvme0n1 --user alex --fullname "Alex" \
-                       --hostname alex-laptop --timezone Europe/Athens
-   ```
-   It asks you to confirm by typing the disk name, then asks for a password.
-   The **whole disk** is erased (GPT: 1 GiB EFI partition + ext4 root).
-5. Reboot and remove the USB stick.
+3. **Boot it** (UEFI). You land in a COSMIC live session, and **Install
+   Iliada** opens: choose the disk, enter your name, account name, computer
+   name, password and time zone, confirm, and wait. The **whole disk** is
+   erased (GPT: 1 GiB EFI partition + ext4 root).
+4. Restart and remove the USB stick. On first login the **Setup Assistant**
+   offers to restore a backup from GitHub or to start backing this computer up.
+
+The same installation from a terminal (what the installer runs):
+```sh
+lsblk                                     # find your disk
+sudo iliada-install --disk /dev/nvme0n1 --user alex --fullname "Alex" \
+                    --hostname alex-laptop --timezone Europe/Athens
+```
 
 ## Option B: an existing NixOS machine
 
@@ -61,26 +85,33 @@ sudo nixos-rebuild switch --flake /etc/iliada#iliada
 | `iliada update` | update apps, and install any on your list that are missing |
 | `iliada tool add htop` · `iliada tool remove htop` · `iliada tool list` | command-line tools |
 | `iliada service enable ssh` · `disable` · `list` | services (SSH server, printing) |
-| `iliada apply` | apply `/etc/iliada` after editing it by hand |
+| `iliada system status` · `iliada system update` | Iliada version and updates |
+| `iliada system apply` | apply `/etc/iliada` after editing it by hand |
+| `iliada backup sign-in` · `enable <name>` · `now` · `list` · `restore <owner/iliada_name>` | GitHub backup |
 
-Tool and service changes ask for your password once, apply the system
-atomically, and are committed to `/etc/iliada`'s history; if applying fails,
-the file is put back and the running system is untouched.
+Everything here is also in **Iliada Settings** (Updates, Backup,
+Command-line tools, Services, Privacy, About). Neither needs `sudo`: the
+Iliada system service does the work for administrators (members of
+`wheel`). Changes apply the system atomically and are committed to
+`/etc/iliada`'s history; if applying fails, the file is put back and the
+running system is untouched.
 
 Apps update themselves: `iliada-store-sync` runs two minutes after boot and
 every six hours (`iliada.store.updateInterval`).
 
-Change anything, then apply it:
+Edit `configuration.nix` by hand if you like, then apply it with
+`iliada system apply`. Every change is atomic. If a change breaks something,
+reboot and pick the previous entry in the boot menu.
 
-```sh
-sudo nixos-rebuild switch --flake /etc/iliada#iliada
-```
+### Backup and restore
 
-Every change is atomic. If a change breaks something, reboot and pick the
-previous entry in the boot menu.
-
-`/etc/iliada` is a git repository: every change has history, and it is what
-the (upcoming) backup and sync feature pushes to your private GitHub repo.
+Settings → Backup → **Sign in with GitHub** (you approve a code in the
+browser), name the backup, done: `/etc/iliada` (your apps, tools, services
+and configuration) is pushed to the private repository `iliada_<name>`
+after every change and every hour. On a new computer the Setup Assistant (or
+Settings → Backup → Restore) brings back its apps and settings; the new
+computer keeps its own hardware configuration. Backups need a GitHub OAuth
+app (`iliada.system.githubClientId`).
 
 ### Apps (no rebuild, no terminal)
 
@@ -93,8 +124,12 @@ the (upcoming) backup and sync feature pushes to your private GitHub repo.
 * You can also add an entry by hand (`debian = "gnome-text-editor"`). It is
   picked up within seconds. Apps never need `nixos-rebuild`.
 
-Every app runs in its own sandbox, with no network and no access to your
-files unless you grant it.
+Every app runs in its own sandbox and sees only its own files. The first
+time an app starts it asks for what it declared (a folder such as Pictures,
+the camera, the microphone); change the answers in Settings → Privacy. A
+file you open with an app (double-click) is given to it, and only that
+file. Settings → Privacy → **Extra isolation** runs an app in its own
+virtual machine.
 
 ### Useful options
 
@@ -113,18 +148,15 @@ files unless you grant it.
 | `iliada.rustUserland.enable` | `true` | uutils, sudo-rs, ntpd-rs, fish |
 | `iliada.ux.hideFhs` | `true` | hide Unix folders in the file manager |
 | `iliada.ux.noSudo` | `false` | remove sudo entirely |
+| `iliada.system.githubClientId` | `null` | GitHub OAuth app for backups (device flow) |
+| `iliada.desktop.setupAssistant` | `true` | Setup Assistant on each user's first login |
 | `iliada.image.enable` | `false` | build the immutable appliance image instead |
 
 Any NixOS option works too (`services.printing.enable = true;` etc.).
 
 ## Updating
 
-In 0.1, the machine builds from the Iliada copy in `/etc/iliada/source`.
-To update, replace that folder with a newer Iliada checkout, then:
-
-```sh
-cd /etc/iliada && sudo nix flake update iliada && sudo nixos-rebuild switch --flake .#iliada
-```
-
-(Once Iliada publishes releases, `flake.nix` will point at them and
-`nix flake update` alone will do.)
+Settings → Updates → **Check now** / **Update now** (or
+`iliada system update`). Iliada checks daily. An update downloads the
+signed release, swaps `/etc/iliada/source`, rebuilds, and is a new boot-menu
+entry; if the build fails, nothing changes. Apps update on their own.

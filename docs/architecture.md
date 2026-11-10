@@ -1,4 +1,4 @@
-# Iliada architecture (Phase 1)
+# Iliada architecture
 
 This document is the reviewed version of the kickoff draft. Where it departs
 from the draft, the reason is stated; the ADRs in `docs/adr/` hold the details.
@@ -97,35 +97,49 @@ this design they are the same mechanism.
 
 | | Tier 1: namespace | Tier 2: micro-VM |
 |---|---|---|
-| Mechanism | bubblewrap: all namespaces, `--cap-drop ALL`, ro binds | cloud-hypervisor (KVM), virtio-only devices |
-| FS view | bundle `Root` at `/`, runtime base, private data dir | same, via virtio-fs (app share read-only) |
+| Mechanism | bubblewrap: all namespaces, `--cap-drop ALL`, ro binds | cloud-hypervisor (KVM), virtio-only devices; *inside*, the same bubblewrap sandbox |
+| FS view | bundle `Root` at `/`, runtime base, private data dir | same: virtio-fs shares (host `/nix/store` and the app read-only) mounted at their host paths |
+| Display | the host Wayland socket | waypipe over vsock (guest port 7001), software rendering |
 | Channel out | broker Unix socket bind-mounted | vsock `CID 2:7000` → broker socket |
-| Used for | **every app, by default** (native speed) | opt-in: "Extra isolation" per app, or "High security mode" for all |
+| Network, sound | when declared / allowed | not yet |
+| Used for | **every app, by default** (native speed) | opt-in: "Extra isolation" per app (Settings → Privacy), or "High security mode" for all |
+
+A micro-VM boots the host's kernel with a small initrd whose `/init` is
+`iliada-guest-init` (Rust). It mounts the shares listed in `spec.json`,
+starts waypipe, and waypipe starts the app's bubblewrap sandbox; when the
+app exits, the guest powers off. The host side (`iliada-run`) starts one
+unprivileged virtiofsd per share, a waypipe client and cloud-hypervisor.
 
 *Why not Firecracker:* no virtio-gpu, no virtio-fs (only block devices), and no
 display path. Desktop apps need all three. cloud-hypervisor is Rust,
 KVM-based, supports virtio-fs, vsock and vhost-user, and is what Spectrum OS
-(the closest prior art: NixOS with per-app VMs) uses. Display forwarding
-(virtio-gpu cross-domain / Wayland) is Phase 2.
+(the closest prior art: NixOS with per-app VMs) uses. GPU acceleration
+(virtio-gpu cross-domain) is later work; waypipe already carries windows.
 
-**Runtime permissions** (`iliada-broker`, `iliada-ipc`, ADR 0003):
+**Permissions** (ADR 0006):
 
 1. Each app declares an *upper bound* in `Permissions.toml`, with a purpose
-   string per capability. Undeclared means denied without a prompt.
-2. A request goes to the broker over the sandbox's only channel. The app's
-   identity is the socket the request arrived on, assigned by the host, never
-   a claim made by the guest.
-3. The broker checks policy, then stored ("Always") grants, then session
-   ("While running") grants. Only then does it prompt. Grants: Once / While
-   running / Always. Every decision is appended to `audit.jsonl`.
-4. A grant yields a **broker-mediated handle**, never a device node or host
-   path. In Phase 1, user-picked files are streamed through the broker (the
-   app learns only the file name). Mic, camera and screen grants return a
-   `Media` resource whose PipeWire stream bridging is Phase 2.
-5. Prompts must be drawn by the compositor, outside any app's surface, so an
-   app cannot spoof or overlay them. Phase 1 ships a terminal frontend and a
-   deny-all frontend; app-supplied text is sanitised and labelled as coming
-   from the app.
+   string per capability: in its recipe (`folders = ["pictures"]`), or
+   inferred from the libraries it links (audio libraries: sound, microphone).
+   Undeclared means never asked, never granted.
+2. The first time the app starts, `iliada-run` (on the host, before the
+   sandbox exists) asks about each declared folder, the camera and the
+   microphone in `iliada-prompt`, a window Iliada draws; the app cannot draw
+   or answer it. Sound is granted without asking, as on macOS.
+3. Answers are stored per user in `~/.local/share/iliada/permissions.toml`,
+   outside every sandbox, and can be changed in Settings → Privacy.
+4. Only what was allowed is put into the sandbox: the folder at
+   `~/<Folder>` in the app's home, the camera devices, the sound server's
+   sockets. Files opened with an app (double-click in Files) are bound one by
+   one at their own paths: the app sees exactly those files.
+5. Known limit: the sound server's socket carries playback and recording,
+   so an app that may play sound could also record. Separating them needs
+   PipeWire's portal-based access control (planned).
+
+The broker (`iliada-broker`, `iliada-ipc`, ADR 0003) serves apps that ask at
+run time over their socket or vsock (Iliada-aware apps, micro-VMs): identity
+is the socket the request arrived on, grants are Once / While running /
+Always, and every decision is appended to `audit.jsonl`.
 
 **Network** is not a runtime permission. It is decided when the sandbox is
 created (`NetworkPolicy::None | Nat`), because "ask for network" prompts
@@ -194,69 +208,72 @@ justification, runtime base), validated by the same Rust types.
 | App → user | compositor-owned prompts; app text sanitised and labelled |
 | Disk → running system | dm-verity root hash in a signed UKI |
 
-## 8. Phase 1 status
+## 8. Status
 
 | Area | State |
 |---|---|
 | Bundle format + validation | done, tested |
-| Package Translator (.deb → .app), index, resolvers, provenance | done; tested offline and against Debian trixie (jq, gnome-calculator) |
+| Package Translator (.deb → .app), index, resolvers, provenance | done; 12 apps published |
 | Landlock confinement of extraction | done; enforced on Linux |
 | IPC protocol, broker, guest client | done; end-to-end tests over real sockets |
-| Tier-1 sandbox (`iliada-run`) | done; GUI apps (GNOME Calculator) run sandboxed from the launcher |
-| Tier-2 micro-VMs | config generation tested; booting needs the guest image (Phase 2) |
-| Desktop (COSMIC), app registry (`iliada-appd`) | done; apps appear in search and launch sandboxed |
+| Tier-1 sandbox (`iliada-run`) | done; every published app runs sandboxed from the launcher |
+| Permissions: first-launch prompts, Settings → Privacy, opened files | built; unit-tested |
+| Tier-2 micro-VMs (guest init, initrd, virtio-fs, waypipe) | built; unit-tested, first boot test pending |
+| Desktop (COSMIC), app registry (`iliada-appd`) | done |
 | Apps without rebuild (drag a .app in, Trash, auto-recorded list) | done; validated in the VM |
-| Iliada Store (GUI + `iliada`/`iliada-store` CLI), signed catalog | done; 12 apps published in `iliada_apps`; Get → Open validated in the VM |
-| Automatic app updates and restores (`iliada-store-sync` timer) | done; restore validated in the VM |
-| COSMIC Files shows `.app` bundles as apps (icon, launch) | done |
-| Tools and services in `settings.toml`, `iliada tool/service` | done |
-| Installer ISO + `iliada-install`, config template | done; end-to-end install test passes (UEFI VM) |
+| Iliada Store (GUI + CLI), signed catalog, automatic updates | done; validated in the VM |
+| System service (`iliada-systemd`): tools, services, apply, no sudo | done; validated in the VM (GUI and CLI) |
+| Iliada Settings (updates, backup, tools, services, privacy) | done; validated in the VM |
+| Setup Assistant (first login) | done; shown on first login in the VM |
+| GitHub backup and restore | built; needs a GitHub OAuth app to test |
+| Iliada updates (signed release manifest) | built; needs a public release to test |
+| Graphical installer, `iliada-install`, config template | built; the script's end-to-end install test passes |
+| Ready-to-run VM image (UTM on Apple Silicon, QEMU) | x86 validated; ARM building |
 | Rust userland (uutils, sudo-rs, ntpd-rs, fish) | done |
 | Immutable appliance image | evaluates; build and boot not yet tested |
-| No-terminal settings, Setup Assistant, GitHub sync | designed (ADR 0005); not implemented |
 
 ## 8b. The user layer: no terminal, configuration that follows you
 
-Users never need a terminal (ADR 0005). The system layer (Nix) is changed by
-the Settings app through `iliada-configd`, which applies it with a
-background rebuild. The user layer (apps, preferences) changes instantly
-and never needs a rebuild. The only app format users ever see is `.app`:
-apps are installed by dragging a `.app` into Applications and uninstalled by
-dragging it to the Trash. The Package Translator produces `.app` bundles
-behind the scenes and is never user-facing. `iliada-appd` records every change in `/etc/iliada/apps.toml`.
+Users never need a terminal (ADR 0005). Everything that changes the system
+goes through one root service, `iliada-systemd` (ADR 0006): command-line
+tools and services (`settings.toml`), applying the configuration, Iliada
+updates and backups. Its clients are Iliada Settings, the Setup Assistant
+and the `iliada` command; it checks that the caller is an administrator
+(`wheel`) from the socket's credentials, so nothing needs `sudo`. The user
+layer (apps, preferences) changes instantly and never needs a rebuild:
+apps are installed by dragging a `.app` into Applications (or with the
+Store) and removed by dragging it to the Trash; `iliada-appd` records every
+change in `/etc/iliada/apps.toml`.
 
-`/etc/iliada` is a git repository. With backup on, `iliada-syncd` pushes it
-to a private `iliada_<name>` repository. On a new computer the Setup
-Assistant restores it, so apps, preferences and settings come back. Only
-commits signed by the profile's enrolled devices are applied.
+`/etc/iliada` is a git repository: every change is a commit. With backup on,
+the service pushes it to a private `iliada_<name>` repository on the user's
+GitHub account (device-flow sign-in: the user approves a code in the
+browser; the token stays root-only). It pushes after every change and every
+hour. Restoring (Setup Assistant or Settings) takes the backup's
+`settings.toml` and `apps.toml`, keeps the new computer's hardware
+configuration, applies it and reinstalls the apps; the computer's history
+then continues the backup's.
 
 ## 9. Roadmap
 
-**Phase 2: Mac-like, no terminal** (ADR 0005, in this order)
+**Next**
 
-1. Apps without terminal or rebuild: mutable `apps.toml`, drag a `.app` in to
-   install, drag to the Trash to uninstall, automatic recording.
-2. `iliada-configd` + `settings.toml`: GUI settings applied in the background.
-3. Graphical installer and first-boot Setup Assistant.
-4. `iliada-syncd`: GitHub backup/restore, device enrolment, signed changes.
-5. "Get Apps" catalog; downloadable apps as signed, compressed `.app`s.
+1. Test GitHub backup and restore end to end (needs the GitHub OAuth app).
+2. Boot-test micro-VMs; then network and sound inside them, and opened files.
+3. Publish a signed Iliada release (`iliada-catalog release`) so updates work.
+4. Republish the apps with their declared folders and sound.
+5. Fix the apps that don't run yet (LibreOffice, VLC, 2048).
 
-**Phase 2b: isolation and the desktop shell**
+**Later**
 
-1. COSMIC desktop VM, testable remotely (QEMU on the dev server, VNC over SSH).
-2. Guest image (kernel + initrd + guest agent) and the first booted Tier-2 app.
-3. Wayland/virtio-gpu display path from micro-VMs; PipeWire bridging for media grants.
-4. Compositor-owned prompt frontend in cosmic-comp; broker as a per-user service.
-5. Bundle signing, with grants tied to signing keys; `iliada-appd`
-   (drag-to-install, MIME and `.desktop` registration).
-6. OpenPGP verification of Debian `InRelease`; Flatpak and AppImage sources.
-7. Recipe repository; seccomp profiles; GTK/Qt in the runtime base.
-
-**Phase 3: polish and reach**
-
-1. aarch64 builds (ARM laptops, UTM on Apple Silicon).
-2. Installer, first-run setup, the update server, Secure Boot key management.
-3. The on-device assistant (§10).
+1. Microphone separate from sound (PipeWire access control via portals).
+2. GPU acceleration for micro-VMs (virtio-gpu cross-domain).
+3. Bundle signing, with grants tied to signing keys.
+4. OpenPGP verification of Debian `InRelease`; Flatpak and AppImage sources.
+5. Seccomp profiles; a filtered D-Bus proxy for portals.
+6. The immutable appliance image booted and updated (A/B, dm-verity).
+7. Secure Boot key management.
+8. The on-device assistant (§10).
 
 ## 10. Future: the on-device assistant
 

@@ -52,10 +52,12 @@ Status: **Phase 1** (architecture + proofs of concept). See
 
 ## Install
 
-Iliada 0.1 is a developer preview: build the installer ISO, boot it, and run
-`sudo iliada-install --disk /dev/<disk> --user <name>`. Afterwards the whole
-system is configured in `/etc/iliada` (`configuration.nix` + `apps.toml`).
-See **[docs/install.md](docs/install.md)**.
+Iliada is a developer preview. Try the ready-to-run VM image (UTM on Apple
+Silicon, or QEMU), or boot the installer ISO: **Install Iliada** walks you
+through it, and the **Setup Assistant** can restore your apps and settings
+from a GitHub backup. Afterwards everything is changed in **Iliada
+Settings** (or with the `iliada` command), never with `sudo`. See
+**[docs/install.md](docs/install.md)**.
 
 ## Repository layout
 
@@ -125,10 +127,10 @@ End-user machines receive finished bundles and need no key.
 
 ## Roadmap
 
-See [docs/architecture.md §9](docs/architecture.md#9-roadmap). Next up: the
-first app booted in its own micro-VM, the COSMIC desktop VM, and the trusted
-permission prompt. Further out: an **on-device assistant** that helps users
-with their system, under strict rules about what it may do.
+See [docs/architecture.md §9](docs/architecture.md#9-roadmap). Next up:
+backup and restore tested end to end, apps booted in their own micro-VM,
+signed Iliada releases. Further out: an **on-device assistant** that helps
+users with their system, under strict rules about what it may do.
 
 ## License
 

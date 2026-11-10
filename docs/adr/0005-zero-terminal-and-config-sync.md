@@ -1,6 +1,9 @@
 # ADR 0005: No terminal for users; configuration that follows you
 
-**Status:** accepted (design), implementation phased (see Roadmap)
+**Status:** accepted; implemented. `iliada-configd` and `iliada-syncd` became
+one service, `iliada-systemd` (ADR 0006). Device enrolment and signed
+changes (§4) are not implemented yet: a backup is trusted because it is in
+the user's own private repository.
 
 ## Requirement
 A user never needs a terminal: installing and removing apps, changing
