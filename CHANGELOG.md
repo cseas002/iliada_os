@@ -20,7 +20,13 @@
 - The Store has **Software** (Python, Node.js, ffmpeg…) and **Services**
   (nginx, PostgreSQL, MariaDB, Redis, Docker, SSH, printing), labeled as not
   apps; they install through the system service.
-- New apps: Sudoku (replaces 2048), VLC; LibreOffice Writer in progress.
+- New apps: Sudoku (replaces 2048), VLC. LibreOffice Writer starts but
+  opens no window yet.
+- Recipes can declare folders, permissions and `copy` steps (what a Debian
+  install script would have done; Iliada never runs those).
+- Apps see a one-user `/etc/passwd` (theirs) and a home with the usual folders.
+- Bundles that declare permissions from a newer Iliada still open (unknown
+  permissions are skipped). Apps republished with `sound` need 0.2.
 - The package translator keeps libraries in a program's own folder where
   the program expects them.
 
