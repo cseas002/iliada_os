@@ -40,7 +40,9 @@ in
     guestInitrd = lib.mkOption {
       type = lib.types.package;
       default = pkgs.callPackage ../guest/initrd.nix {
-        kernel = cfg.guestKernel;
+        # The kernel's modules (a separate output); the host's when the
+        # guest boots the host kernel, as it does by default.
+        modulesTree = config.system.modulesTree;
         iliadaPackage = config.iliada.package;
       };
       defaultText = lib.literalExpression "the Iliada guest initramfs (nix/guest/initrd.nix)";
