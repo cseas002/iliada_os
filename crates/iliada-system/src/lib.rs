@@ -16,6 +16,7 @@ pub mod github;
 pub mod init;
 pub mod protocol;
 pub mod settings;
+pub mod software;
 pub mod update;
 pub mod users;
 

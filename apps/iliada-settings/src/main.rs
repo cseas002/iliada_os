@@ -8,9 +8,9 @@ use cosmic::iced::{Alignment, Length, Size};
 use cosmic::widget::{self, nav_bar, settings};
 use cosmic::{ApplicationExt, Core, Element, executor};
 use futures_util::StreamExt;
+use iliada_bundle::decisions::{Decision, Decisions};
 use iliada_settings::{Progress, ago, open_url, run};
 use iliada_system::client;
-use iliada_bundle::decisions::{Decision, Decisions};
 use iliada_system::protocol::{AUTO_MODELS, AssistantMode, AssistantSettings, Backup, Event, Request, Status};
 
 /// Models offered in Settings (the first is the default).
@@ -252,8 +252,10 @@ impl App {
             (None, None, None) => "Iliada looks for updates every day.".into(),
         };
         let action = match newer {
-            Some(_) => widget::button::suggested("Update now").on_press_maybe(ok.then_some(Message::Run(Request::UpdateSystem))),
-            None => widget::button::standard("Check now").on_press_maybe(ok.then_some(Message::Run(Request::CheckSystemUpdate))),
+            Some(_) => widget::button::suggested("Update now")
+                .on_press_maybe(ok.then_some(Message::Run(Request::UpdateSystem))),
+            None => widget::button::standard("Check now")
+                .on_press_maybe(ok.then_some(Message::Run(Request::CheckSystemUpdate))),
         };
         let system = settings::section()
             .title("Iliada")
@@ -261,7 +263,10 @@ impl App {
         let apps = settings::section().title("Apps").add(
             settings::item::builder("App updates")
                 .description("Apps from the Store update automatically, every few hours.")
-                .control(widget::button::standard("Update apps now").on_press_maybe(ok.then_some(Message::Run(Request::UpdateApps)))),
+                .control(
+                    widget::button::standard("Update apps now")
+                        .on_press_maybe(ok.then_some(Message::Run(Request::UpdateApps))),
+                ),
         );
         settings::view_column(vec![system.into(), apps.into()]).into()
     }
@@ -278,7 +283,10 @@ impl App {
                     .title("Backup")
                     .add(info(
                         "Backup is not available",
-                        Some("This system has no GitHub app configured for backups (iliada.system.githubClientId).".into()),
+                        Some(
+                            "This system has no GitHub app configured for backups (iliada.system.githubClientId)."
+                                .into(),
+                        ),
                     ))
                     .into(),
             );
@@ -302,9 +310,10 @@ impl App {
                     settings::section()
                         .title("Backup")
                         .add(
-                            settings::item::builder("Back up to GitHub")
-                                .description(intro)
-                                .control(widget::button::suggested("Sign in with GitHub").on_press_maybe(ok.then_some(Message::Run(Request::BackupSignIn)))),
+                            settings::item::builder("Back up to GitHub").description(intro).control(
+                                widget::button::suggested("Sign in with GitHub")
+                                    .on_press_maybe(ok.then_some(Message::Run(Request::BackupSignIn))),
+                            ),
                         )
                         .into(),
                 );
@@ -315,8 +324,9 @@ impl App {
                     .on_input(Message::BackupName)
                     .on_submit(|_| Message::Run(Request::BackupEnable { name: String::new() }))
                     .width(Length::Fixed(220.0));
-                let start = widget::button::suggested("Back up")
-                    .on_press_maybe((ok && name_ok).then(|| Message::Run(Request::BackupEnable { name: self.backup_name.clone() })));
+                let start = widget::button::suggested("Back up").on_press_maybe(
+                    (ok && name_ok).then(|| Message::Run(Request::BackupEnable { name: self.backup_name.clone() })),
+                );
                 let row = widget::row::with_capacity(3)
                     .push(widget::text::body(github_prefix(account)))
                     .push(input)
@@ -329,8 +339,10 @@ impl App {
                         .add(info("Name this backup", Some(intro.into())))
                         .add(settings::item_row(vec![row.into()]))
                         .add(
-                            settings::item::builder(format!("Signed in as {account}"))
-                                .control(widget::button::standard("Sign out").on_press_maybe(ok.then_some(Message::Ask(Confirm::SignOut)))),
+                            settings::item::builder(format!("Signed in as {account}")).control(
+                                widget::button::standard("Sign out")
+                                    .on_press_maybe(ok.then_some(Message::Ask(Confirm::SignOut))),
+                            ),
                         )
                         .into(),
                 );
@@ -348,11 +360,16 @@ impl App {
                         .add(
                             settings::item::builder(format!("Backing up to github.com/{repo}"))
                                 .description(format!("{last} Iliada backs up after every change, and every hour."))
-                                .control(widget::button::standard("Back up now").on_press_maybe(ok.then_some(Message::Run(Request::BackupNow)))),
+                                .control(
+                                    widget::button::standard("Back up now")
+                                        .on_press_maybe(ok.then_some(Message::Run(Request::BackupNow))),
+                                ),
                         )
                         .add(
-                            settings::item::builder(format!("Signed in as {account}"))
-                                .control(widget::button::standard("Sign out").on_press_maybe(ok.then_some(Message::Ask(Confirm::SignOut)))),
+                            settings::item::builder(format!("Signed in as {account}")).control(
+                                widget::button::standard("Sign out")
+                                    .on_press_maybe(ok.then_some(Message::Ask(Confirm::SignOut))),
+                            ),
                         )
                         .into(),
                 );
@@ -372,17 +389,24 @@ impl App {
                         .control(widget::button::standard("Show backups").on_press(Message::LoadBackups)),
                 )
             }
-            Some(Err(e)) => section = section.add(settings::item::builder("Could not list your backups").description(e.as_str()).control(widget::button::standard("Retry").on_press(Message::LoadBackups))),
-            Some(Ok(list)) if list.is_empty() => {
-                section = section.add(info("No backups yet", None))
+            Some(Err(e)) => {
+                section = section.add(
+                    settings::item::builder("Could not list your backups")
+                        .description(e.as_str())
+                        .control(widget::button::standard("Retry").on_press(Message::LoadBackups)),
+                )
             }
+            Some(Ok(list)) if list.is_empty() => section = section.add(info("No backups yet", None)),
             Some(Ok(list)) => {
                 for b in list {
                     let updated = b.updated.split('T').next().unwrap_or("").to_owned();
                     section = section.add(
                         settings::item::builder(b.name.clone())
                             .description(format!("github.com/{} · last backup {updated}", b.repo))
-                            .control(widget::button::standard("Restore").on_press_maybe(ok.then(|| Message::Ask(Confirm::Restore(b.repo.clone()))))),
+                            .control(
+                                widget::button::standard("Restore")
+                                    .on_press_maybe(ok.then(|| Message::Ask(Confirm::Restore(b.repo.clone())))),
+                            ),
                     );
                 }
             }
@@ -397,9 +421,12 @@ impl App {
             installed = installed.add(info("No tools installed", None));
         }
         for t in &s.tools {
-            installed = installed.add(settings::item::builder(t.clone()).control(
-                widget::button::standard("Remove").on_press_maybe(ok.then(|| Message::Run(Request::RemoveTools { packages: vec![t.clone()] }))),
-            ));
+            installed = installed.add(
+                settings::item::builder(t.clone()).control(
+                    widget::button::standard("Remove")
+                        .on_press_maybe(ok.then(|| Message::Run(Request::RemoveTools { packages: vec![t.clone()] }))),
+                ),
+            );
         }
         let valid = iliada_system::settings::valid_tool_name(self.tool_input.trim());
         let input = widget::text_input("Package name, e.g. ripgrep", &self.tool_input)
@@ -453,9 +480,9 @@ impl App {
                 if decided.is_none() {
                     item = item.description("Not asked yet");
                 }
-                section = section.add(item.toggler(decided == Some(Decision::Allow), move |on| {
-                    Message::Permission(id.clone(), c, on)
-                }));
+                section = section.add(
+                    item.toggler(decided == Some(Decision::Allow), move |on| Message::Permission(id.clone(), c, on)),
+                );
             }
             let id = app.id.clone();
             section = section.add(
@@ -494,7 +521,11 @@ impl App {
             let trusted = AUTO_MODELS.contains(&a.model.as_str());
             let mut modes = settings::section()
                 .title("What it may do")
-                .add(mode_item(AssistantMode::Ask, "Ask me first", "It shows every action and does it only if you allow it."))
+                .add(mode_item(
+                    AssistantMode::Ask,
+                    "Ask me first",
+                    "It shows every action and does it only if you allow it.",
+                ))
                 .add(mode_item(
                     AssistantMode::Auto,
                     "Act on its own",
@@ -544,10 +575,7 @@ impl App {
             .title("This computer")
             .add(settings::item("Name", widget::text::body(s.hostname.clone())))
             .add(settings::item("Iliada", widget::text::body(s.version.clone())))
-            .add(settings::item(
-                "Configuration",
-                widget::text::body("/etc/iliada (every change is recorded)"),
-            ));
+            .add(settings::item("Configuration", widget::text::body("/etc/iliada (every change is recorded)")));
         settings::view_column(vec![section.into()]).into()
     }
 }
@@ -804,9 +832,7 @@ impl cosmic::Application for App {
                     col = col.push(b);
                 }
                 if !s.admin {
-                    col = col.push(card(
-                        widget::text::body("Only an administrator can change these settings.").into(),
-                    ));
+                    col = col.push(card(widget::text::body("Only an administrator can change these settings.").into()));
                 } else if let (Some(busy), None) = (&s.busy, &self.job) {
                     col = col.push(card(widget::text::body(format!("Iliada is busy: {busy}…")).into()));
                 }
@@ -819,11 +845,9 @@ impl cosmic::Application for App {
                     Page::Assistant => self.assistant(s),
                     Page::About => self.about(s),
                 });
-                widget::scrollable(
-                    widget::container(col.max_width(760)).width(Length::Fill).align_x(Alignment::Center),
-                )
-                .height(Length::Fill)
-                .into()
+                widget::scrollable(widget::container(col.max_width(760)).width(Length::Fill).align_x(Alignment::Center))
+                    .height(Length::Fill)
+                    .into()
             }
         };
         widget::container(body).padding(spacing.space_m).into()

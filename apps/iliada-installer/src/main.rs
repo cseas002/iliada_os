@@ -85,9 +85,8 @@ fn disks() -> Result<Vec<Disk>, String> {
 
 fn timezones() -> Vec<String> {
     let out = std::process::Command::new("timedatectl").arg("list-timezones").output();
-    let mut tz: Vec<String> = out
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines().map(str::to_owned).collect())
-        .unwrap_or_default();
+    let mut tz: Vec<String> =
+        out.map(|o| String::from_utf8_lossy(&o.stdout).lines().map(str::to_owned).collect()).unwrap_or_default();
     if tz.is_empty() {
         tz.push("UTC".into());
     }
@@ -239,7 +238,13 @@ impl App {
         cosmic::task::stream(stream)
     }
 
-    fn page<'a>(&'a self, title: &'a str, body: &'a str, content: Vec<Element<'a, Message>>, actions: Vec<widget::button::TextButton<'a, Message>>) -> Element<'a, Message> {
+    fn page<'a>(
+        &'a self,
+        title: &'a str,
+        body: &'a str,
+        content: Vec<Element<'a, Message>>,
+        actions: Vec<widget::button::TextButton<'a, Message>>,
+    ) -> Element<'a, Message> {
         let spacing = cosmic::theme::spacing();
         let mut col = widget::column::with_capacity(content.len() + 3)
             .push(widget::text::title2(title))
@@ -249,7 +254,8 @@ impl App {
         for c in content {
             col = col.push(c);
         }
-        let mut row = widget::row::with_capacity(actions.len() + 1).push(widget::space::horizontal()).spacing(spacing.space_s);
+        let mut row =
+            widget::row::with_capacity(actions.len() + 1).push(widget::space::horizontal()).spacing(spacing.space_s);
         for a in actions {
             row = row.push(a);
         }
@@ -321,7 +327,9 @@ impl cosmic::Application for App {
             Message::Go(Step::Disk) => {
                 self.step = Step::Disk;
                 self.disks = None;
-                return cosmic::task::future(async { Message::Disks(tokio::task::spawn_blocking(disks).await.unwrap_or_else(|e| Err(e.to_string()))) });
+                return cosmic::task::future(async {
+                    Message::Disks(tokio::task::spawn_blocking(disks).await.unwrap_or_else(|e| Err(e.to_string())))
+                });
             }
             Message::Go(step) => self.step = step,
             Message::Disks(d) => {
@@ -411,10 +419,15 @@ impl cosmic::Application for App {
                         let mut col = widget::column::with_capacity(list.len()).spacing(spacing.space_xs);
                         for (i, d) in list.iter().enumerate() {
                             col = col.push(
-                                widget::container(widget::radio(widget::text::body(d.label()), i, self.disk, Message::PickDisk))
-                                    .padding(spacing.space_s)
-                                    .class(cosmic::theme::Container::Card)
-                                    .width(Length::Fill),
+                                widget::container(widget::radio(
+                                    widget::text::body(d.label()),
+                                    i,
+                                    self.disk,
+                                    Message::PickDisk,
+                                ))
+                                .padding(spacing.space_s)
+                                .class(cosmic::theme::Container::Card)
+                                .width(Length::Fill),
                             );
                         }
                         col.into()
@@ -426,33 +439,54 @@ impl cosmic::Application for App {
                     vec![content],
                     vec![
                         widget::button::standard("Back").on_press(Message::Go(Step::Welcome)),
-                        widget::button::suggested("Continue").on_press_maybe(self.chosen().is_some().then_some(Message::Go(Step::You))),
+                        widget::button::suggested("Continue")
+                            .on_press_maybe(self.chosen().is_some().then_some(Message::Go(Step::You))),
                     ],
                 )
             }
             Step::You => {
-                let field = |label: &'static str, input: widget::TextInput<'static, Message>| -> Element<'static, Message> {
-                    widget::column::with_capacity(2)
-                        .push(widget::text::caption_heading(label))
-                        .push(input.width(Length::Fill))
-                        .spacing(spacing.space_xxs)
-                        .into()
-                };
+                let field =
+                    |label: &'static str, input: widget::TextInput<'static, Message>| -> Element<'static, Message> {
+                        widget::column::with_capacity(2)
+                            .push(widget::text::caption_heading(label))
+                            .push(input.width(Length::Fill))
+                            .spacing(spacing.space_xxs)
+                            .into()
+                    };
                 let mut content = vec![
-                    field("Your name", widget::text_input("Alex Papadopoulos", self.full_name.clone()).on_input(Message::FullName)),
+                    field(
+                        "Your name",
+                        widget::text_input("Alex Papadopoulos", self.full_name.clone()).on_input(Message::FullName),
+                    ),
                     field("Account name", widget::text_input("alex", self.user.clone()).on_input(Message::User)),
-                    field("Computer name", widget::text_input("alex-computer", self.hostname.clone()).on_input(Message::Hostname)),
+                    field(
+                        "Computer name",
+                        widget::text_input("alex-computer", self.hostname.clone()).on_input(Message::Hostname),
+                    ),
                     field(
                         "Password",
-                        widget::secure_input("Password", self.password.clone(), Some(Message::TogglePassword), !self.show_password)
-                            .on_input(Message::Password),
+                        widget::secure_input(
+                            "Password",
+                            self.password.clone(),
+                            Some(Message::TogglePassword),
+                            !self.show_password,
+                        )
+                        .on_input(Message::Password),
                     ),
                     field(
                         "Repeat the password",
-                        widget::secure_input("Password", self.again.clone(), Some(Message::TogglePassword), !self.show_password)
-                            .on_input(Message::Again),
+                        widget::secure_input(
+                            "Password",
+                            self.again.clone(),
+                            Some(Message::TogglePassword),
+                            !self.show_password,
+                        )
+                        .on_input(Message::Again),
                     ),
-                    field("Time zone", widget::text_input("Europe/Athens", self.timezone.clone()).on_input(Message::Timezone)),
+                    field(
+                        "Time zone",
+                        widget::text_input("Europe/Athens", self.timezone.clone()).on_input(Message::Timezone),
+                    ),
                 ];
                 let needle = self.timezone.to_lowercase();
                 if !self.zones.iter().any(|z| *z == self.timezone) && needle.len() >= 2 {
@@ -478,10 +512,15 @@ impl cosmic::Application for App {
                 self.page(
                     "About you",
                     "Your account is an administrator: it can install apps and change settings.",
-                    vec![widget::scrollable(widget::column::with_children(content).spacing(spacing.space_s)).height(Length::Fixed(330.0)).into()],
+                    vec![
+                        widget::scrollable(widget::column::with_children(content).spacing(spacing.space_s))
+                            .height(Length::Fixed(330.0))
+                            .into(),
+                    ],
                     vec![
                         widget::button::standard("Back").on_press(Message::Go(Step::Disk)),
-                        widget::button::suggested("Continue").on_press_maybe(self.you_ok().then_some(Message::Go(Step::Confirm))),
+                        widget::button::suggested("Continue")
+                            .on_press_maybe(self.you_ok().then_some(Message::Go(Step::Confirm))),
                     ],
                 )
             }

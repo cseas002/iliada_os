@@ -15,3 +15,6 @@ iliada-catalog.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
 libcosmic.workspace = true
+iliada-system.workspace = true
+iliada-settings = { path = "../iliada-settings" }
+futures-util.workspace = true

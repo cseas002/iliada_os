@@ -36,7 +36,9 @@ enum Step {
     /// Restore a backup or start fresh.
     Choice,
     /// Waiting for the GitHub sign-in (then: `then`).
-    SignIn { then: Box<Step> },
+    SignIn {
+        then: Box<Step>,
+    },
     PickBackup,
     NameBackup,
     Working,
@@ -280,13 +282,19 @@ impl cosmic::Application for App {
                     None => content.push(widget::progress_bar::circular::Circular::new().size(24.0).into()),
                 }
                 content.push(widget::button::text("Back").on_press(Message::Go(self.back.clone())).into());
-                self.page("Sign in to GitHub", "Iliada keeps your backup in a private repository on your account.", content)
+                self.page(
+                    "Sign in to GitHub",
+                    "Iliada keeps your backup in a private repository on your account.",
+                    content,
+                )
             }
             Step::PickBackup => {
                 let mut content: Vec<Element<_>> = Vec::new();
                 match &self.backups {
                     None => content.push(widget::progress_bar::circular::Circular::new().size(24.0).into()),
-                    Some(Err(e)) => content.push(widget::text::body(format!("Could not list your backups: {e}")).into()),
+                    Some(Err(e)) => {
+                        content.push(widget::text::body(format!("Could not list your backups: {e}")).into())
+                    }
                     Some(Ok(list)) if list.is_empty() => {
                         content.push(widget::text::body("There are no Iliada backups on this account yet.").into())
                     }
@@ -313,7 +321,8 @@ impl cosmic::Application for App {
                         content.push(col.into());
                     }
                 }
-                content.push(widget::button::text("Set up as new instead").on_press(Message::Go(Step::NameBackup)).into());
+                content
+                    .push(widget::button::text("Set up as new instead").on_press(Message::Go(Step::NameBackup)).into());
                 self.page("Choose a backup", "Its apps and settings replace this computer's.", content)
             }
             Step::NameBackup => {

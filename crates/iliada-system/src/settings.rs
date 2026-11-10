@@ -16,7 +16,15 @@
 use anyhow::{Result, bail};
 use toml_edit::{Array, DocumentMut, Item, Table, Value, value};
 
-pub const SERVICES: &[(&str, &str)] = &[("ssh", "SSH server (remote login)"), ("printing", "Printing (CUPS)")];
+pub const SERVICES: &[(&str, &str)] = &[
+    ("ssh", "SSH server (remote login)"),
+    ("printing", "Printing (CUPS)"),
+    ("nginx", "nginx web server (/srv/www)"),
+    ("postgresql", "PostgreSQL database"),
+    ("mariadb", "MariaDB database"),
+    ("redis", "Redis"),
+    ("docker", "Docker"),
+];
 
 fn tools_array(doc: &mut DocumentMut) -> &mut Array {
     if !doc.contains_key("tools") {

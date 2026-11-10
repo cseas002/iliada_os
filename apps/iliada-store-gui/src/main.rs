@@ -12,8 +12,12 @@ use cosmic::app::{Settings, Task};
 use cosmic::iced::{Alignment, Length, Size};
 use cosmic::widget::{self, nav_bar};
 use cosmic::{ApplicationExt, Core, Element, executor};
+use futures_util::StreamExt;
 use iliada_catalog::{AppEntry, Catalog};
+use iliada_settings::Progress;
 use iliada_store::{Installed, Store, StoreConfig};
+use iliada_system::protocol::{Request, Status as SystemStatus};
+use iliada_system::software::{CATALOG as SOFTWARE, Item, Kind};
 
 const CATEGORIES: [&str; 6] = ["Internet", "Office", "Graphics", "Media", "Utilities", "Games"];
 
@@ -26,6 +30,9 @@ fn main() -> cosmic::iced::Result {
 enum Page {
     Discover,
     Category(&'static str),
+    /// Command-line software and background services: part of the system,
+    /// not apps.
+    System(Kind),
     Installed,
 }
 
@@ -45,6 +52,9 @@ enum Message {
     Done(String, Result<(), String>),
     Open(String),
     Refresh,
+    System(Result<SystemStatus, String>),
+    Change(String, Request),
+    Changed(String, Progress),
 }
 
 struct App {
@@ -56,6 +66,7 @@ struct App {
     icons: BTreeMap<String, widget::icon::Handle>,
     status: BTreeMap<String, Status>,
     search: String,
+    system: Option<Result<SystemStatus, String>>,
 }
 
 impl App {
@@ -120,6 +131,96 @@ impl App {
     }
 }
 
+fn load_system() -> Task<Message> {
+    cosmic::task::future(async { Message::System(iliada_system::client::status().await.map_err(|e| format!("{e:#}"))) })
+}
+
+impl App {
+    fn system_page(&self, kind: Kind) -> Element<'_, Message> {
+        let spacing = cosmic::theme::spacing();
+        let intro = match kind {
+            Kind::Software => {
+                "Command-line software for the Terminal, installed for everyone on this computer. \
+                               Not apps: they have no window and are part of the system."
+            }
+            Kind::Service => {
+                "Programs that run in the background on this computer. \
+                              Not apps: they are part of the system and keep running after you log out."
+            }
+        };
+        let s = match &self.system {
+            None => return widget::container(widget::text::body("Loading…")).center(Length::Fill).into(),
+            Some(Err(e)) => return widget::container(widget::text::body(e.as_str())).center(Length::Fill).into(),
+            Some(Ok(s)) => s,
+        };
+        let needle = self.search.to_lowercase();
+        let mut list = widget::column::with_capacity(SOFTWARE.len() + 2).spacing(spacing.space_s);
+        list = list.push(widget::text::body(intro));
+        if !s.admin {
+            list = list.push(widget::text::caption("Only an administrator can install software or change services."));
+        }
+        for item in SOFTWARE.iter().filter(|i| i.kind == kind).filter(|i| {
+            needle.is_empty() || i.name.to_lowercase().contains(&needle) || i.summary.to_lowercase().contains(&needle)
+        }) {
+            list = list.push(self.system_row(item, s));
+        }
+        widget::scrollable(list).height(Length::Fill).into()
+    }
+
+    fn system_row<'a>(&'a self, item: &'a Item, s: &SystemStatus) -> Element<'a, Message> {
+        let spacing = cosmic::theme::spacing();
+        let (badge, icon) = match item.kind {
+            Kind::Software => ("Software · for the Terminal", "utilities-terminal"),
+            Kind::Service => ("Service · runs in the background", "network-server"),
+        };
+        let on = match item.kind {
+            Kind::Software => s.tools.iter().any(|t| t == item.id),
+            Kind::Service => s.services.iter().any(|x| x.name == item.id && x.on),
+        };
+        let free = s.admin && s.busy.is_none() && !self.status.values().any(|st| matches!(st, Status::Working(_)));
+        let id = item.id.to_owned();
+        let (label, request, suggested) = match (item.kind, on) {
+            (Kind::Software, false) => ("Get", Request::AddTools { packages: vec![id.clone()] }, true),
+            (Kind::Software, true) => ("Remove", Request::RemoveTools { packages: vec![id.clone()] }, false),
+            (Kind::Service, false) => ("Turn on", Request::SetService { name: id.clone(), on: true }, true),
+            (Kind::Service, true) => ("Turn off", Request::SetService { name: id.clone(), on: false }, false),
+        };
+        let msg = free.then(|| Message::Change(id.clone(), request));
+        let action: Element<_> = match self.status.get(item.id) {
+            Some(Status::Working(what)) => widget::row::with_capacity(2)
+                .push(widget::progress_bar::circular::Circular::new().size(20.0))
+                .push(widget::text::body(*what))
+                .spacing(spacing.space_xs)
+                .align_y(Alignment::Center)
+                .into(),
+            _ if suggested => widget::button::suggested(label).on_press_maybe(msg).into(),
+            _ => widget::button::standard(label).on_press_maybe(msg).into(),
+        };
+        let text = widget::column::with_capacity(3)
+            .push(widget::text::title4(item.name))
+            .push(widget::text::body(item.summary))
+            .push(widget::text::caption(format!("{badge} · {}", item.category)))
+            .spacing(spacing.space_xxxs)
+            .width(Length::Fill);
+        let mut col = widget::column::with_capacity(2).push(
+            widget::row::with_capacity(3)
+                .push(widget::icon::from_name(icon).size(48).icon())
+                .push(text)
+                .push(action)
+                .spacing(spacing.space_m)
+                .align_y(Alignment::Center),
+        );
+        if let Some(Status::Failed(e)) = self.status.get(item.id) {
+            col = col.push(widget::text::caption(format!("Could not change it: {e}")));
+        }
+        widget::container(col.spacing(spacing.space_xxs))
+            .padding(spacing.space_s)
+            .class(cosmic::theme::Container::Card)
+            .width(Length::Fill)
+            .into()
+    }
+}
+
 impl cosmic::Application for App {
     type Executor = executor::Default;
     type Flags = ();
@@ -139,6 +240,14 @@ impl cosmic::Application for App {
         for c in CATEGORIES {
             nav.insert().text(c).data(Page::Category(c));
         }
+        nav.insert()
+            .text("Software")
+            .icon(widget::icon::from_name("utilities-terminal-symbolic"))
+            .data(Page::System(Kind::Software));
+        nav.insert()
+            .text("Services")
+            .icon(widget::icon::from_name("network-server-symbolic"))
+            .data(Page::System(Kind::Service));
         nav.insert().text("Installed").icon(widget::icon::from_name("folder-download-symbolic")).data(Page::Installed);
 
         let cfg = StoreConfig::from_env().expect("built-in catalog key");
@@ -152,6 +261,7 @@ impl cosmic::Application for App {
             icons: BTreeMap::new(),
             status: BTreeMap::new(),
             search: String::new(),
+            system: None,
         };
         app.set_header_title("Store".into());
         let title = match app.core.main_window_id() {
@@ -159,7 +269,7 @@ impl cosmic::Application for App {
             None => Task::none(),
         };
         let load = app.load_catalog();
-        (app, Task::batch([title, load]))
+        (app, Task::batch([title, load, load_system()]))
     }
 
     fn nav_model(&self) -> Option<&nav_bar::Model> {
@@ -168,6 +278,9 @@ impl cosmic::Application for App {
 
     fn on_nav_select(&mut self, id: nav_bar::Id) -> Task<Message> {
         self.nav.activate(id);
+        if matches!(self.page(), Page::System(_)) {
+            return load_system();
+        }
         Task::none()
     }
 
@@ -180,7 +293,8 @@ impl cosmic::Application for App {
                         let Some(url) = app.icon.clone() else { continue };
                         let (id, svg) = (app.id.clone(), url.ends_with(".svg"));
                         tasks.push(cosmic::task::future(async move {
-                            let bytes = async { reqwest::get(&url).await.ok()?.bytes().await.ok().map(|b| b.to_vec()) }.await;
+                            let bytes =
+                                async { reqwest::get(&url).await.ok()?.bytes().await.ok().map(|b| b.to_vec()) }.await;
                             Message::Icon(id, bytes, svg)
                         }));
                     }
@@ -189,11 +303,8 @@ impl cosmic::Application for App {
                 return Task::batch(tasks);
             }
             Message::Icon(id, Some(bytes), svg) => {
-                let handle = if svg {
-                    widget::icon::from_svg_bytes(bytes)
-                } else {
-                    widget::icon::from_raster_bytes(bytes)
-                };
+                let handle =
+                    if svg { widget::icon::from_svg_bytes(bytes) } else { widget::icon::from_raster_bytes(bytes) };
                 self.icons.insert(id, handle);
             }
             Message::Icon(_, None, _) => {}
@@ -227,8 +338,29 @@ impl cosmic::Application for App {
             }
             Message::Refresh => {
                 self.installed = self.store.installed();
-                return self.load_catalog();
+                return Task::batch([self.load_catalog(), load_system()]);
             }
+            Message::System(s) => self.system = Some(s),
+            Message::Change(id, request) => {
+                let what = match &request {
+                    Request::AddTools { .. } => "Installing…",
+                    Request::RemoveTools { .. } => "Removing…",
+                    Request::SetService { on: true, .. } => "Turning on…",
+                    _ => "Turning off…",
+                };
+                self.status.insert(id.clone(), Status::Working(what));
+                return cosmic::task::stream(
+                    iliada_settings::run(request).map(move |p| Message::Changed(id.clone(), p)),
+                );
+            }
+            Message::Changed(id, Progress::Finished(r)) => {
+                match r {
+                    Ok(_) => self.status.insert(id, Status::Idle),
+                    Err(e) => self.status.insert(id, Status::Failed(e)),
+                };
+                return load_system();
+            }
+            Message::Changed(_, Progress::Event(_)) => {}
         }
         Task::none()
     }
@@ -247,6 +379,14 @@ impl cosmic::Application for App {
             .spacing(spacing.space_s)
             .align_y(Alignment::Center);
 
+        if let Page::System(kind) = &page {
+            return widget::column::with_capacity(2)
+                .push(header)
+                .push(self.system_page(*kind))
+                .spacing(spacing.space_m)
+                .padding(spacing.space_m)
+                .into();
+        }
         let body: Element<_> = match &self.catalog {
             None => widget::container(widget::text::body("Loading the catalog…")).center(Length::Fill).into(),
             Some(Err(e)) => widget::container(
@@ -267,6 +407,7 @@ impl cosmic::Application for App {
                         Page::Discover => true,
                         Page::Category(c) => a.category == *c,
                         Page::Installed => self.installed.contains_key(&a.id),
+                        Page::System(_) => false,
                     })
                     .filter(|a| {
                         needle.is_empty()
@@ -293,4 +434,3 @@ impl cosmic::Application for App {
             .into()
     }
 }
-

@@ -134,8 +134,15 @@ impl cosmic::Application for App {
     }
 
     fn init(core: Core, _flags: ()) -> (Self, Task<Message>) {
-        let mut app =
-            App { core, settings: None, assistant: None, lines: Vec::new(), input: String::new(), busy: false, approval: None };
+        let mut app = App {
+            core,
+            settings: None,
+            assistant: None,
+            lines: Vec::new(),
+            input: String::new(),
+            busy: false,
+            approval: None,
+        };
         app.set_header_title("Assistant".into());
         let title = match app.core.main_window_id() {
             Some(id) => app.set_window_title("Assistant".into(), id),

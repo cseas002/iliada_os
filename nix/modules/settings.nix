@@ -6,6 +6,7 @@
 #   [services]
 #   ssh = false                 SSH server
 #   printing = false            CUPS
+#   nginx, postgresql, mariadb, redis, docker   (the Store's Services)
 { config, lib, pkgs, ... }:
 let
   cfg = config.iliada;
@@ -34,5 +35,22 @@ in
     environment.systemPackages = map toPkg (cfg.tools ++ (s.tools.packages or [ ]));
     services.openssh.enable = lib.mkIf (services.ssh or false) true;
     services.printing.enable = lib.mkIf (services.printing or false) true;
+    # Background services from the Store. They listen on this computer; the
+    # firewall stays closed to them unless configured otherwise.
+    services.nginx = lib.mkIf (services.nginx or false) {
+      enable = true;
+      virtualHosts.localhost = {
+        default = true;
+        root = "/srv/www";
+      };
+    };
+    systemd.tmpfiles.rules = lib.mkIf (services.nginx or false) [ "d /srv/www 0755 root wheel -" ];
+    services.postgresql.enable = lib.mkIf (services.postgresql or false) true;
+    services.mysql = lib.mkIf (services.mariadb or false) {
+      enable = true;
+      package = pkgs.mariadb;
+    };
+    services.redis.servers."".enable = lib.mkIf (services.redis or false) true;
+    virtualisation.docker.enable = lib.mkIf (services.docker or false) true;
   };
 }
