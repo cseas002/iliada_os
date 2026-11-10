@@ -209,6 +209,7 @@ pub fn plan(
         network: net.as_ref().map(|_| GuestNetwork::passt()),
         links: if net.is_some() { certs.to_vec() } else { vec![] },
         sound: sound.as_ref().map(|_| GUEST_PULSE_SOCKET.to_owned()),
+        user: None,
     };
 
     let vsock = dir.join("vsock.sock");
