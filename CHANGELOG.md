@@ -38,7 +38,7 @@
   virtual machine (its own kernel; window through waypipe; software
   rendering). Apps that declare a network get one through passt (no root;
   nothing forwarded in; the computer's own local services stay out of
-  reach); sound goes over vsock to your sound server. Inside the VM the app
+  reach); sound goes over vsock to your sound server (tested with Firefox). Inside the VM the app
   runs as you, so browsers' own sandboxes work. Files you open with such an app reach
   it one by one, like outside a VM.
 
