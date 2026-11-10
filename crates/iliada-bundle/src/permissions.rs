@@ -19,8 +19,46 @@ use crate::BundleError;
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Permissions {
-    #[serde(default, rename = "request", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "request",
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "known_requests"
+    )]
     pub requests: Vec<PermissionRequest>,
+}
+
+/// Requests for capabilities this Iliada doesn't know (declared for a newer
+/// one) are left out: never asked about, never granted. Anything else that
+/// is malformed is still an error.
+fn known_requests<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<PermissionRequest>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Raw {
+        capability: toml::Value,
+        purpose: String,
+    }
+    let raw = Vec::<Raw>::deserialize(d)?;
+    let mut out = Vec::with_capacity(raw.len());
+    for r in raw {
+        let known = r.capability.clone().try_into::<Capability>();
+        match known {
+            Ok(capability) => out.push(PermissionRequest { capability, purpose: r.purpose }),
+            Err(_) if is_unknown_variant(&r.capability) => {}
+            Err(e) => return Err(serde::de::Error::custom(e)),
+        }
+    }
+    Ok(out)
+}
+
+/// A capability name (or a table keyed by one) that is well-formed but not
+/// one this version knows.
+fn is_unknown_variant(v: &toml::Value) -> bool {
+    match v {
+        toml::Value::String(s) => s.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+        toml::Value::Table(t) => t.len() == 1,
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -58,6 +96,24 @@ impl Permissions {
 mod tests {
     use super::*;
     use iliada_types::{FileScope, LocationPrecision};
+
+    #[test]
+    fn capabilities_from_newer_iliada_are_skipped() {
+        let p: Permissions = toml::from_str(
+            r#"
+            [[request]]
+            capability = "teleport"
+            purpose = "From the future"
+            [[request]]
+            capability = "camera"
+            purpose = "Video calls"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(p.requests.len(), 1);
+        assert_eq!(p.requests[0].capability, Capability::Camera);
+        assert!(toml::from_str::<Permissions>("[[request]]\ncapability = 3\npurpose = \"x\"\n").is_err());
+    }
 
     #[test]
     fn parses_documented_example() {
