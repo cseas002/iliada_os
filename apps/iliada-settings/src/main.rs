@@ -10,7 +10,9 @@ use cosmic::{ApplicationExt, Core, Element, executor};
 use futures_util::StreamExt;
 use iliada_settings::{Progress, ago, open_url, run};
 use iliada_system::client;
+use iliada_bundle::decisions::{Decision, Decisions};
 use iliada_system::protocol::{Backup, Event, Request, Status};
+use iliada_types::{Capability, FileScope};
 
 fn main() -> cosmic::iced::Result {
     let settings = Settings::default().size(Size::new(900.0, 680.0));
@@ -23,7 +25,50 @@ enum Page {
     Backup,
     Tools,
     Services,
+    Privacy,
     About,
+}
+
+/// An app's permissions that are asked for (and can be changed here).
+#[derive(Debug, Clone)]
+struct AppPermissions {
+    id: String,
+    name: String,
+    capabilities: Vec<Capability>,
+}
+
+fn askable(c: &Capability) -> bool {
+    matches!(c, Capability::Camera | Capability::Microphone | Capability::Files(FileScope::KnownDir(_)))
+}
+
+/// Installed apps that declare an askable permission.
+fn installed_permissions() -> Vec<AppPermissions> {
+    let mut out: Vec<AppPermissions> = std::fs::read_dir("/Applications")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| iliada_bundle::Bundle::open(e.path()).ok())
+        .filter_map(|b| {
+            let capabilities: Vec<Capability> =
+                b.permissions.requests.iter().map(|r| r.capability).filter(askable).collect();
+            (!capabilities.is_empty()).then(|| AppPermissions {
+                id: b.info.id.as_str().to_owned(),
+                name: b.info.name.clone(),
+                capabilities,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out
+}
+
+fn capability_label(c: &Capability) -> String {
+    match c {
+        Capability::Camera => "Camera".into(),
+        Capability::Microphone => "Microphone".into(),
+        Capability::Files(FileScope::KnownDir(d)) => format!("{} folder", d.name()),
+        other => other.to_string(),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +90,7 @@ enum Message {
     LoadBackups,
     Backups(Result<Vec<Backup>, String>),
     Ask(Confirm),
+    Permission(String, Capability, bool),
     Confirmed,
     Cancel,
     Dismiss,
@@ -67,6 +113,8 @@ struct App {
     backup_name: String,
     backups: Option<Result<Vec<Backup>, String>>,
     confirm: Option<Confirm>,
+    privacy: Vec<AppPermissions>,
+    decisions: Decisions,
 }
 
 fn load_status() -> Task<Message> {
@@ -354,6 +402,36 @@ impl App {
         settings::view_column(vec![section.into()]).into()
     }
 
+    fn privacy(&self) -> Element<'_, Message> {
+        let mut items: Vec<Element<_>> = vec![info(
+            "What apps may use",
+            Some(
+                "Every app runs in its own sandbox and sees only its own files. Apps ask the first time \
+                 they need a folder, the camera or the microphone. Changes apply the next time the app opens."
+                    .into(),
+            ),
+        )];
+        if self.privacy.is_empty() {
+            items.push(info("No installed app has asked for anything yet", None));
+        }
+        for app in &self.privacy {
+            let mut section = settings::section().title(app.name.clone());
+            for cap in &app.capabilities {
+                let decided = self.decisions.get(&app.id, cap);
+                let (id, c) = (app.id.clone(), *cap);
+                let mut item = settings::item::builder(capability_label(cap));
+                if decided.is_none() {
+                    item = item.description("Not asked yet");
+                }
+                section = section.add(item.toggler(decided == Some(Decision::Allow), move |on| {
+                    Message::Permission(id.clone(), c, on)
+                }));
+            }
+            items.push(section.into());
+        }
+        settings::view_column(items).into()
+    }
+
     fn about(&self, s: &Status) -> Element<'_, Message> {
         let section = settings::section()
             .title("This computer")
@@ -408,6 +486,7 @@ impl cosmic::Application for App {
             ("Backup", "document-save-symbolic", Page::Backup),
             ("Command-line tools", "utilities-terminal-symbolic", Page::Tools),
             ("Services", "network-server-symbolic", Page::Services),
+            ("Privacy", "security-high-symbolic", Page::Privacy),
             ("About", "help-about-symbolic", Page::About),
         ];
         for (i, (text, icon, page)) in pages.into_iter().enumerate() {
@@ -428,6 +507,8 @@ impl cosmic::Application for App {
             backup_name: String::new(),
             backups: None,
             confirm: None,
+            privacy: Vec::new(),
+            decisions: Decisions::default(),
         };
         app.set_header_title("Iliada Settings".into());
         let title = match app.core.main_window_id() {
@@ -443,6 +524,10 @@ impl cosmic::Application for App {
 
     fn on_nav_select(&mut self, id: nav_bar::Id) -> Task<Message> {
         self.nav.activate(id);
+        if self.page() == Page::Privacy {
+            self.privacy = installed_permissions();
+            self.decisions = Decisions::default_path().map(|p| Decisions::load(&p)).unwrap_or_default();
+        }
         load_status()
     }
 
@@ -540,6 +625,14 @@ impl cosmic::Application for App {
             }
             Message::Backups(b) => self.backups = Some(b),
             Message::Ask(c) => self.confirm = Some(c),
+            Message::Permission(app, cap, allow) => {
+                self.decisions.set(&app, &cap, if allow { Decision::Allow } else { Decision::Deny });
+                if let Some(p) = Decisions::default_path()
+                    && let Err(e) = self.decisions.save(&p)
+                {
+                    self.error = Some(format!("Could not save: {e}"));
+                }
+            }
             Message::Cancel => self.confirm = None,
             Message::Confirmed => {
                 return match self.confirm.take() {
@@ -587,6 +680,7 @@ impl cosmic::Application for App {
                     Page::Backup => self.backup(s),
                     Page::Tools => self.tools(s),
                     Page::Services => self.services(s),
+                    Page::Privacy => self.privacy(),
                     Page::About => self.about(s),
                 });
                 widget::scrollable(

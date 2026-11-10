@@ -55,6 +55,28 @@ pub struct SandboxSpec {
     pub vcpus: u8,
     pub memory_mib: u32,
     pub args: Vec<String>,
+    /// What the user allowed this app (bound into the sandbox).
+    pub grants: Grants,
+    /// Files the user opened with the app (each one bound at its own path).
+    pub files: Vec<PathBuf>,
+}
+
+/// Host resources a user's permission decisions add to a sandbox.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Grants {
+    /// `(host folder, its name in the app's home)`: Pictures, Documents, …
+    pub folders: Vec<(PathBuf, String)>,
+    /// Camera devices (`/dev/video*`).
+    pub camera: bool,
+    /// The sound server's sockets (PipeWire and its PulseAudio server).
+    pub sound: Option<SoundSockets>,
+}
+
+/// The user's sound server sockets, as found on the host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SoundSockets {
+    pub pipewire: Option<PathBuf>,
+    pub pulse: Option<PathBuf>,
 }
 
 impl SandboxSpec {
@@ -82,6 +104,8 @@ impl SandboxSpec {
             vcpus: host.default_vcpus,
             memory_mib: host.default_memory_mib,
             args: vec![],
+            grants: Grants::default(),
+            files: vec![],
         })
     }
 }

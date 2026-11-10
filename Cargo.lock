@@ -943,6 +943,7 @@ dependencies = [
  "hex",
  "iliada-bundle",
  "iliada-ingest",
+ "iliada-types",
  "serde",
  "serde_json",
  "sha2",

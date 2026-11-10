@@ -88,6 +88,13 @@ enum Cmd {
 #[serde(deny_unknown_fields)]
 struct Recipe {
     name: String,
+    /// User folders the app works with ("pictures", "documents", …): asked
+    /// for when it first runs.
+    #[serde(default)]
+    folders: Vec<iliada_types::KnownDir>,
+    /// Any other permissions, as in Permissions.toml.
+    #[serde(default)]
+    permissions: Vec<iliada_bundle::PermissionRequest>,
     summary: String,
     category: String,
     source: RecipeSource,
@@ -165,6 +172,15 @@ async fn build(recipes: &Path, out: &Path, only: &[String], base: &str, cache: O
             include: recipe.include.clone(),
             args: recipe.args.clone(),
             env: recipe.env.clone(),
+            permissions: recipe
+                .folders
+                .iter()
+                .map(|d| iliada_bundle::PermissionRequest {
+                    capability: iliada_types::Capability::Files(iliada_types::FileScope::KnownDir(*d)),
+                    purpose: format!("To open and save files in your {} folder.", d.name()),
+                })
+                .chain(recipe.permissions.iter().cloned())
+                .collect(),
             force: true,
             ..Default::default()
         };

@@ -13,6 +13,8 @@ license = "MIT OR Apache-2.0"
 iliada-store = { path = "../crates/iliada-store" }
 iliada-catalog = { path = "../crates/iliada-catalog" }
 iliada-system = { path = "../crates/iliada-system" }
+iliada-bundle = { path = "../crates/iliada-bundle" }
+iliada-types = { path = "../crates/iliada-types" }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "fs", "sync", "process"] }
 futures-util = "0.3"

@@ -270,6 +270,8 @@ mod tests {
             vcpus: 1,
             memory_mib: 512,
             args: vec![],
+            grants: Default::default(),
+            files: vec![],
         }
     }
 

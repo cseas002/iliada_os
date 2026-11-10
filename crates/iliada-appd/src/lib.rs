@@ -99,7 +99,8 @@ pub fn desktop_entry(b: &Bundle, iliada_run: &Path) -> String {
     let mut out = String::from("[Desktop Entry]\nType=Application\n");
     out += &format!("Name={}\n", value(&b.info.name));
     out += &format!(
-        "Exec={} {}\n",
+        // %F: files opened with the app; iliada-run gives it exactly those.
+        "Exec={} {} %F\n",
         exec_quote(&iliada_run.display().to_string()),
         exec_quote(&b.layout.root().display().to_string())
     );

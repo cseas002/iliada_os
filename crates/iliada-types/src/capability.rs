@@ -16,6 +16,8 @@ pub enum Capability {
     Files(FileScope),
     Notifications,
     ScreenCapture,
+    /// Play sound. Granted without asking (as on macOS).
+    Sound,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -51,6 +53,22 @@ pub enum KnownDir {
     Videos,
 }
 
+impl KnownDir {
+    pub const ALL: [KnownDir; 5] =
+        [KnownDir::Documents, KnownDir::Downloads, KnownDir::Music, KnownDir::Pictures, KnownDir::Videos];
+
+    /// The folder's name in a home directory (and in the XDG user-dirs key).
+    pub fn name(self) -> &'static str {
+        match self {
+            KnownDir::Documents => "Documents",
+            KnownDir::Downloads => "Downloads",
+            KnownDir::Music => "Music",
+            KnownDir::Pictures => "Pictures",
+            KnownDir::Videos => "Videos",
+        }
+    }
+}
+
 impl Capability {
     /// Whether a declared capability `self` covers a requested capability.
     /// Precise location implies coarse; everything else must match exactly.
@@ -72,9 +90,10 @@ impl fmt::Display for Capability {
             Capability::Clipboard(ClipboardAccess::Read) => f.write_str("read your clipboard"),
             Capability::Clipboard(ClipboardAccess::Write) => f.write_str("write to your clipboard"),
             Capability::Files(FileScope::UserPicked) => f.write_str("open a file you choose"),
-            Capability::Files(FileScope::KnownDir(d)) => write!(f, "access your {d:?} folder"),
+            Capability::Files(FileScope::KnownDir(d)) => write!(f, "access your {} folder", d.name()),
             Capability::Notifications => f.write_str("show notifications"),
             Capability::ScreenCapture => f.write_str("record your screen"),
+            Capability::Sound => f.write_str("play sound"),
         }
     }
 }

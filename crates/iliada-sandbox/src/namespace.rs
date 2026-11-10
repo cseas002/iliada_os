@@ -145,6 +145,30 @@ fn bwrap_prefix(spec: &SandboxSpec, host: &HostIsolationConfig, desktop: &HostDe
         push(&["--setenv", "__EGL_VENDOR_LIBRARY_DIRS", "/run/opengl-driver/share/glvnd/egl_vendor.d"]);
     }
 
+    // What the user allowed (permission prompts, Settings → Privacy).
+    for (host_dir, name) in &spec.grants.folders {
+        push(&["--bind", &p(host_dir), &format!("/home/app/{name}")]);
+    }
+    if spec.grants.camera {
+        for dev in video_devices() {
+            push(&["--dev-bind", &dev, &dev]);
+        }
+    }
+    if let Some(sound) = &spec.grants.sound {
+        if let Some(pw) = &sound.pipewire {
+            push(&["--ro-bind", &p(pw), &format!("{GUEST_XDG_RUNTIME_DIR}/pipewire-0")]);
+        }
+        if let Some(pulse) = &sound.pulse {
+            let guest = format!("{GUEST_XDG_RUNTIME_DIR}/pulse/native");
+            push(&["--ro-bind", &p(pulse), &guest]);
+            push(&["--setenv", "PULSE_SERVER", &format!("unix:{guest}")]);
+        }
+    }
+    // Files opened with the app: exactly those, at their own paths.
+    for f in &spec.files {
+        push(&["--bind", &p(f), &p(f)]);
+    }
+
     let triplet = host_triplet();
     let ld_path = format!("/app/lib:/usr/lib/{triplet}:/usr/lib:{GUEST_RUNTIME_DIR}/lib");
     let env: [(&str, &str); 9] = [
@@ -166,6 +190,20 @@ fn bwrap_prefix(spec: &SandboxSpec, host: &HostIsolationConfig, desktop: &HostDe
     }
     push(&["--"]);
     a
+}
+
+/// The camera devices present now.
+fn video_devices() -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir("/dev")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.starts_with("video") || n.starts_with("media"))
+        .map(|n| format!("/dev/{n}"))
+        .collect();
+    v.sort();
+    v
 }
 
 /// Sandboxed triggers.
@@ -289,6 +327,8 @@ mod tests {
             vcpus: 1,
             memory_mib: 512,
             args: vec!["--version".into()],
+            grants: Default::default(),
+            files: vec![],
         };
         (dir, spec)
     }
@@ -327,6 +367,22 @@ mod tests {
         let a = bwrap_args(&spec, &HostIsolationConfig::example(), &HostDesktop::default());
         assert_eq!(after(&a, "--ro-bind", "/run/user/1000/wayland-1"), Some("/run/user/app/wayland-0"));
         assert!(!a.iter().any(|x| x.contains("/run/user/1000/bus")), "no host D-Bus session bus");
+    }
+
+    #[test]
+    fn grants_add_folders_sound_and_opened_files() {
+        let (_t, mut spec) = fixture(NetworkPolicy::None, true);
+        spec.grants.folders.push(("/home/alex/Pictures".into(), "Pictures".into()));
+        spec.grants.sound = Some(crate::SoundSockets {
+            pipewire: Some("/run/user/1000/pipewire-0".into()),
+            pulse: Some("/run/user/1000/pulse/native".into()),
+        });
+        spec.files.push("/home/alex/Documents/report.odt".into());
+        let a = bwrap_args(&spec, &HostIsolationConfig::example(), &HostDesktop::default());
+        assert_eq!(after(&a, "--bind", "/home/alex/Pictures"), Some("/home/app/Pictures"));
+        assert_eq!(after(&a, "--ro-bind", "/run/user/1000/pulse/native"), Some("/run/user/app/pulse/native"));
+        assert_eq!(after(&a, "--bind", "/home/alex/Documents/report.odt"), Some("/home/alex/Documents/report.odt"));
+        assert!(!a.iter().any(|x| x.contains("/home/alex/Documents/") && !x.ends_with("report.odt")));
     }
 
     #[test]

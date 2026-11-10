@@ -12,14 +12,14 @@ use iliada_bundle::{PermissionRequest, Permissions};
 use iliada_types::{Capability, ClipboardAccess, FileScope, LocationPrecision};
 
 const RULES: &[(&str, &[Capability], &str)] = &[
-    ("libpulse.so", &[Capability::Microphone], "audio (PulseAudio)"),
+    ("libpulse.so", &[Capability::Sound, Capability::Microphone], "audio (PulseAudio)"),
     (
         "libpipewire-0.3.so",
-        &[Capability::Microphone, Capability::Camera, Capability::ScreenCapture],
+        &[Capability::Sound, Capability::Microphone, Capability::Camera, Capability::ScreenCapture],
         "media (PipeWire)",
     ),
-    ("libasound.so", &[Capability::Microphone], "audio (ALSA)"),
-    ("libportaudio.so", &[Capability::Microphone], "audio (PortAudio)"),
+    ("libasound.so", &[Capability::Sound, Capability::Microphone], "audio (ALSA)"),
+    ("libportaudio.so", &[Capability::Sound, Capability::Microphone], "audio (PortAudio)"),
     ("libv4l2.so", &[Capability::Camera], "video capture (V4L2)"),
     ("libgeoclue-2.so", &[Capability::Location(LocationPrecision::Coarse)], "location (GeoClue)"),
     ("libnotify.so", &[Capability::Notifications], "notifications (libnotify)"),
@@ -90,10 +90,11 @@ mod tests {
     }
 
     #[test]
-    fn audio_app_may_ask_for_mic_once() {
+    fn audio_app_plays_sound_and_may_ask_for_mic_once() {
         let p = infer_permissions(["libpulse.so.0", "libasound.so.2"]);
-        assert_eq!(p.requests.len(), 1);
-        assert_eq!(p.requests[0].capability, Capability::Microphone);
+        let caps: Vec<_> = p.requests.iter().map(|r| r.capability).collect();
+        assert_eq!(caps.len(), 2, "{caps:?}");
+        assert!(caps.contains(&Capability::Sound) && caps.contains(&Capability::Microphone));
         p.validate().unwrap();
     }
 }

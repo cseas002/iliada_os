@@ -16,6 +16,7 @@
 //! permission manifest is an upper bound — declaring a capability never grants
 //! it, it only allows the app to prompt for it.
 
+pub mod decisions;
 mod error;
 mod info;
 mod layout;

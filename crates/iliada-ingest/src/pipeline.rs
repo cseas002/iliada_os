@@ -69,6 +69,9 @@ pub struct IngestConfig {
     pub args: Vec<String>,
     /// Environment always set for the app.
     pub env: std::collections::BTreeMap<String, String>,
+    /// Permissions the recipe declares (in addition to the inferred ones);
+    /// a declared permission is still asked for when the app first runs.
+    pub permissions: Vec<iliada_bundle::PermissionRequest>,
     pub max_download_bytes: u64,
     pub max_unpacked_bytes: u64,
     /// Follow dependency edges into non-`lib*` packages too.
@@ -98,6 +101,7 @@ impl Default for IngestConfig {
             include: vec![],
             args: vec![],
             env: Default::default(),
+            permissions: vec![],
             max_download_bytes: 1 << 30,
             max_unpacked_bytes: 4 << 30,
             full_closure: false,
@@ -424,7 +428,12 @@ impl Ingestor {
             categories: desktop.as_ref().map(|d| d.categories.clone()).unwrap_or_default(),
             mime_types: desktop.as_ref().map(|d| d.mime_types.clone()).unwrap_or_default(),
         };
-        let permissions = infer_permissions(closure.records.iter().map(|r| r.soname.as_str()));
+        let mut permissions = infer_permissions(closure.records.iter().map(|r| r.soname.as_str()));
+        for req in &self.cfg.permissions {
+            // The recipe's own declaration (and purpose) wins over an inferred one.
+            permissions.requests.retain(|r| r.capability != req.capability);
+            permissions.requests.push(req.clone());
+        }
         let provenance = Provenance {
             generator: concat!("iliada-ingest ", env!("CARGO_PKG_VERSION")).into(),
             created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),

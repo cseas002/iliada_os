@@ -13,8 +13,14 @@ path = "src/main.rs"
 name = "iliada-setup"
 path = "src/bin/iliada-setup.rs"
 
+[[bin]]
+name = "iliada-prompt"
+path = "src/bin/iliada-prompt.rs"
+
 [dependencies]
 iliada-system.workspace = true
+iliada-bundle.workspace = true
+iliada-types.workspace = true
 tokio.workspace = true
 futures-util.workspace = true
 libcosmic.workspace = true

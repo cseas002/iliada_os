@@ -10,7 +10,7 @@ rust-version.workspace = true
 [features]
 default = []
 # The build-server tool (`iliada-catalog`): recipes -> signed .app archives.
-builder = ["dep:iliada-ingest", "dep:iliada-bundle", "dep:tokio", "dep:clap", "dep:tar", "dep:zstd", "dep:getrandom", "dep:sha2", "dep:hex", "dep:toml", "dep:tracing-subscriber"]
+builder = ["dep:iliada-ingest", "dep:iliada-bundle", "dep:iliada-types", "dep:tokio", "dep:clap", "dep:tar", "dep:zstd", "dep:getrandom", "dep:sha2", "dep:hex", "dep:toml", "dep:tracing-subscriber"]
 
 [[bin]]
 name = "iliada-catalog"
@@ -26,6 +26,7 @@ ed25519-dalek = "2"
 base64 = "0.22"
 iliada-ingest = { path = "../iliada-ingest", optional = true }
 iliada-bundle = { workspace = true, optional = true }
+iliada-types = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
 tar = { version = "0.4", optional = true }
