@@ -214,7 +214,13 @@ async fn main() -> Result<()> {
     }
     // Only apps that declare it (and were approved for it at install) get a network.
     let network = if bundle.info.network { NetworkPolicy::Nat } else { NetworkPolicy::None };
-    let mut spec = SandboxSpec::from_bundle(&bundle, &host, network, data_dir(bundle.info.id.as_str())?)?;
+    let data = data_dir(bundle.info.id.as_str())?;
+    // The usual folders of a home, so apps that create only the last level
+    // (gnome-sudoku's ~/.local/share/gnome-sudoku) can save.
+    for d in [".config", ".cache", ".local/share", ".local/state"] {
+        let _ = std::fs::create_dir_all(data.join(d));
+    }
+    let mut spec = SandboxSpec::from_bundle(&bundle, &host, network, data)?;
     spec.display = wayland_socket();
     spec.files = opened_files(&args);
     // file:// URLs become plain paths (the file is at the same path inside).
