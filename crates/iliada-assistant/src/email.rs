@@ -68,9 +68,18 @@ impl EmailAccount {
         if self.username.is_empty() { &self.address } else { &self.username }
     }
 
+    /// The name shown with the address: the one set for the account, else
+    /// the person's full name on this computer.
+    pub fn display_name(&self) -> Option<String> {
+        if !self.name.trim().is_empty() {
+            return Some(self.name.trim().to_owned());
+        }
+        full_name()
+    }
+
     fn mailbox(&self) -> Result<Mailbox> {
         let address = self.address.parse().with_context(|| format!("{:?} is not an email address", self.address))?;
-        Ok(Mailbox::new((!self.name.is_empty()).then(|| self.name.clone()), address))
+        Ok(Mailbox::new(self.display_name(), address))
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -100,6 +109,17 @@ impl EmailAccount {
         };
         Some(EmailAccount { address: address.into(), server: server.into(), security, ..Default::default() })
     }
+}
+
+/// The user's full name from the account database (`Ada Lovelace,,,`).
+fn full_name() -> Option<String> {
+    let user = std::env::var("USER").ok()?;
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    let gecos = passwd.lines().find_map(|l| {
+        let f: Vec<&str> = l.split(':').collect();
+        (f.len() > 4 && f[0] == user).then(|| f[4].split(',').next().unwrap_or("").trim().to_owned())
+    })?;
+    (!gecos.is_empty()).then_some(gecos)
 }
 
 fn is_local(host: &str) -> bool {

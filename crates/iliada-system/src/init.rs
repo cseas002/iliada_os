@@ -97,8 +97,12 @@ pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Commit everything that changed (nothing if nothing did).
+/// Commit everything that changed (nothing if nothing did). A system set
+/// up without the installer (a development VM) gets its history started.
 pub fn commit_all(dir: &Path, message: &str) -> Result<bool> {
+    if !dir.join(".git").exists() {
+        git(dir, &["init", "-q", "-b", "main"])?;
+    }
     git(dir, &["add", "-A"])?;
     if git(dir, &["status", "--porcelain"])?.trim().is_empty() {
         return Ok(false);
