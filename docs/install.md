@@ -25,6 +25,18 @@ nix build github:cseas002/iliada_os#packages.x86_64-linux.utm-image    # x86 (UT
 On first boot Iliada writes `/etc/iliada` itself, so Settings can change and
 update the VM like an installed system. The disk grows to 40 GB on its own.
 
+### For developers: test changes without reinstalling
+
+Use the `utm-dev-image` instead: the same VM, reachable from the Mac that
+built it as `iliada.local` (its key is in `nix/hosts/dev-keys/`). Set it up
+once; after that every change is pushed into the running VM, which rebuilds
+in place and keeps your apps, settings and files:
+
+```sh
+nix build .#packages.aarch64-linux.utm-dev-image      # once
+scripts/dev-push.sh                                    # after every change (default host iliada.local)
+```
+
 ## Option A: fresh install (installer ISO)
 
 Requirements: x86_64 PC or VM, UEFI firmware, 4 GB+ RAM, 40 GB+ disk,
@@ -112,6 +124,22 @@ after every change and every hour. On a new computer the Setup Assistant (or
 Settings → Backup → Restore) brings back its apps and settings; the new
 computer keeps its own hardware configuration. Backups need a GitHub OAuth
 app (`iliada.system.githubClientId`).
+
+### Software and services
+
+Apps are `.app`s. Command-line software (Python, Node.js, ffmpeg…) and
+background services (nginx, PostgreSQL, MariaDB, Redis, Docker, SSH,
+printing) are not: they are part of the system. Find them in the Store
+under **Software** and **Services** (labeled as such), or use
+`iliada tool add python3` / `iliada service enable nginx`. Any nixpkgs
+package works with `iliada tool add`. They are recorded in `settings.toml`
+and backed up.
+
+### The assistant
+
+Settings → Assistant: turn it on, choose **Ask me first** or **Act on its
+own**, pick the model (Claude Opus 5.5 by default) and add your Anthropic
+API key. Then ask in the **Assistant** app, or `iliada ask "…"`.
 
 ### Apps (no rebuild, no terminal)
 

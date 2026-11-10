@@ -218,7 +218,7 @@ justification, runtime base), validated by the same Rust types.
 | IPC protocol, broker, guest client | done; end-to-end tests over real sockets |
 | Tier-1 sandbox (`iliada-run`) | done; every published app runs sandboxed from the launcher |
 | Permissions: first-launch prompts, Settings → Privacy, opened files | built; unit-tested |
-| Tier-2 micro-VMs (guest init, initrd, virtio-fs, waypipe) | built; unit-tested, first boot test pending |
+| Tier-2 micro-VMs (guest init, initrd, virtio-fs, waypipe) | boots; guest mounts the shares and starts the sandbox; window test in progress |
 | Desktop (COSMIC), app registry (`iliada-appd`) | done |
 | Apps without rebuild (drag a .app in, Trash, auto-recorded list) | done; validated in the VM |
 | Iliada Store (GUI + CLI), signed catalog, automatic updates | done; validated in the VM |
@@ -226,6 +226,8 @@ justification, runtime base), validated by the same Rust types.
 | Iliada Settings (updates, backup, tools, services, privacy) | done; validated in the VM |
 | Setup Assistant (first login) | done; shown on first login in the VM |
 | GitHub backup and restore | built; needs a GitHub OAuth app to test |
+| Assistant (Ask / Auto, Settings → Assistant, `iliada ask`) | built; needs an API key to test |
+| Store: Software and Services (not apps) | built |
 | Iliada updates (signed release manifest) | built; needs a public release to test |
 | Graphical installer, `iliada-install`, config template | built; the script's end-to-end install test passes |
 | Ready-to-run VM image (UTM on Apple Silicon, QEMU) | x86 validated; ARM building |
@@ -275,27 +277,34 @@ then continues the backup's.
 7. Secure Boot key management.
 8. The on-device assistant (§10).
 
-## 10. Future: the on-device assistant
+## 10. The assistant
 
-An optional assistant built into the system, helping users with the OS
-itself. For example: "why can't this app see my Downloads folder?", "set up
-my printer", "make the text bigger", "what did this update change?". It
-replaces the forum search and the terminal commands that Linux usually
-demands.
+An optional assistant built into the system (`crates/iliada-assistant`, the
+Assistant app, `iliada ask`). People ask in plain words ("install Firefox
+and turn on the SSH server", "why can't GIMP see my Pictures?") and it does
+it, instead of a forum search and terminal commands.
 
-It is designed under the same rules as everything else:
+* **Configuration.** `[assistant]` in `settings.toml`: `enabled`, `mode`
+  (`ask` or `auto`) and `model`; changed in Settings → Assistant or with
+  `iliada assistant`, without a rebuild, and backed up like the rest. The
+  API key is the user's own, kept in `~/.config/iliada/anthropic-key`, and
+  never backed up.
+* **Ask mode** (default): every action is shown ("Install Firefox") and runs
+  only if the user allows it. **Auto mode**: it acts on its own. Auto is only
+  honoured with a model trusted for unsupervised work (Claude Opus 5.5,
+  Fable 5.1, Sonnet 5.5); with any other model it asks first.
+* **A small, typed toolset.** Iliada's own operations: Store apps, software
+  and services, updates, backup, app permissions. No shell, no files, no
+  web. System changes go through the system service, so the assistant can
+  never do more than the user it works for (a non-administrator's assistant
+  cannot install software).
+* **It cannot answer permission prompts.** Those are drawn by Iliada for the
+  person at the keyboard. It can change a decision only through Settings'
+  own operation, as the user could, and says so.
+* **No invented results.** Its instructions require looking things up before
+  acting and reporting only what a tool confirmed; tool failures are passed
+  back as failures.
 
-* **It cannot grant permissions.** Broker prompts are answered only by the
-  person at the keyboard, through the compositor's trusted surface. The
-  assistant may *explain* a prompt, never click it.
-* **It is an app, not root.** It runs sandboxed like any other app, with an
-  explicit, small set of system actions (open a Settings page, change a
-  declared preference, start an update check). Each action is exposed as a
-  typed tool and shown to the user before it runs.
-* **Its sources are labelled.** Content from apps, web pages or documents is
-  treated as data, not instructions, so prompt injection cannot become a
-  system action.
-* **Local first.** Prefer an on-device model. A cloud model is opt-in and
-  shows the user what leaves the machine.
-* **Everything is logged.** Assistant actions appear in the same audit log as
-  broker decisions.
+Later: an on-device model for the simplest requests, an audit log of the
+assistant's actions next to the broker's, and tools for Settings pages
+(display, network) once those have an API.
