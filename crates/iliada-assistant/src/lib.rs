@@ -99,6 +99,10 @@ impl Assistant {
             settings.full_access,
             Store::new(StoreConfig::from_env()?)?,
         );
+        if let Some(home) = std::env::var_os("HOME") {
+            // Otherwise models guess (/home/<name>, /Users/…).
+            a.system.push_str(&format!("\n- This person's home folder is {}.", home.to_string_lossy()));
+        }
         if let Some(account) = email::load() {
             a.system.push_str(&sender_note(&account));
         }

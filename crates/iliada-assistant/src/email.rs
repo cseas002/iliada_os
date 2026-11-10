@@ -165,9 +165,20 @@ impl Files {
         (!p.is_empty()).then(|| p.to_owned())
     }
 
-    /// Save the account; `password: None` keeps the saved one.
+    /// Save the account; `password: None` keeps the saved one, but only for
+    /// the same account (a password never moves to another address or server).
     pub fn save(&self, account: &EmailAccount, password: Option<&str>) -> Result<()> {
         account.validate()?;
+        let same = self.load().is_some_and(|old| {
+            old.address == account.address && old.server == account.server && old.username() == account.username()
+        });
+        if password.is_none() && !same {
+            ensure!(account.security == Security::None, "type the password for {}", account.address);
+            match std::fs::remove_file(&self.password) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                _ => {}
+            }
+        }
         write_private(&self.account, toml::to_string(account)?.as_bytes())?;
         if let Some(p) = password {
             write_private(&self.password, p.as_bytes())?;
@@ -246,10 +257,12 @@ pub async fn send_with(account: &EmailAccount, password: Option<&str>, email: &E
     if account.security == Security::Starttls {
         t = t.tls(Tls::Required(TlsParameters::new(host.into())?));
     }
-    if let Some(p) = password {
-        t = t.credentials(Credentials::new(account.username().to_owned(), p.to_owned()));
-    } else if account.security != Security::None {
-        bail!("the email password is missing (Settings → Assistant → Email)");
+    // A password only ever travels encrypted; a server on this computer
+    // (no encryption) is used without signing in.
+    match (account.security, password) {
+        (Security::None, _) => {}
+        (_, Some(p)) => t = t.credentials(Credentials::new(account.username().to_owned(), p.to_owned())),
+        (_, None) => bail!("the email password is missing (Settings → Assistant → Email)"),
     }
     t.build().send(message).await.context("the mail server did not accept the email")?;
     Ok(())
@@ -369,6 +382,18 @@ mod tests {
         }
         files.save(&a, None).unwrap();
         assert_eq!(files.password().unwrap(), "app password", "kept");
+        // Another account doesn't inherit the password.
+        let other = EmailAccount::suggested("ada@outlook.com").unwrap();
+        assert!(files.save(&other, None).is_err());
+        assert_eq!(files.load().unwrap(), a, "nothing changed");
+        let local = EmailAccount {
+            address: "ada@localhost".into(),
+            server: "127.0.0.1".into(),
+            security: Security::None,
+            ..Default::default()
+        };
+        files.save(&local, None).unwrap();
+        assert!(files.password().is_none(), "the old password is gone");
         files.remove().unwrap();
         assert!(files.load().is_none() && files.password().is_none());
     }
