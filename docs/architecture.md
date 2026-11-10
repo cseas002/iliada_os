@@ -266,7 +266,8 @@ then continues the backup's.
 **Next**
 
 1. Test GitHub backup and restore end to end (needs the GitHub OAuth app).
-2. Publish a signed Iliada release (`iliada-catalog release`) so updates work.
+2. Publish a signed Iliada release so updates work: set `VERSION`, commit,
+   `iliada-catalog release` (it refuses a version the source does not declare).
 3. LibreOffice Writer on ARM (its ARM build stops at start-up with a UNO
    exception; the x86-64 build works).
 4. The Assistant as a keyboard-first panel (a shortcut from anywhere).
