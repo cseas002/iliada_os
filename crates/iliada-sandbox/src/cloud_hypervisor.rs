@@ -9,7 +9,10 @@
 //! * virtio-fs `store` — the host's `/nix/store`, **read-only** (runtime base,
 //!   bubblewrap, waypipe, Mesa)
 //! * virtio-fs `app`   — the `.app` bundle, **read-only**
-//! * virtio-fs `data`  — the app's private data directory
+//! * virtio-fs `data`  — the app's private data directory, which also
+//!   carries the files the user opened with the app: each is hard-linked
+//!   into `.cache/iliada/opened/` (or copied, and copied back on exit, when
+//!   it is on another filesystem) and bound at its own path inside
 //! * virtio-fs `f<n>`  — folders the user allowed (Pictures, …)
 //! * virtio-fs `spec`  — what to run (`spec.json`), read-only
 //! * virtio-vsock      — the only channel to the host: the app's window
@@ -72,6 +75,8 @@ pub struct VmPlan {
     pub net: Option<PathBuf>,
     /// The user's sound server (PulseAudio socket), when the app may use it.
     pub sound: Option<PathBuf>,
+    /// Opened files: `(the user's file, its link in the data directory)`.
+    pub opened: Vec<(PathBuf, PathBuf)>,
 }
 
 impl VmPlan {
@@ -177,7 +182,18 @@ pub fn plan(
     let sound = spec.grants.sound.as_ref().and_then(|s| s.pulse.clone());
     inner.grants.sound =
         sound.as_ref().map(|_| crate::SoundSockets { pipewire: None, pulse: Some(GUEST_PULSE_SOCKET.into()) });
-    inner.files.clear();
+    // Opened files reach the guest through the data share.
+    let staging = opened_dir(&spec.data_dir);
+    let opened: Vec<(PathBuf, PathBuf)> = spec
+        .files
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let name = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            (f.clone(), staging.join(format!("{i}-{name}")))
+        })
+        .collect();
+    inner.file_sources = opened.iter().cloned().collect();
     inner.display = Some(Path::new(GUEST_RUNTIME).join(GUEST_DISPLAY));
     inner.env.extend([
         ("LIBGL_ALWAYS_SOFTWARE".to_owned(), "1".to_owned()),
@@ -246,7 +262,55 @@ pub fn plan(
         vmm_args.push("--net".into());
         vmm_args.push(format!("vhost_user=true,socket={},vhost_mode=client", p(sock)));
     }
-    VmPlan { shares, guest, vmm_args, vsock, console_log, net, sound }
+    VmPlan { shares, guest, vmm_args, vsock, console_log, net, sound, opened }
+}
+
+/// Where a VM app's opened files are linked, inside its data directory.
+fn opened_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join(".cache/iliada/opened")
+}
+
+/// An opened file put where the guest can see it.
+#[derive(Debug)]
+struct Staged {
+    original: PathBuf,
+    staged: PathBuf,
+    /// Set for a copy (not a hard link): its modification time, to copy it
+    /// back if the app changed it.
+    copied: Option<std::time::SystemTime>,
+}
+
+/// Link (or copy) each opened file into the data directory.
+fn stage(opened: &[(PathBuf, PathBuf)]) -> Result<Vec<Staged>> {
+    let mut staged = Vec::new();
+    for (original, link) in opened {
+        if let Some(dir) = link.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let copied = match std::fs::hard_link(original, link) {
+            Ok(()) => None,
+            // Another filesystem, or a file the user may read but not link.
+            Err(_) => {
+                std::fs::copy(original, link).with_context(|| format!("giving the app {}", original.display()))?;
+                Some(std::fs::metadata(link)?.modified()?)
+            }
+        };
+        staged.push(Staged { original: original.clone(), staged: link.clone(), copied });
+    }
+    Ok(staged)
+}
+
+/// After the app exits: copy changed copies back, then remove the links.
+fn unstage(staged: &[Staged]) {
+    for s in staged {
+        if let Some(before) = s.copied
+            && std::fs::metadata(&s.staged).and_then(|m| m.modified()).is_ok_and(|m| m != before)
+            && let Err(e) = std::fs::copy(&s.staged, &s.original)
+        {
+            eprintln!("iliada-run: could not save {}: {e}", s.original.display());
+        }
+        let _ = std::fs::remove_file(&s.staged);
+    }
 }
 
 /// virtiofsd arguments for one share. virtiofsd runs as the user, in a
@@ -298,6 +362,7 @@ struct VmHandle {
     /// virtiofsd and waypipe: stopped when the VM is.
     helpers: Vec<Child>,
     dir: PathBuf,
+    staged: Vec<Staged>,
 }
 
 /// A private directory for one VM's sockets, under the user's runtime dir.
@@ -336,6 +401,8 @@ impl IsolationBackend for CloudHypervisorBackend {
         };
         let mut plan = plan(spec, &self.host, &dir, &resolved_desktop(), &cert_links());
         plan.guest.user = Some(owner);
+        let _ = std::fs::remove_dir_all(opened_dir(&spec.data_dir));
+        let staged = stage(&plan.opened)?;
         tokio::fs::write(dir.join("spec/spec.json"), serde_json::to_vec_pretty(&plan.guest)?).await?;
 
         let spawn = |bin: &Path, args: Vec<String>, what: &str| {
@@ -382,7 +449,7 @@ impl IsolationBackend for CloudHypervisorBackend {
         wait_for_socket(&plan.display_socket()).await?;
         let vmm = spawn(&self.host.cloud_hypervisor, plan.vmm_args.clone(), "cloud-hypervisor")?;
         tracing::info!(app = %spec.app_id, cid = guest_cid(&spec.app_id), "micro-VM started");
-        Ok(Box::new(VmHandle { app: spec.app_id.clone(), vmm, helpers, dir }))
+        Ok(Box::new(VmHandle { app: spec.app_id.clone(), vmm, helpers, dir, staged }))
     }
 }
 
@@ -396,6 +463,7 @@ impl SandboxHandle for VmHandle {
         for c in &mut self.helpers {
             let _ = c.kill().await;
         }
+        unstage(&self.staged);
         Ok(())
     }
     async fn wait(&mut self) -> Result<Option<i32>> {
@@ -404,6 +472,7 @@ impl SandboxHandle for VmHandle {
         for c in &mut self.helpers {
             let _ = c.kill().await;
         }
+        unstage(&self.staged);
         if !status.success() {
             eprintln!(
                 "iliada-run: the micro-VM stopped ({status}); its console log is {}",
@@ -464,6 +533,7 @@ mod tests {
             args: vec![],
             grants: Default::default(),
             files: vec![],
+            file_sources: Default::default(),
         }
     }
 
@@ -548,6 +618,33 @@ mod tests {
         assert_eq!(value_after(&a, "--udp-ports"), Some("none"));
         assert!(a.contains(&"--no-map-gw".to_owned()));
         assert!(a.contains(&"--vhost-user".to_owned()) && a.contains(&"--foreground".to_owned()));
+    }
+
+    #[test]
+    fn opened_files_go_through_the_data_share_and_appear_at_their_own_path() {
+        let mut s = spec();
+        s.files.push("/home/alex/Documents/report.odt".into());
+        let p = plan(&s, &HostIsolationConfig::example(), Path::new("/d"), &HostDesktop::default(), &[]);
+        let link = PathBuf::from("/home/alex/.local/share/iliada/apps/org.debian.jq/.cache/iliada/opened/0-report.odt");
+        assert_eq!(p.opened, [(PathBuf::from("/home/alex/Documents/report.odt"), link.clone())]);
+        assert!(p.guest.args.windows(3).any(|w| w[0] == "--bind"
+            && w[1] == link.display().to_string()
+            && w[2] == "/home/alex/Documents/report.odt"));
+        assert!(!p.shares.iter().any(|sh| sh.host.starts_with("/home/alex/Documents")), "not the whole folder");
+    }
+
+    #[test]
+    fn staging_links_the_file_so_edits_reach_it() {
+        let t = tempfile::tempdir().unwrap();
+        let original = t.path().join("notes.txt");
+        std::fs::write(&original, "one").unwrap();
+        let link = opened_dir(&t.path().join("data")).join("0-notes.txt");
+        let staged = stage(&[(original.clone(), link.clone())]).unwrap();
+        assert!(staged[0].copied.is_none(), "same filesystem: a hard link");
+        std::fs::write(&link, "two").unwrap();
+        unstage(&staged);
+        assert_eq!(std::fs::read_to_string(&original).unwrap(), "two");
+        assert!(!link.exists(), "the link is removed afterwards");
     }
 
     #[test]

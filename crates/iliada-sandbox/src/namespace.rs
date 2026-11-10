@@ -171,7 +171,8 @@ fn bwrap_prefix(spec: &SandboxSpec, host: &HostIsolationConfig, desktop: &HostDe
     }
     // Files opened with the app: exactly those, at their own paths.
     for f in &spec.files {
-        push(&["--bind", &p(f), &p(f)]);
+        let source = spec.file_sources.get(f).unwrap_or(f);
+        push(&["--bind", &p(source), &p(f)]);
     }
 
     let triplet = host_triplet();
@@ -351,6 +352,7 @@ mod tests {
             args: vec!["--version".into()],
             grants: Default::default(),
             files: vec![],
+            file_sources: Default::default(),
         };
         (dir, spec)
     }

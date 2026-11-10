@@ -59,6 +59,9 @@ pub struct SandboxSpec {
     pub grants: Grants,
     /// Files the user opened with the app (each one bound at its own path).
     pub files: Vec<PathBuf>,
+    /// Where to bind an opened file from, when not from its own path (in a
+    /// micro-VM: its link in the app's data directory).
+    pub file_sources: std::collections::BTreeMap<PathBuf, PathBuf>,
 }
 
 /// Host resources a user's permission decisions add to a sandbox.
@@ -106,6 +109,7 @@ impl SandboxSpec {
             args: vec![],
             grants: Grants::default(),
             files: vec![],
+            file_sources: Default::default(),
         })
     }
 }
