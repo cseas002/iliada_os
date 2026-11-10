@@ -36,7 +36,19 @@ mod linux {
 
     fn mount_fs(source: &str, target: &str, fs: &str, flags: MountFlags) -> Result<()> {
         std::fs::create_dir_all(target)?;
-        mount(source, target, fs, flags, None).with_context(|| format!("mounting {fs} {source} on {target}"))
+        // virtio devices appear asynchronously after their drivers load.
+        let mut tries = 0;
+        loop {
+            match mount(source, target, fs, flags, None) {
+                Ok(()) => return Ok(()),
+                Err(e) if fs == "virtiofs" && tries < 50 => {
+                    let _ = e;
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                Err(e) => return Err(e).with_context(|| format!("mounting {fs} {source} on {target}")),
+            }
+        }
     }
 
     pub fn run() -> Result<i32> {
@@ -55,7 +67,7 @@ mod linux {
 
         // Drivers for the shares and the host channel (modules in the initrd).
         let status = Command::new("/bin/modprobe")
-            .args(["-a", "virtiofs", "vmw_vsock_virtio_transport", "virtio_rng"])
+            .args(["-a", "virtio_pci", "virtiofs", "vmw_vsock_virtio_transport", "virtio_rng"])
             .status()
             .context("running modprobe")?;
         if !status.success() {
