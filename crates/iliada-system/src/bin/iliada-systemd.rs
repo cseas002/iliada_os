@@ -486,15 +486,26 @@ async fn handle(svc: Arc<Service>, stream: UnixStream) -> Result<()> {
     Ok(())
 }
 
-/// After a system update the service's own binary may be new: exit (systemd
-/// restarts it) once idle, so the new one runs.
+const UNIT: &str = "/etc/systemd/system/iliada-system.service";
+
+/// The service's unit as it was when this process started.
+static UNIT_AT_START: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+
+/// After a switch the service's own binary, or its unit (environment: the
+/// version, the update address), may be new. A switch never restarts this
+/// service (it runs the switch), so it exits once idle and systemd starts
+/// the new one.
 fn stale() -> bool {
     let current = std::fs::canonicalize("/run/current-system/sw/bin/iliada-systemd").ok();
     let me = std::env::current_exe().ok().and_then(|p| std::fs::canonicalize(p).ok());
-    matches!((current, me), (Some(c), Some(m)) if c != m)
+    let binary = matches!((current, me), (Some(c), Some(m)) if c != m);
+    let unit_now = std::fs::canonicalize(UNIT).ok();
+    let unit = matches!((UNIT_AT_START.get(), unit_now), (Some(Some(a)), Some(b)) if *a != b);
+    binary || unit
 }
 
 async fn serve(state: PathBuf) -> Result<()> {
+    let _ = UNIT_AT_START.set(std::fs::canonicalize(UNIT).ok());
     let svc = Arc::new(Service {
         dir: iliada_system::config_dir(),
         backups: backup::Store { dir: state },
