@@ -14,7 +14,7 @@ cd "$(dirname "$0")/.."
 REV="$(git rev-parse --short HEAD)$([ -n "$(git status --porcelain)" ] && echo +edits || true)"
 SSH=(ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "root@$HOST")
 echo "==> Copying Iliada $REV to $HOST"
-git ls-files -z | tar --null -T - -czf - | "${SSH[@]}" "cat > /tmp/iliada-source.tgz"
+git ls-files -z | COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -czf - | "${SSH[@]}" "cat > /tmp/iliada-source.tgz"
 echo "==> Rebuilding on $HOST (the first time takes a while)"
 "${SSH[@]}" bash -s -- "$REV" <<'REMOTE'
 set -euo pipefail
