@@ -2876,7 +2876,9 @@ name = "iliada-settings"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "iliada-bundle",
  "iliada-system",
+ "iliada-types",
  "libcosmic",
  "serde_json",
  "tokio",
