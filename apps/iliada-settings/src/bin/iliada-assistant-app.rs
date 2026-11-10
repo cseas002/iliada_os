@@ -33,13 +33,37 @@ fn socket_path() -> Option<PathBuf> {
     Some(PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?).join("iliada-assistant.sock"))
 }
 
-fn main() -> cosmic::iced::Result {
-    if let Some(path) = socket_path() {
-        if std::os::unix::net::UnixStream::connect(&path).is_ok() {
-            // Already open: the connection itself asks it to come forward.
-            return Ok(());
+/// The socket this panel listens on, claimed before the window opens so a
+/// quick second Alt+Space can't start a second panel.
+static LISTENER: std::sync::OnceLock<std::os::unix::net::UnixListener> = std::sync::OnceLock::new();
+
+/// `false`: another panel is open (and was asked to come forward).
+fn claim_instance() -> bool {
+    let Some(path) = socket_path() else { return true };
+    for _ in 0..2 {
+        match std::os::unix::net::UnixListener::bind(&path) {
+            Ok(l) => {
+                let _ = l.set_nonblocking(true);
+                let _ = LISTENER.set(l);
+                return true;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                // Open already: connecting asks it to come forward.
+                if std::os::unix::net::UnixStream::connect(&path).is_ok() {
+                    return false;
+                }
+                // Left over from a panel that was stopped: take it over.
+                let _ = std::fs::remove_file(&path);
+            }
+            Err(_) => return true,
         }
-        let _ = std::fs::remove_file(&path);
+    }
+    true
+}
+
+fn main() -> cosmic::iced::Result {
+    if !claim_instance() {
+        return Ok(());
     }
     let settings = Settings::default().size(Size::new(760.0, 560.0));
     cosmic::app::run::<App>(settings, ())
@@ -110,7 +134,7 @@ fn show_requests() -> impl futures_util::Stream<Item = Message> {
     futures_util::stream::unfold(None::<tokio::net::UnixListener>, |listener| async move {
         let listener = match listener {
             Some(l) => l,
-            None => match socket_path().map(tokio::net::UnixListener::bind) {
+            None => match LISTENER.get().and_then(|l| l.try_clone().ok()).map(tokio::net::UnixListener::from_std) {
                 Some(Ok(l)) => l,
                 // No socket: never yield (a second start opens a second panel).
                 _ => std::future::pending().await,
@@ -254,7 +278,9 @@ impl cosmic::Application for App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Ready(s) => {
-                if let Ok(settings) = &s {
+                if let Ok(settings) = &s
+                    && settings.enabled
+                {
                     match iliada_assistant::Assistant::new(settings) {
                         Ok(a) => self.assistant = Some(Arc::new(Mutex::new(a))),
                         Err(e) => self.lines.push(Line::Error(format!("{e:#}"))),
@@ -348,7 +374,13 @@ impl cosmic::Application for App {
                 .width(Length::Fill)
                 .into()
         } else {
-            widget::button::suggested("Set up the assistant in Iliada Settings").on_press(Message::OpenSettings).into()
+            let off = matches!(&self.settings, Some(Ok(s)) if !s.enabled);
+            widget::row::with_capacity(2)
+                .push(widget::text::body(if off { "The assistant is off." } else { "The assistant isn't ready yet." }))
+                .push(widget::button::suggested("Set it up in Iliada Settings").on_press(Message::OpenSettings))
+                .spacing(spacing.space_s)
+                .align_y(Alignment::Center)
+                .into()
         };
         let top = widget::row::with_capacity(2)
             .push(widget::icon::from_name("iliada").size(40).icon())
