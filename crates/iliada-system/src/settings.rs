@@ -83,7 +83,7 @@ pub fn remove_tools(doc: &mut DocumentMut, names: &[String]) -> Vec<String> {
     removed
 }
 
-/// `[assistant]`: enabled, mode ("ask" / "auto"), model.
+/// `[assistant]`: enabled, mode ("ask" / "auto"), model, full_access.
 pub fn assistant(doc: &DocumentMut) -> crate::protocol::AssistantSettings {
     use crate::protocol::{AssistantMode, AssistantSettings};
     let d = AssistantSettings::default();
@@ -95,12 +95,16 @@ pub fn assistant(doc: &DocumentMut) -> crate::protocol::AssistantSettings {
             _ => AssistantMode::Ask,
         },
         model: t.get("model").and_then(Item::as_str).map(str::to_owned).unwrap_or(d.model),
+        full_access: t.get("full_access").and_then(Item::as_bool).unwrap_or(false),
     }
 }
 
-/// A Claude model id: letters, digits, '-' and '.'.
+/// A model id: letters, digits and `-._:/` ("claude-opus-5-5",
+/// "deepseek/deepseek-v4-flash").
 pub fn valid_model(s: &str) -> bool {
-    (1..=64).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+    (1..=96).contains(&s.len())
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || "-._:/".contains(c))
+        && !s.starts_with(['/', '.'])
 }
 
 pub fn set_assistant(doc: &mut DocumentMut, a: &crate::protocol::AssistantSettings) -> Result<bool> {
@@ -119,6 +123,7 @@ pub fn set_assistant(doc: &mut DocumentMut, a: &crate::protocol::AssistantSettin
         crate::protocol::AssistantMode::Auto => "auto",
     });
     doc["assistant"]["model"] = value(a.model.as_str());
+    doc["assistant"]["full_access"] = value(a.full_access);
     Ok(true)
 }
 
@@ -160,11 +165,21 @@ mod tests {
 
         use crate::protocol::{AssistantMode, AssistantSettings};
         assert!(!assistant(&doc).enabled);
-        let a = AssistantSettings { enabled: true, mode: AssistantMode::Auto, model: "claude-opus-5-5".into() };
+        let a = AssistantSettings {
+            enabled: true,
+            mode: AssistantMode::Auto,
+            model: "claude-opus-5-5".into(),
+            full_access: false,
+        };
         assert!(set_assistant(&mut doc, &a).unwrap());
         assert_eq!(assistant(&doc), a);
         assert!(!set_assistant(&mut doc, &a).unwrap());
-        let weak = AssistantSettings { model: "claude-haiku-5-5".into(), ..a };
-        assert_eq!(weak.effective_mode(), AssistantMode::Ask, "Auto needs a trusted model");
+        let other = AssistantSettings { model: "deepseek/deepseek-v4-flash".into(), full_access: true, ..a };
+        assert!(set_assistant(&mut doc, &other).unwrap());
+        assert_eq!(assistant(&doc), other);
+        assert_eq!(other.effective_mode(), AssistantMode::Auto, "the user's choice");
+        assert!(!other.recommended_for_auto());
+        assert!(set_assistant(&mut doc, &AssistantSettings { model: "a b".into(), ..other.clone() }).is_err());
+        assert!(set_assistant(&mut doc, &AssistantSettings { model: "/etc".into(), ..other }).is_err());
     }
 }

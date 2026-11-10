@@ -112,12 +112,17 @@ pub struct Status {
 pub struct AssistantSettings {
     pub enabled: bool,
     pub mode: AssistantMode,
+    /// A Claude model id (Anthropic), or an OpenRouter one ("vendor/model").
     pub model: String,
+    /// It may also run commands as the user (a shell): anything they can do
+    /// without an administrator's password.
+    #[serde(default)]
+    pub full_access: bool,
 }
 
 impl Default for AssistantSettings {
     fn default() -> Self {
-        AssistantSettings { enabled: false, mode: AssistantMode::Ask, model: DEFAULT_MODEL.into() }
+        AssistantSettings { enabled: false, mode: AssistantMode::Ask, model: DEFAULT_MODEL.into(), full_access: false }
     }
 }
 
@@ -126,22 +131,44 @@ impl Default for AssistantSettings {
 pub enum AssistantMode {
     /// Every action is shown first and runs only if the user approves it.
     Ask,
-    /// Actions run on their own (only with a model in [`AUTO_MODELS`]).
+    /// Actions run on their own.
     Auto,
 }
 
 pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
 
-/// Models trusted to act without approval. Others may still be used, in Ask mode.
+/// Who serves a model: OpenRouter ids are "vendor/model".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Provider {
+    Anthropic,
+    OpenRouter,
+}
+
+impl Provider {
+    pub fn of(model: &str) -> Provider {
+        if model.contains('/') { Provider::OpenRouter } else { Provider::Anthropic }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Provider::Anthropic => "Anthropic",
+            Provider::OpenRouter => "OpenRouter",
+        }
+    }
+}
+
+/// Models that make the fewest mistakes acting on their own. Auto mode works
+/// with any model; Settings warns for the others.
 pub const AUTO_MODELS: [&str; 3] = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"];
 
 impl AssistantSettings {
-    /// The mode that actually applies: Auto only with a trusted model.
+    /// The mode that applies (the user's choice).
     pub fn effective_mode(&self) -> AssistantMode {
-        match self.mode {
-            AssistantMode::Auto if AUTO_MODELS.contains(&self.model.as_str()) => AssistantMode::Auto,
-            _ => AssistantMode::Ask,
-        }
+        self.mode
+    }
+    /// The model is among [`AUTO_MODELS`].
+    pub fn recommended_for_auto(&self) -> bool {
+        AUTO_MODELS.contains(&self.model.as_str())
     }
 }
 

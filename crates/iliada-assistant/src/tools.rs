@@ -1,7 +1,8 @@
-//! What the assistant can do: Iliada's own operations, nothing else (no
-//! shell, no files). Every tool either only reads, or is an *action*, which
-//! in Ask mode runs only after the user approves it. System changes still go
-//! through the system service, so they are limited to what the user may do.
+//! What the assistant can do: Iliada's own operations and a few desktop
+//! settings; with full access (the user's choice) also commands run as the
+//! user. Every tool either only reads, or is an *action*, which in Ask mode
+//! runs only after the user approves it. System changes still go through the
+//! system service, so they are limited to what the user may do.
 
 use std::path::PathBuf;
 
@@ -19,6 +20,8 @@ pub struct Tool {
     pub schema: Value,
     /// Changes something (needs approval in Ask mode).
     pub acts: bool,
+    /// Only with full access (Settings → Assistant).
+    pub full_access: bool,
 }
 
 fn obj(props: Value, required: &[&str]) -> Value {
@@ -35,55 +38,70 @@ pub fn all() -> Vec<Tool> {
             description: "This computer: Iliada version and update state, command-line tools, services (on/off), backup state, and whether the user is an administrator.",
             schema: none(),
             acts: false,
+            full_access: false,
         },
         Tool {
             name: "search_store",
             description: "Apps available in the Iliada Store (name, id, category, summary, whether it uses the internet, whether it is installed). Optional query filters by name or summary.",
             schema: obj(json!({ "query": { "type": "string" } }), &[]),
             acts: false,
+            full_access: false,
         },
         Tool {
             name: "list_installed_apps",
             description: "Apps installed in Applications, with their versions.",
             schema: none(),
             acts: false,
+            full_access: false,
         },
         Tool {
             name: "install_app",
             description: "Install (or update) an app from the Store.",
             schema: app(),
             acts: true,
+            full_access: false,
         },
         Tool {
             name: "remove_app",
             description: "Remove an installed app (its own data in the app's private folder is kept).",
             schema: app(),
             acts: true,
+            full_access: false,
         },
-        Tool { name: "open_app", description: "Open an installed app in its sandbox.", schema: app(), acts: true },
+        Tool {
+            name: "open_app",
+            description: "Open an installed app in its sandbox.",
+            schema: app(),
+            acts: true,
+            full_access: false,
+        },
         Tool {
             name: "update_apps",
             description: "Update all apps now, and install any on the app list that are missing.",
             schema: none(),
             acts: true,
+            full_access: false,
         },
         Tool {
             name: "add_tools",
             description: "Install command-line tools system-wide (nixpkgs attribute names such as \"ripgrep\", \"python3\"). Rebuilds the system; takes a few minutes.",
             schema: obj(json!({ "packages": { "type": "array", "items": { "type": "string" } } }), &["packages"]),
             acts: true,
+            full_access: false,
         },
         Tool {
             name: "remove_tools",
             description: "Uninstall command-line tools. Rebuilds the system.",
             schema: obj(json!({ "packages": { "type": "array", "items": { "type": "string" } } }), &["packages"]),
             acts: true,
+            full_access: false,
         },
         Tool {
             name: "list_software",
             description: "The Store's command-line software (Python, Node.js, ffmpeg, …) and background services (nginx, PostgreSQL, …): id, name, kind, and whether each is installed or on. Any other nixpkgs package can also be installed with add_tools.",
             schema: none(),
             acts: false,
+            full_access: false,
         },
         Tool {
             name: "set_service",
@@ -96,30 +114,35 @@ pub fn all() -> Vec<Tool> {
                 &["name", "on"],
             ),
             acts: true,
+            full_access: false,
         },
         Tool {
             name: "check_for_iliada_update",
             description: "Look for a new version of Iliada.",
             schema: none(),
             acts: false,
+            full_access: false,
         },
         Tool {
             name: "update_iliada",
             description: "Install the newest Iliada release (a restart finishes it).",
             schema: none(),
             acts: true,
+            full_access: false,
         },
         Tool {
             name: "back_up_now",
             description: "Back up apps and settings to the user's GitHub backup now (only if backup is set up).",
             schema: none(),
             acts: true,
+            full_access: false,
         },
         Tool {
             name: "list_permissions",
             description: "For each installed app: what it may ask for (folders, camera, microphone) and what the user decided.",
             schema: none(),
             acts: false,
+            full_access: false,
         },
         Tool {
             name: "set_permission",
@@ -129,15 +152,58 @@ pub fn all() -> Vec<Tool> {
                 &["app", "permission", "allow"],
             ),
             acts: true,
+            full_access: false,
+        },
+        Tool {
+            name: "set_appearance",
+            description: "Switch the desktop between dark and light appearance.",
+            schema: obj(json!({ "dark": { "type": "boolean" } }), &["dark"]),
+            acts: true,
+            full_access: false,
+        },
+        Tool {
+            name: "set_volume",
+            description: "Set the sound volume (percent, 0 to 100) and/or mute or unmute it.",
+            schema: obj(
+                json!({ "percent": { "type": "integer", "minimum": 0, "maximum": 100 }, "muted": { "type": "boolean" } }),
+                &[],
+            ),
+            acts: true,
+            full_access: false,
+        },
+        Tool {
+            name: "open_link",
+            description: "Open a web address (http or https) in the default browser, or a mailto: link in the mail app.",
+            schema: obj(json!({ "url": { "type": "string" } }), &["url"]),
+            acts: true,
+            full_access: false,
+        },
+        Tool {
+            name: "run_command",
+            description: "Run a command on this computer as the user, with bash (Iliada is NixOS-based; fish is the \
+                user's shell). For anything the other tools can't do: reading or changing the user's files, \
+                desktop settings, information about the computer. It cannot do what needs an administrator's \
+                password: use the other tools for apps, software, services and updates. Prefer read-only \
+                commands to look before changing anything. Output is cut after 10,000 characters.",
+            schema: obj(
+                json!({
+                    "command": { "type": "string" },
+                    "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 600, "description": "Default 120." }
+                }),
+                &["command"],
+            ),
+            acts: true,
+            full_access: true,
         },
     ]
 }
 
-/// The API's `tools` array.
-pub fn definitions() -> Value {
+/// The API's `tools` array (with or without the full-access tools).
+pub fn definitions(full_access: bool) -> Value {
     Value::Array(
         all()
             .into_iter()
+            .filter(|t| full_access || !t.full_access)
             .map(|t| json!({ "name": t.name, "description": t.description, "input_schema": t.schema }))
             .collect(),
     )
@@ -145,6 +211,10 @@ pub fn definitions() -> Value {
 
 pub fn acts(name: &str) -> bool {
     all().iter().any(|t| t.name == name && t.acts)
+}
+
+pub fn needs_full_access(name: &str) -> bool {
+    all().iter().any(|t| t.name == name && t.full_access)
 }
 
 fn s<'a>(input: &'a Value, k: &str) -> &'a str {
@@ -170,6 +240,17 @@ pub fn describe(name: &str, input: &Value) -> String {
             iliada_system::software::find(s(input, "name")).map(|i| i.name).unwrap_or(s(input, "name"))
         ),
         "update_iliada" => "Update Iliada".into(),
+        "set_appearance" => {
+            format!("Switch to {} appearance", if input["dark"].as_bool() == Some(true) { "dark" } else { "light" })
+        }
+        "set_volume" => match (input["percent"].as_u64(), input["muted"].as_bool()) {
+            (Some(p), Some(true)) => format!("Set the volume to {p}% and mute it"),
+            (Some(p), _) => format!("Set the volume to {p}%"),
+            (None, Some(true)) => "Mute the sound".into(),
+            (None, _) => "Unmute the sound".into(),
+        },
+        "open_link" => format!("Open {}", s(input, "url")),
+        "run_command" => format!("Run the command: {}", s(input, "command")),
         "back_up_now" => "Back up now".into(),
         "set_permission" => format!(
             "{} {} {}",
@@ -323,18 +404,154 @@ pub async fn run(store: &Store, name: &str, input: &Value) -> Result<String> {
             d.save(&path)?;
             json!({ "app": b.info.name, "permission": wanted, "allowed": allow, "applies": "next time the app opens" })
         }
+        "set_appearance" => {
+            let dark = input["dark"].as_bool().context("\"dark\" must be true or false")?;
+            let dir = config_home()?.join("cosmic/com.system76.CosmicTheme.Mode/v1");
+            std::fs::create_dir_all(&dir)?;
+            // COSMIC watches its settings and switches at once.
+            std::fs::write(dir.join("is_dark"), if dark { "true" } else { "false" })?;
+            json!({ "appearance": if dark { "dark" } else { "light" } })
+        }
+        "set_volume" => {
+            let (percent, muted) = (input["percent"].as_u64(), input["muted"].as_bool());
+            anyhow::ensure!(percent.is_some() || muted.is_some(), "give a percent, or muted true/false");
+            if let Some(p) = percent {
+                wpctl(&["set-volume", "@DEFAULT_AUDIO_SINK@", &format!("{}%", p.min(100))]).await?;
+            }
+            if let Some(m) = muted {
+                wpctl(&["set-mute", "@DEFAULT_AUDIO_SINK@", if m { "1" } else { "0" }]).await?;
+            }
+            let now =
+                tokio::process::Command::new("wpctl").args(["get-volume", "@DEFAULT_AUDIO_SINK@"]).output().await?;
+            json!({ "volume": String::from_utf8_lossy(&now.stdout).trim() })
+        }
+        "open_link" => {
+            let url = s(input, "url").trim();
+            anyhow::ensure!(
+                ["https://", "http://", "mailto:"].iter().any(|p| url.starts_with(p))
+                    && !url.chars().any(char::is_whitespace),
+                "only http, https and mailto links can be opened"
+            );
+            tokio::process::Command::new("xdg-open")
+                .arg(url)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .context("opening the link")?;
+            json!({ "opened": url })
+        }
+        "run_command" => {
+            let command = s(input, "command");
+            anyhow::ensure!(!command.trim().is_empty(), "no command given");
+            let secs = input["timeout_seconds"].as_u64().unwrap_or(120).clamp(1, 600);
+            return run_command(command, std::time::Duration::from_secs(secs)).await;
+        }
         other => bail!("there is no tool called {other}"),
     };
     Ok(out.to_string())
+}
+
+fn config_home() -> Result<PathBuf> {
+    if let Some(x) = std::env::var_os("XDG_CONFIG_HOME") {
+        return Ok(PathBuf::from(x));
+    }
+    Ok(PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?).join(".config"))
+}
+
+async fn wpctl(args: &[&str]) -> Result<()> {
+    let st = tokio::process::Command::new("wpctl").args(args).status().await.context("changing the volume")?;
+    anyhow::ensure!(st.success(), "the sound system refused the change");
+    Ok(())
+}
+
+/// Most of a command's output that is passed back.
+const MAX_OUTPUT: usize = 10_000;
+
+/// A command run with bash as the user, in their home folder; its exit
+/// status and (cut) output, stdout and stderr together.
+pub async fn run_command(command: &str, timeout: std::time::Duration) -> Result<String> {
+    use tokio::io::AsyncReadExt;
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| "/".into());
+    let mut child = tokio::process::Command::new("bash")
+        .args(["-c", &format!("exec 2>&1\n{command}")])
+        .current_dir(home)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .process_group(0)
+        .spawn()
+        .context("starting bash")?;
+    let mut out = child.stdout.take().expect("piped");
+    let mut buf = Vec::new();
+    let read = async {
+        let mut chunk = [0u8; 8192];
+        loop {
+            match out.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) if buf.len() < MAX_OUTPUT * 4 => buf.extend_from_slice(&chunk[..n]),
+                Ok(_) => {}
+            }
+        }
+        child.wait().await
+    };
+    let status = match tokio::time::timeout(timeout, read).await {
+        Ok(st) => st.ok().and_then(|s| s.code()).map(|c| c.to_string()).unwrap_or_else(|| "killed".into()),
+        Err(_) => {
+            if let Some(pid) = child.id() {
+                // The whole group: bash and whatever it started.
+                let _ = std::process::Command::new("kill").args(["-KILL", &format!("-{pid}")]).status();
+            }
+            format!("stopped after {} seconds", timeout.as_secs())
+        }
+    };
+    let mut text = String::from_utf8_lossy(&buf).into_owned();
+    if let Some((i, _)) = text.char_indices().nth(MAX_OUTPUT) {
+        text.truncate(i);
+        text.push_str("\n… (output cut)");
+    }
+    Ok(json!({ "exit": status, "output": text }).to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn commands_report_exit_status_and_output_and_stop_on_time() {
+        let r: Value = serde_json::from_str(
+            &run_command("echo out; echo err >&2; exit 3", std::time::Duration::from_secs(10)).await.unwrap(),
+        )
+        .unwrap();
+        assert_eq!(r["exit"], "3");
+        assert_eq!(r["output"], "out\nerr\n");
+        let t = std::time::Instant::now();
+        let r: Value =
+            serde_json::from_str(&run_command("sleep 30", std::time::Duration::from_secs(1)).await.unwrap()).unwrap();
+        assert!(r["exit"].as_str().unwrap().starts_with("stopped"), "{r}");
+        assert!(t.elapsed() < std::time::Duration::from_secs(10));
+        let r: Value = serde_json::from_str(
+            &run_command("yes | head -c 50000", std::time::Duration::from_secs(10)).await.unwrap(),
+        )
+        .unwrap();
+        assert!(r["output"].as_str().unwrap().ends_with("(output cut)"));
+    }
+
+    #[test]
+    fn full_access_tools_only_with_full_access() {
+        let names = |f| -> Vec<String> {
+            definitions(f).as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_owned()).collect()
+        };
+        assert!(!names(false).contains(&"run_command".to_owned()));
+        assert!(names(true).contains(&"run_command".to_owned()));
+        assert!(needs_full_access("run_command") && !needs_full_access("set_appearance"));
+        assert_eq!(describe("run_command", &json!({ "command": "ls ~" })), "Run the command: ls ~");
+    }
+
     #[test]
     fn tools_are_well_formed_and_actions_are_marked() {
-        let defs = definitions();
+        let defs = definitions(true);
         let names: Vec<&str> = defs.as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
         let mut sorted = names.clone();
         sorted.sort();

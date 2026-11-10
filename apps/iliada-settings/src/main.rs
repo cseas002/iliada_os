@@ -11,10 +11,12 @@ use futures_util::StreamExt;
 use iliada_bundle::decisions::{Decision, Decisions};
 use iliada_settings::{Progress, ago, open_url, run};
 use iliada_system::client;
-use iliada_system::protocol::{AUTO_MODELS, AssistantMode, AssistantSettings, Backup, Event, Request, Status};
+use iliada_system::protocol::{AssistantMode, AssistantSettings, Backup, Event, Provider, Request, Status};
 
-/// Models offered in Settings (the first is the default).
-const MODELS: [&str; 4] = ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5"];
+/// Models offered in Settings (the first is the default). Claude models use
+/// an Anthropic key; "vendor/model" ones an OpenRouter key.
+const MODELS: [&str; 5] =
+    ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5", "deepseek/deepseek-v4-flash"];
 use iliada_types::{Capability, FileScope};
 
 fn main() -> cosmic::iced::Result {
@@ -143,7 +145,6 @@ struct App {
     decisions: Decisions,
     extra_isolation: Vec<String>,
     key_input: String,
-    key_set: bool,
 }
 
 fn load_status() -> Task<Message> {
@@ -504,7 +505,7 @@ impl App {
         };
         let main = settings::section().title("Assistant").add(
             settings::item::builder("Use the assistant")
-                .description("Ask Iliada to do things for you in plain words, in the Assistant app. It uses Claude, from Anthropic, with your own API key.")
+                .description("Ask Iliada to do things for you in plain words, in the Assistant app. It uses Claude (Anthropic) or a model on OpenRouter, with your own API key.")
                 .toggler_maybe(a.enabled, on),
         );
         let mut items: Vec<Element<_>> = vec![main.into()];
@@ -518,7 +519,6 @@ impl App {
                     move |_| Message::AssistantSet(next.clone()),
                 ))
             };
-            let trusted = AUTO_MODELS.contains(&a.model.as_str());
             let mut modes = settings::section()
                 .title("What it may do")
                 .add(mode_item(
@@ -529,20 +529,29 @@ impl App {
                 .add(mode_item(
                     AssistantMode::Auto,
                     "Act on its own",
-                    "It installs, removes and changes things without asking. Only with a model trusted for it.",
+                    "It installs, removes and changes things without asking.",
                 ));
-            if a.mode == AssistantMode::Auto && !trusted {
+            if a.mode == AssistantMode::Auto && !a.recommended_for_auto() {
                 modes = modes.add(info(
-                    format!("{} isn't trusted to act on its own", a.model),
-                    Some("It will ask first until you choose Opus, Fable or Sonnet.".into()),
+                    format!("{} may make more mistakes on its own", a.model),
+                    Some("Opus, Fable and Sonnet are the most careful. Every action is recorded either way.".into()),
                 ));
             }
+            let full = {
+                let a = a.clone();
+                ok.then(|| move |full_access| Message::AssistantSet(AssistantSettings { full_access, ..a.clone() }))
+            };
+            modes = modes.add(
+                settings::item::builder("Full access")
+                    .description("It may also run commands as you: read and change your files, change desktop settings, anything you can do without an administrator's password.")
+                    .toggler_maybe(a.full_access, full),
+            );
             items.push(modes.into());
             let selected = MODELS.iter().position(|m| *m == a.model);
             let model_a = a.clone();
             let model = settings::section().title("Model").add(
-                settings::item::builder("Claude model")
-                    .description("Opus is the default: careful and reliable. Haiku is faster and cheaper, and always asks first.")
+                settings::item::builder("Model")
+                    .description("Opus is the default: careful and reliable. DeepSeek V4 Flash (through OpenRouter) costs a fraction of a cent per request.")
                     .control(widget::dropdown(&MODELS[..], selected, move |i| {
                         Message::AssistantSet(AssistantSettings { model: MODELS[i].to_owned(), ..model_a.clone() })
                     })),
@@ -550,7 +559,7 @@ impl App {
             items.push(model.into());
             let key_row = widget::row::with_capacity(2)
                 .push(
-                    widget::secure_input("sk-ant-…", self.key_input.as_str(), None, true)
+                    widget::secure_input("sk-ant-… or sk-or-…", self.key_input.as_str(), None, true)
                         .on_input(Message::AssistantKey)
                         .on_submit(|_| Message::SaveKey)
                         .width(Length::Fill),
@@ -558,13 +567,30 @@ impl App {
                 .push(widget::button::suggested("Save key").on_press(Message::SaveKey))
                 .spacing(cosmic::theme::spacing().space_xs)
                 .align_y(Alignment::Center);
-            let key = settings::section()
+            let provider = Provider::of(&a.model);
+            let have_key = iliada_assistant::api::load_key(provider).is_some();
+            let spent = iliada_assistant::total_spent();
+            let mut key = settings::section()
                 .title("API key")
                 .add(info(
-                    if self.key_set { "Your API key is saved" } else { "Add your Anthropic API key" },
-                    Some("From console.anthropic.com. Kept only for you on this computer; never backed up.".into()),
+                    if have_key {
+                        format!("Your {} API key is saved", provider.name())
+                    } else {
+                        format!("Add your {} API key", provider.name())
+                    },
+                    Some(
+                        match provider {
+                            Provider::Anthropic => "From console.anthropic.com.",
+                            Provider::OpenRouter => "From openrouter.ai/keys.",
+                        }
+                        .to_owned()
+                            + " Kept only for you on this computer; never backed up.",
+                    ),
                 ))
                 .add(settings::item_row(vec![key_row.into()]));
+            if spent > 0.0 {
+                key = key.add(info(format!("Spent so far: ${spent:.4}"), None));
+            }
             items.push(key.into());
         }
         settings::view_column(items).into()
@@ -647,7 +673,6 @@ impl cosmic::Application for App {
             decisions: Decisions::default(),
             extra_isolation: Vec::new(),
             key_input: String::new(),
-            key_set: iliada_assistant::api::load_key().is_some(),
         };
         app.set_header_title("Iliada Settings".into());
         let title = match app.core.main_window_id() {
@@ -769,14 +794,13 @@ impl cosmic::Application for App {
             Message::AssistantKey(k) => self.key_input = k,
             Message::SaveKey => {
                 let k = self.key_input.trim().to_owned();
-                if !k.starts_with("sk-") {
-                    self.error = Some("That doesn't look like an Anthropic API key (they start with sk-).".into());
-                } else if let Err(e) = iliada_assistant::api::save_key(&k) {
-                    self.error = Some(format!("Could not save the key: {e}"));
-                } else {
-                    self.key_input.clear();
-                    self.key_set = true;
-                    self.notice = Some("API key saved. Only you can read it; it is never backed up.".into());
+                match iliada_assistant::api::save_key(&k) {
+                    Err(e) => self.error = Some(format!("Could not save the key: {e:#}")),
+                    Ok(p) => {
+                        self.key_input.clear();
+                        self.notice =
+                            Some(format!("{} key saved. Only you can read it; it is never backed up.", p.name()));
+                    }
                 }
             }
             Message::ExtraIsolation(app, on) => {

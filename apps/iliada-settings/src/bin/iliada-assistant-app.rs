@@ -38,7 +38,8 @@ enum Message {
     Note(String),
     Approve(String, Pending),
     Answer(bool),
-    Reply(Result<String, String>),
+    /// The answer, and what the conversation has cost so far.
+    Reply(Result<String, String>, f64),
     OpenSettings,
 }
 
@@ -50,6 +51,8 @@ struct App {
     input: String,
     busy: bool,
     approval: Option<(String, Pending)>,
+    /// What this conversation has cost (US dollars).
+    spent: f64,
 }
 
 /// Bridges the assistant's callbacks to the window.
@@ -87,14 +90,15 @@ impl App {
                     S::Start(text, rx) => {
                         tokio::spawn(async move {
                             let ui = Window { tx: tx.clone() };
-                            let r = assistant.lock().await.send(&text, &ui).await.map_err(|e| format!("{e:#}"));
-                            let _ = tx.send(Message::Reply(r));
+                            let mut a = assistant.lock().await;
+                            let r = a.send(&text, &ui).await.map_err(|e| format!("{e:#}"));
+                            let _ = tx.send(Message::Reply(r, a.spent()));
                         });
                         rx
                     }
                 };
                 let m = rx.recv().await?;
-                let done = matches!(m, Message::Reply(_));
+                let done = matches!(m, Message::Reply(..));
                 // After the reply the stream ends (the sender side is dropped too).
                 Some((m, if done { S::Run(mpsc::unbounded_channel().1) } else { S::Run(rx) }))
             }
@@ -142,6 +146,7 @@ impl cosmic::Application for App {
             input: String::new(),
             busy: false,
             approval: None,
+            spent: 0.0,
         };
         app.set_header_title("Assistant".into());
         let title = match app.core.main_window_id() {
@@ -185,12 +190,13 @@ impl cosmic::Application for App {
                     }
                 }
             }
-            Message::Reply(r) => {
+            Message::Reply(r, spent) => {
                 self.busy = false;
                 self.lines.push(match r {
                     Ok(t) => Line::Assistant(t),
                     Err(e) => Line::Error(e),
                 });
+                self.spent = spent;
             }
             Message::OpenSettings => {
                 let _ = std::process::Command::new("iliada-settings").spawn();
@@ -203,17 +209,22 @@ impl cosmic::Application for App {
         let spacing = cosmic::theme::spacing();
         let mut col = widget::column::with_capacity(self.lines.len() + 2).spacing(spacing.space_s);
         let mode = match self.settings.as_ref().and_then(|s| s.as_ref().ok()) {
-            Some(s) => match s.effective_mode() {
-                AssistantMode::Ask => format!("{} · asks before every action", s.model),
-                AssistantMode::Auto => format!("{} · acts on its own", s.model),
-            },
+            Some(s) => {
+                let mode = match s.effective_mode() {
+                    AssistantMode::Ask => "asks before every action",
+                    AssistantMode::Auto => "acts on its own",
+                };
+                let full = if s.full_access { " · full access" } else { "" };
+                let cost = if self.spent > 0.0 { format!(" · ${:.4} so far", self.spent) } else { String::new() };
+                format!("{} · {mode}{full}{cost}", s.model)
+            }
             None => String::new(),
         };
         col = col.push(widget::text::caption(mode));
         if self.lines.is_empty() && self.assistant.is_some() {
             col = col.push(widget::text::body(
                 "Ask me to install or remove apps, add command-line tools, turn on the SSH server or printing, \
-                 update apps or Iliada, back up, or change what an app may use.",
+                 update apps or Iliada, back up, change what an app may use, switch to dark mode or set the volume.",
             ));
         }
         for l in &self.lines {

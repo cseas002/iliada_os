@@ -78,9 +78,13 @@ enum AssistantCmd {
     Mode {
         mode: String,
     },
-    /// The Claude model it uses.
+    /// The model it uses: a Claude id, or an OpenRouter one ("deepseek/deepseek-v4-flash").
     Model {
         model: String,
+    },
+    /// on: it may also run commands as you; off: only Iliada's own actions.
+    FullAccess {
+        on: String,
     },
     /// Set your API key (read from the terminal, not the command line).
     Key,
@@ -368,29 +372,30 @@ async fn ask(text: String) -> Result<()> {
 }
 
 async fn assistant(cmd: AssistantCmd, v: bool) -> Result<()> {
-    use iliada_system::protocol::{AUTO_MODELS, AssistantMode};
+    use iliada_system::protocol::{AssistantMode, Provider};
     let mut s = client::status().await?.assistant;
     match cmd {
         AssistantCmd::Status => {
-            let key = if iliada_assistant::api::load_key().is_some() { "set" } else { "not set" };
-            let mode = match (s.mode, s.effective_mode()) {
-                (AssistantMode::Auto, AssistantMode::Auto) => "auto (acts on its own)",
-                (AssistantMode::Auto, AssistantMode::Ask) => "ask (auto needs a stronger model)",
-                _ => "ask (every action needs your OK)",
+            let provider = Provider::of(&s.model);
+            let key = if iliada_assistant::api::load_key(provider).is_some() { "set" } else { "not set" };
+            let mode = match s.effective_mode() {
+                AssistantMode::Auto => "auto (acts on its own)",
+                AssistantMode::Ask => "ask (every action needs your OK)",
             };
-            println!("Assistant: {}", if s.enabled { "on" } else { "off" });
-            println!("Mode:      {mode}");
-            println!("Model:     {}", s.model);
-            println!("API key:   {key}");
+            println!("Assistant:   {}", if s.enabled { "on" } else { "off" });
+            println!("Mode:        {mode}");
+            println!("Full access: {}", if s.full_access { "on (may run commands as you)" } else { "off" });
+            println!("Model:       {} ({})", s.model, provider.name());
+            println!("API key:     {key}");
+            println!("Spent:       ${:.4}", iliada_assistant::total_spent());
             return Ok(());
         }
         AssistantCmd::Key => {
-            eprint!("Anthropic API key (from console.anthropic.com): ");
+            eprint!("API key (Anthropic sk-ant-… or OpenRouter sk-or-…): ");
             let mut k = String::new();
             std::io::stdin().read_line(&mut k)?;
-            anyhow::ensure!(k.trim().starts_with("sk-"), "that doesn't look like an API key");
-            iliada_assistant::api::save_key(&k)?;
-            eprintln!("Saved (only you can read it).");
+            let p = iliada_assistant::api::save_key(&k)?;
+            eprintln!("{} key saved (only you can read it).", p.name());
             return Ok(());
         }
         AssistantCmd::On => s.enabled = true,
@@ -401,11 +406,18 @@ async fn assistant(cmd: AssistantCmd, v: bool) -> Result<()> {
                 "auto" => AssistantMode::Auto,
                 _ => anyhow::bail!("mode is \"ask\" or \"auto\""),
             };
-            if s.mode == AssistantMode::Auto && !AUTO_MODELS.contains(&s.model.as_str()) {
-                eprintln!("Note: {} is not trusted to act on its own; it stays in ask mode.", s.model);
+            if s.mode == AssistantMode::Auto && !s.recommended_for_auto() {
+                eprintln!("Note: {} may make more mistakes acting on its own than Opus, Fable or Sonnet.", s.model);
             }
         }
         AssistantCmd::Model { model } => s.model = model,
+        AssistantCmd::FullAccess { on } => {
+            s.full_access = match on.as_str() {
+                "on" => true,
+                "off" => false,
+                _ => anyhow::bail!("full-access is \"on\" or \"off\""),
+            }
+        }
     }
     system(Request::SetAssistant { settings: s }, v).await?;
     eprintln!("Saved.");
