@@ -104,6 +104,10 @@ type Sink = UnboundedSender<Event>;
 
 fn logger(tx: &Sink) -> impl Fn(String) + Sync + '_ {
     move |line| {
+        // /etc/iliada has uncommitted changes while a change is applied; expected.
+        if line.contains("Git tree '") && line.ends_with("is dirty") {
+            return;
+        }
         let _ = tx.send(Event::Log { line });
     }
 }

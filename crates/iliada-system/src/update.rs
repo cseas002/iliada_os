@@ -35,9 +35,13 @@ fn http() -> reqwest::Client {
 }
 
 async fn get(url: &str, max: u64) -> Result<Vec<u8>> {
-    let r = http().get(url).send().await.with_context(|| format!("contacting {url}"))?;
+    let r = http()
+        .get(url)
+        .send()
+        .await
+        .map_err(|_| anyhow::anyhow!("Iliada can't reach its update server. Check the internet connection."))?;
     if r.status() == reqwest::StatusCode::NOT_FOUND {
-        bail!("no release found at {url}");
+        bail!("No Iliada release has been published yet.");
     }
     let r = r.error_for_status()?;
     if r.content_length().is_some_and(|n| n > max) {
