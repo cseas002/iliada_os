@@ -103,10 +103,12 @@ impl Assistant {
                 let result = if tools::acts(name) {
                     let action = tools::describe(name, input);
                     if self.mode == AssistantMode::Ask && !ui.approve(&action).await {
+                        audit(&self.claude.model, self.mode, name, input, "declined");
                         Err(anyhow::anyhow!("the person declined: {action}"))
                     } else {
                         ui.progress(&format!("{action}…"));
                         let r = tools::run(&self.store, name, input).await;
+                        audit(&self.claude.model, self.mode, name, input, if r.is_ok() { "done" } else { "failed" });
                         ui.progress(&match &r {
                             Ok(_) => format!("✓ {action}"),
                             Err(e) => format!("✗ {action}: {e:#}"),
@@ -124,6 +126,23 @@ impl Assistant {
             self.messages.push(json!({ "role": "user", "content": results }));
         }
         Ok("I stopped because this was taking too many steps. Tell me what to do next.".into())
+    }
+}
+
+/// Every action the assistant takes (or was refused) is appended to
+/// `~/.local/share/iliada/assistant-log.jsonl`.
+fn audit(model: &str, mode: AssistantMode, tool: &str, input: &Value, outcome: &str) {
+    use std::io::Write;
+    let Some(home) = std::env::var_os("HOME") else { return };
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(home).join(".local/share"));
+    let path = base.join("iliada/assistant-log.jsonl");
+    let _ = std::fs::create_dir_all(base.join("iliada"));
+    let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let line = json!({ "time": time, "model": model, "mode": mode, "tool": tool, "input": input, "outcome": outcome });
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{line}");
     }
 }
 

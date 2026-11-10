@@ -301,10 +301,12 @@ it, instead of a forum search and terminal commands.
 * **It cannot answer permission prompts.** Those are drawn by Iliada for the
   person at the keyboard. It can change a decision only through Settings'
   own operation, as the user could, and says so.
+* **Logged.** Every action it takes or is refused is appended to
+  `~/.local/share/iliada/assistant-log.jsonl` (time, model, mode, tool,
+  input, outcome).
 * **No invented results.** Its instructions require looking things up before
   acting and reporting only what a tool confirmed; tool failures are passed
   back as failures.
 
-Later: an on-device model for the simplest requests, an audit log of the
-assistant's actions next to the broker's, and tools for Settings pages
-(display, network) once those have an API.
+Later: an on-device model for the simplest requests, and tools for Settings
+pages (display, network) once those have an API.
