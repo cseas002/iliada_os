@@ -81,6 +81,13 @@ fn sound_sockets() -> Option<SoundSockets> {
 /// Ask the user, in a window Iliada draws (never the app). `None`: no
 /// answer (closed, or no display): denied this time, asked again next time.
 fn ask(bundle: &Bundle, req: &PermissionRequest) -> Option<Decision> {
+    // Automated tests (no one to click): ILIADA_ASSUME=allow|deny answers
+    // questions not decided yet, and is not remembered.
+    match std::env::var("ILIADA_ASSUME").as_deref() {
+        Ok("allow") => return Some(Decision::Allow),
+        Ok("deny") => return Some(Decision::Deny),
+        _ => {}
+    }
     let mut cmd = std::process::Command::new("iliada-prompt");
     cmd.args(["--app", &bundle.info.name, "--wants", &req.capability.to_string(), "--purpose", &req.purpose]);
     if let Some(icon) = &bundle.info.icon {
@@ -115,6 +122,7 @@ fn grants(bundle: &Bundle) -> Grants {
         let decision = match decisions.get(app, cap) {
             Some(d) => d,
             None => match ask(bundle, req) {
+                Some(d) if std::env::var_os("ILIADA_ASSUME").is_some() => d,
                 Some(d) => {
                     decisions.set(app, cap, d);
                     if let Some(p) = &path
