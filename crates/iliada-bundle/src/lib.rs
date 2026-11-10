@@ -21,6 +21,7 @@ mod error;
 mod info;
 mod layout;
 mod permissions;
+pub mod processor;
 mod provenance;
 
 pub use error::BundleError;

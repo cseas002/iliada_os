@@ -489,7 +489,7 @@ impl cosmic::Application for App {
                     ),
                 ];
                 let needle = self.timezone.to_lowercase();
-                if !self.zones.iter().any(|z| *z == self.timezone) && needle.len() >= 2 {
+                if !self.zones.contains(&self.timezone) && needle.len() >= 2 {
                     let mut row = widget::row::with_capacity(6).spacing(spacing.space_xxs);
                     for z in self.zones.iter().filter(|z| z.to_lowercase().contains(&needle)).take(5) {
                         row = row.push(widget::button::standard(z.clone()).on_press(Message::PickTimezone(z.clone())));

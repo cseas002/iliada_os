@@ -1,9 +1,9 @@
 //! The catalog builder (runs on the Iliada build server).
 //!
 //!   iliada-catalog keygen --out ~/.config/iliada
-//!   iliada-catalog build --recipes iliada_apps/recipes --out dist [--only firefox,gimp]
+//!   iliada-catalog build --recipes iliada_apps/recipes --out dist [--only firefox,gimp] [--arch arm64]
 //!   iliada-catalog assemble --out dist [--include firefox,gimp]
-//!   iliada-catalog sign --key ~/.config/iliada/catalog.key dist/catalog.json
+//!   iliada-catalog sign --key ~/.config/iliada/catalog.key dist/catalog.json dist/catalog-2.json
 //!   iliada-catalog release --source iliada_os --version 0.2.0 --key … --out dist-os
 
 use std::collections::BTreeMap;
@@ -15,7 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use iliada_catalog::{AppEntry, Archive, Catalog, FORMAT};
+use iliada_catalog::{AppEntry, Archive, Archives, Catalog, FORMAT};
 use iliada_ingest::resolvers::{LibraryResolver, NamingRules};
 use iliada_ingest::{IngestConfig, Ingestor, Source};
 use serde::Deserialize;
@@ -50,8 +50,12 @@ enum Cmd {
         base_url: String,
         #[arg(long)]
         cache: Option<PathBuf>,
+        /// Debian architecture to build for: amd64 (Intel/AMD) or arm64.
+        #[arg(long, default_value = "amd64")]
+        arch: String,
     },
-    /// Collect entries into dist/catalog.json.
+    /// Collect entries into dist/catalog-2.json (every processor) and
+    /// dist/catalog.json (x86-64 only, for Iliada 0.1).
     Assemble {
         #[arg(long)]
         out: PathBuf,
@@ -59,11 +63,12 @@ enum Cmd {
         #[arg(long, value_delimiter = ',')]
         include: Vec<String>,
     },
-    /// Sign catalog.json, writing catalog.json.sig.
+    /// Sign catalogs, writing <file>.sig next to each.
     Sign {
         #[arg(long)]
         key: PathBuf,
-        catalog: PathBuf,
+        #[arg(required = true)]
+        catalogs: Vec<PathBuf>,
     },
     /// Package an Iliada release: the committed source tree as
     /// iliada-<version>-source.tar.zst, and a signed release.json naming it.
@@ -153,7 +158,30 @@ fn pack(app_dir: &Path, dest: &Path) -> Result<(String, u64)> {
     Ok((hex::encode(hasher.finalize()), fs::metadata(dest)?.len()))
 }
 
-async fn build(recipes: &Path, out: &Path, only: &[String], base: &str, cache: Option<PathBuf>) -> Result<()> {
+/// Rust's name for a Debian architecture (the catalog's `archives` keys).
+fn rust_arch(deb: &str) -> Result<&'static str> {
+    Ok(match deb {
+        "amd64" => "x86_64",
+        "arm64" => "aarch64",
+        _ => bail!("unsupported architecture {deb:?} (amd64 or arm64)"),
+    })
+}
+
+/// Where a build's outputs go. amd64 keeps the original names.
+fn arch_suffix(deb: &str) -> String {
+    if deb == "amd64" { String::new() } else { format!("-{deb}") }
+}
+
+async fn build(
+    recipes: &Path,
+    out: &Path,
+    only: &[String],
+    base: &str,
+    cache: Option<PathBuf>,
+    deb_arch: &str,
+) -> Result<()> {
+    let arch = rust_arch(deb_arch)?;
+    let sfx = arch_suffix(deb_arch);
     let mut stems: Vec<String> = fs::read_dir(recipes)?
         .flatten()
         .filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().into_owned()))
@@ -165,10 +193,11 @@ async fn build(recipes: &Path, out: &Path, only: &[String], base: &str, cache: O
         let recipe: Recipe = toml::from_str(&fs::read_to_string(recipes.join(format!("{stem}.toml")))?)
             .with_context(|| format!("recipe {stem}"))?;
         eprintln!("==> {stem}: translating debian:{}", recipe.source.debian);
-        let work = out.join("work").join(&stem);
+        let work = out.join(format!("work{sfx}")).join(&stem);
         let cfg = IngestConfig {
             out_dir: work.clone(),
             cache_dir: cache.clone().unwrap_or_else(iliada_ingest::pipeline::default_cache_dir),
+            arch: Some(deb_arch.to_owned()),
             exec_override: recipe.exec.clone(),
             full_closure: recipe.full_closure,
             network: recipe.network,
@@ -207,7 +236,7 @@ async fn build(recipes: &Path, out: &Path, only: &[String], base: &str, cache: O
         let tag = safe(&format!("{stem}-{}", report.version));
         let dist = out.join("dist").join(&tag);
         fs::create_dir_all(&dist)?;
-        let archive_name = format!("{stem}.app.tar.zst");
+        let archive_name = format!("{stem}{sfx}.app.tar.zst");
         let (sha256, size) = pack(&report.bundle, &dist.join(&archive_name))?;
         let bundle = iliada_bundle::Bundle::open(&report.bundle)?;
         let icon = bundle.info.icon.as_ref().and_then(|rel| {
@@ -224,13 +253,23 @@ async fn build(recipes: &Path, out: &Path, only: &[String], base: &str, cache: O
             category: recipe.category,
             version: report.version.clone(),
             network: recipe.network,
-            archive: Archive { url: format!("{base}/{tag}/{archive_name}"), sha256, size },
+            archive: None,
+            archives: {
+                let mut a = Archives::default();
+                *a.slot(arch).expect("known architecture") =
+                    Some(Archive { url: format!("{base}/{tag}/{archive_name}"), sha256, size, version: None });
+                a
+            },
             icon,
         };
         fs::create_dir_all(out.join("entries"))?;
-        fs::write(out.join("entries").join(format!("{stem}.json")), serde_json::to_vec_pretty(&entry)?)?;
+        fs::write(
+            out.join("entries")
+                .join(format!("{stem}{}.json", if sfx.is_empty() { String::new() } else { format!(".{deb_arch}") })),
+            serde_json::to_vec_pretty(&entry)?,
+        )?;
         // Keep the built bundle for the launch test.
-        let tested = out.join("bundles");
+        let tested = out.join(format!("bundles{sfx}"));
         fs::create_dir_all(&tested)?;
         let dest = tested.join(report.bundle.file_name().unwrap());
         let _ = fs::remove_dir_all(&dest);
@@ -243,23 +282,65 @@ async fn build(recipes: &Path, out: &Path, only: &[String], base: &str, cache: O
     Ok(())
 }
 
+/// `entries/firefox.json` (amd64) or `entries/firefox.arm64.json`:
+/// (recipe, Debian architecture).
+fn entry_name(file_stem: &str) -> (&str, &str) {
+    match file_stem.rsplit_once('.') {
+        Some((recipe, arch)) if rust_arch(arch).is_ok() => (recipe, arch),
+        _ => (file_stem, "amd64"),
+    }
+}
+
+/// `include` names recipes (every processor) or `recipe.arch` (one).
 fn assemble(out: &Path, include: &[String]) -> Result<()> {
-    let mut apps: BTreeMap<String, AppEntry> = BTreeMap::new();
+    let mut builds: Vec<(String, String, AppEntry)> = Vec::new();
     for e in fs::read_dir(out.join("entries"))?.flatten() {
-        let stem = e.path().file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        if !include.is_empty() && !include.contains(&stem) {
+        let file_stem = e.path().file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let (recipe, deb) = entry_name(&file_stem);
+        if !include.is_empty() && !include.iter().any(|i| *i == recipe || *i == format!("{recipe}.{deb}")) {
             continue;
         }
-        let entry: AppEntry = serde_json::from_slice(&fs::read(e.path())?)?;
-        apps.insert(entry.name.to_lowercase(), entry);
+        let mut entry: AppEntry = serde_json::from_slice(&fs::read(e.path())?)?;
+        // Entries written before per-processor archives: x86-64.
+        if let Some(a) = entry.archive.take() {
+            entry.archives.x86_64.get_or_insert(a);
+        }
+        builds.push((recipe.to_owned(), deb.to_owned(), entry));
     }
-    let catalog = Catalog {
-        format: FORMAT,
-        generated: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
-        apps: apps.into_values().collect(),
-    };
-    fs::write(out.join("catalog.json"), serde_json::to_vec_pretty(&catalog)?)?;
-    eprintln!("catalog.json: {} apps", catalog.apps.len());
+    // amd64 first, so its entry carries the shared details and version.
+    builds.sort_by_key(|(recipe, deb, _)| (recipe.clone(), deb != "amd64"));
+    let mut apps: BTreeMap<String, AppEntry> = BTreeMap::new();
+    for (recipe, deb, entry) in builds {
+        let arch = rust_arch(&deb)?;
+        let Some(mut archive) = entry.archives.get(arch).cloned() else {
+            bail!("entry {recipe}.{deb} has no {arch} archive");
+        };
+        match apps.get_mut(&recipe) {
+            None => {
+                apps.insert(recipe, entry);
+            }
+            Some(app) => {
+                if app.id != entry.id {
+                    bail!("{recipe}: the {deb} build is {} but another build is {}", entry.id, app.id);
+                }
+                if entry.version != app.version {
+                    archive.version = Some(entry.version.clone());
+                }
+                *app.archives.slot(arch).expect("known architecture") = Some(archive);
+            }
+        }
+    }
+    let mut apps: Vec<AppEntry> = apps.into_values().collect();
+    apps.sort_by_key(|a| a.name.to_lowercase());
+    let catalog = Catalog { format: FORMAT, generated: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(), apps };
+    fs::write(out.join(iliada_catalog::CATALOG_2), serde_json::to_vec_pretty(&catalog)?)?;
+    let legacy = catalog.legacy();
+    fs::write(out.join("catalog.json"), serde_json::to_vec_pretty(&legacy)?)?;
+    for (arch, name) in [("x86_64", "Intel/AMD"), ("aarch64", "ARM")] {
+        let n = catalog.apps.iter().filter(|a| a.archives.get(arch).is_some()).count();
+        eprintln!("{}: {n} apps for {name}", iliada_catalog::CATALOG_2);
+    }
+    eprintln!("catalog.json (Iliada 0.1): {} apps", legacy.apps.len());
     Ok(())
 }
 
@@ -284,17 +365,21 @@ async fn main() -> Result<()> {
             fs::write(&public, iliada_catalog::encode_key(sk.verifying_key().as_bytes()) + "\n")?;
             eprintln!("wrote {} (keep it secret, back it up) and {}", key.display(), public.display());
         }
-        Cmd::Build { recipes, out, only, base_url, cache } => build(&recipes, &out, &only, &base_url, cache).await?,
+        Cmd::Build { recipes, out, only, base_url, cache, arch } => {
+            build(&recipes, &out, &only, &base_url, cache, &arch).await?
+        }
         Cmd::Assemble { out, include } => assemble(&out, &include)?,
-        Cmd::Sign { key, catalog } => {
+        Cmd::Sign { key, catalogs } => {
             let sk = iliada_catalog::parse_signing_key(&fs::read_to_string(&key)?)?;
-            let bytes = fs::read(&catalog)?;
-            let sig = iliada_catalog::sign(&sk, &bytes);
-            let sig_path = PathBuf::from(format!("{}.sig", catalog.display()));
-            fs::write(&sig_path, sig + "\n")?;
-            // Self-check before anything is published.
-            iliada_catalog::verify(&sk.verifying_key(), &bytes, &fs::read_to_string(&sig_path)?)?;
-            eprintln!("signed: {}", sig_path.display());
+            for catalog in catalogs {
+                let bytes = fs::read(&catalog)?;
+                let sig = iliada_catalog::sign(&sk, &bytes);
+                let sig_path = PathBuf::from(format!("{}.sig", catalog.display()));
+                fs::write(&sig_path, sig + "\n")?;
+                // Self-check before anything is published.
+                iliada_catalog::verify(&sk.verifying_key(), &bytes, &fs::read_to_string(&sig_path)?)?;
+                eprintln!("signed: {}", sig_path.display());
+            }
         }
         Cmd::Release { source, version, key, out, base_url } => release(&source, &version, &key, &out, &base_url)?,
     }

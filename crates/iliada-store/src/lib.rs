@@ -1,7 +1,9 @@
 //! The Iliada Store engine.
 //!
-//! 1. Fetch `catalog.json` and `catalog.json.sig`; verify the signature with
-//!    the key built into Iliada before parsing anything.
+//! 1. Fetch `catalog-2.json` (or, where there is none, `catalog.json`) and
+//!    its `.sig`; verify the signature with the key built into Iliada before
+//!    parsing anything. Only apps built for this computer's processor are
+//!    offered.
 //! 2. To install, download the app's archive, check its size and SHA-256
 //!    against the signed catalog, unpack it with the path-checked extractor
 //!    into a private staging folder inside `/Applications`, validate the
@@ -17,6 +19,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use futures_util::StreamExt;
 use iliada_bundle::Bundle;
+use iliada_bundle::processor::processor_name;
 use iliada_catalog::{AppEntry, Catalog, VerifyingKey};
 use iliada_ingest::extract::{ExtractLimits, extract_tar_stream};
 use sha2::{Digest, Sha256};
@@ -125,11 +128,39 @@ impl Store {
         fs::read(path).with_context(|| format!("reading {path}"))
     }
 
-    /// Download and verify the catalog.
+    /// Download and verify the catalog: the apps this computer can run.
     pub async fn catalog(&self) -> Result<Catalog> {
-        let bytes = self.get(&self.cfg.catalog, 16 << 20).await?;
-        let sig = self.get(&format!("{}.sig", self.cfg.catalog), 4096).await?;
-        iliada_catalog::verify(&self.cfg.key, &bytes, &String::from_utf8_lossy(&sig))
+        Ok(self.full_catalog().await?.for_arch(std::env::consts::ARCH))
+    }
+
+    /// Every app, for every processor. `catalog-2.json` (one archive per
+    /// processor) sits next to `catalog.json` (x86-64 only, for Iliada 0.1)
+    /// and is preferred when it exists.
+    pub async fn full_catalog(&self) -> Result<Catalog> {
+        let url = &self.cfg.catalog;
+        if let Some(dir) = url.strip_suffix("catalog.json") {
+            let v2 = format!("{dir}{}", iliada_catalog::CATALOG_2);
+            match self.fetch_catalog(&v2).await {
+                Ok(Some(c)) => return Ok(c),
+                Ok(None) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        self.fetch_catalog(url).await?.with_context(|| format!("could not download the catalog {url}"))
+    }
+
+    /// `None`: not there (or unreachable). A catalog that is there but does
+    /// not verify is an error, never skipped.
+    async fn fetch_catalog(&self, url: &str) -> Result<Option<Catalog>> {
+        let bytes = match self.get(url, 16 << 20).await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::debug!(%url, error = %format!("{e:#}"), "no catalog here");
+                return Ok(None);
+            }
+        };
+        let sig = self.get(&format!("{url}.sig"), 4096).await?;
+        iliada_catalog::verify(&self.cfg.key, &bytes, &String::from_utf8_lossy(&sig)).map(Some)
     }
 
     /// Apps in Applications, by id.
@@ -156,7 +187,14 @@ impl Store {
 
     /// Install (or update) one app. `progress(done, total)` reports the download.
     pub async fn install(&self, app: &AppEntry, progress: &(dyn Fn(u64, u64) + Sync)) -> Result<PathBuf> {
-        ensure!(app.archive.size <= MAX_ARCHIVE, "{} is too large", app.name);
+        let archive_entry = app.local_archive().with_context(|| {
+            format!(
+                "{} is not available for this computer's processor ({})",
+                app.name,
+                processor_name(std::env::consts::ARCH)
+            )
+        })?;
+        ensure!(archive_entry.size <= MAX_ARCHIVE, "{} is too large", app.name);
         let staging = tempfile::Builder::new().prefix(".iliada-store-").tempdir_in(&self.cfg.apps_dir)?;
         let archive = staging.path().join("archive.tar.zst");
 
@@ -164,30 +202,30 @@ impl Store {
         let mut file = fs::File::create(&archive)?;
         let mut hasher = Sha256::new();
         let mut done = 0u64;
-        if app.archive.url.starts_with("https://") || app.archive.url.starts_with("http://") {
-            let resp = self.client.get(&app.archive.url).send().await?.error_for_status()?;
+        if archive_entry.url.starts_with("https://") || archive_entry.url.starts_with("http://") {
+            let resp = self.client.get(&archive_entry.url).send().await?.error_for_status()?;
             let mut stream = resp.bytes_stream();
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk?;
                 done += chunk.len() as u64;
-                ensure!(done <= app.archive.size, "download is larger than the catalog says");
+                ensure!(done <= archive_entry.size, "download is larger than the catalog says");
                 hasher.update(&chunk);
                 file.write_all(&chunk)?;
-                progress(done, app.archive.size);
+                progress(done, archive_entry.size);
             }
         } else {
-            let bytes = self.get(&app.archive.url, app.archive.size).await?;
+            let bytes = self.get(&archive_entry.url, archive_entry.size).await?;
             done = bytes.len() as u64;
             hasher.update(&bytes);
             file.write_all(&bytes)?;
-            progress(done, app.archive.size);
+            progress(done, archive_entry.size);
         }
         file.flush()?;
         drop(file);
-        ensure!(done == app.archive.size, "download size {done} does not match the catalog ({})", app.archive.size);
+        ensure!(done == archive_entry.size, "download size {done} does not match the catalog ({})", archive_entry.size);
         let sha = hex::encode(hasher.finalize());
         ensure!(
-            sha == app.archive.sha256,
+            sha == archive_entry.sha256,
             "checksum mismatch for {}: the download is not the one the catalog signed",
             app.name
         );
@@ -286,7 +324,7 @@ fn make_group_writable(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use iliada_bundle::{BundleLayout, Info, IsolationTier, Permissions};
-    use iliada_catalog::{Archive, FORMAT, SigningKey};
+    use iliada_catalog::{Archive, Archives, FORMAT, SigningKey};
     use iliada_types::AppId;
 
     /// Build a tiny bundle, pack it like the catalog builder does, and sign a catalog for it.
@@ -320,25 +358,28 @@ mod tests {
         let archive_bytes = enc.finish().unwrap();
         let archive = dir.join("hello.app.tar.zst");
         fs::write(&archive, &archive_bytes).unwrap();
-        let entry = AppEntry {
+        let mut entry = AppEntry {
             id: "org.example.hello".into(),
             name: "Hello".into(),
             summary: "Say hello".into(),
             category: "Utilities".into(),
             version: "1.0".into(),
             network: false,
-            archive: Archive {
-                url: archive.display().to_string(),
-                sha256: hex::encode(Sha256::digest(&archive_bytes)),
-                size: archive_bytes.len() as u64,
-            },
+            archive: None,
+            archives: Archives::default(),
             icon: None,
         };
+        let a = Archive {
+            url: archive.display().to_string(),
+            sha256: hex::encode(Sha256::digest(&archive_bytes)),
+            size: archive_bytes.len() as u64,
+            version: None,
+        };
+        *entry.archives.slot(std::env::consts::ARCH).unwrap() = Some(a);
         let sk = SigningKey::from_bytes(&[9u8; 32]);
         let cat = Catalog { format: FORMAT, generated: 0, apps: vec![entry.clone()] };
-        let bytes = serde_json::to_vec(&cat).unwrap();
-        fs::write(dir.join("catalog.json"), &bytes).unwrap();
-        fs::write(dir.join("catalog.json.sig"), iliada_catalog::sign(&sk, &bytes)).unwrap();
+        write_signed(&sk, &dir.join("catalog-2.json"), &cat);
+        write_signed(&sk, &dir.join("catalog.json"), &cat.legacy());
         let apps = dir.join("Applications");
         fs::create_dir_all(&apps).unwrap();
         let cfg = StoreConfig {
@@ -366,7 +407,7 @@ mod tests {
 
         // A swapped archive (same size, different bytes) is refused.
         let mut evil = entry.clone();
-        evil.archive.sha256 = "0".repeat(64);
+        evil.archives.slot(std::env::consts::ARCH).unwrap().as_mut().unwrap().sha256 = "0".repeat(64);
         assert!(store.install(&evil, &|_, _| {}).await.is_err());
         assert!(store.installed().contains_key("org.example.hello"), "a failed update keeps the installed app");
 
@@ -386,5 +427,42 @@ mod tests {
         let report = store.sync().await.unwrap();
         assert_eq!(report.installed, vec!["Hello".to_string()]);
         assert!(store.installed().contains_key("org.example.hello"));
+    }
+
+    fn write_signed(sk: &SigningKey, path: &Path, cat: &Catalog) {
+        let bytes = serde_json::to_vec(cat).unwrap();
+        fs::write(path, &bytes).unwrap();
+        fs::write(format!("{}.sig", path.display()), iliada_catalog::sign(sk, &bytes)).unwrap();
+    }
+
+    #[tokio::test]
+    async fn offers_only_apps_for_this_processor() {
+        let d = tempfile::tempdir().unwrap();
+        let (cfg, entry, _) = fixture(d.path());
+        let sk = SigningKey::from_bytes(&[9u8; 32]);
+        let other = if std::env::consts::ARCH == "x86_64" { "aarch64" } else { "x86_64" };
+        let mut foreign = AppEntry { id: "org.example.foreign".into(), name: "Foreign".into(), ..entry.clone() };
+        foreign.archives = Archives::default();
+        *foreign.archives.slot(other).unwrap() = entry.local_archive().cloned();
+        let cat = Catalog { format: FORMAT, generated: 1, apps: vec![entry.clone(), foreign.clone()] };
+        write_signed(&sk, &d.path().join("catalog-2.json"), &cat);
+        let store = Store::new(cfg).unwrap();
+
+        assert_eq!(store.full_catalog().await.unwrap().apps.len(), 2);
+        let mine = store.catalog().await.unwrap();
+        assert_eq!(mine.apps, vec![entry.clone()], "the other processor's app is hidden");
+        let err = store.install(&foreign, &|_, _| {}).await.unwrap_err();
+        assert!(format!("{err:#}").contains("not available for this computer"), "{err:#}");
+
+        // Without catalog-2.json, catalog.json (format 1) is used.
+        fs::remove_file(d.path().join("catalog-2.json")).unwrap();
+        let legacy = store.catalog().await.unwrap();
+        assert_eq!(legacy.format, iliada_catalog::LEGACY_FORMAT);
+        assert_eq!(legacy.apps.len(), usize::from(std::env::consts::ARCH == "x86_64"));
+
+        // A catalog-2.json that does not verify is an error, not skipped.
+        fs::write(d.path().join("catalog-2.json"), b"{}").unwrap();
+        fs::write(d.path().join("catalog-2.json.sig"), "AAAA").unwrap();
+        assert!(store.catalog().await.is_err());
     }
 }

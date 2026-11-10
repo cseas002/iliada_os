@@ -198,6 +198,18 @@ async fn main() -> Result<()> {
 
     let host = HostIsolationConfig::load(&config)?;
     let bundle = find_bundle(&target)?;
+    if let Some(why) = bundle.wrong_processor() {
+        // Started from the desktop there is no terminal: say it in a window.
+        if wayland_socket().is_some() {
+            let mut cmd = std::process::Command::new("iliada-prompt");
+            cmd.args(["--app", &bundle.info.name, "--notice", &why]);
+            if let Some(icon) = &bundle.info.icon {
+                cmd.arg("--icon").arg(bundle.layout.contents().join(icon));
+            }
+            let _ = cmd.status();
+        }
+        bail!("{why}");
+    }
     // The app's own setting (or the user's "Extra isolation" for it), unless
     // High security mode puts every app in a VM.
     let mut tier = if host.high_security || extra_isolation(bundle.info.id.as_str()) {

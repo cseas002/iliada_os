@@ -76,13 +76,13 @@ fn installed_permissions() -> Vec<AppPermissions> {
         .flatten()
         .flatten()
         .filter_map(|e| iliada_bundle::Bundle::open(e.path()).ok())
-        .filter_map(|b| {
+        .map(|b| {
             let capabilities: Vec<Capability> =
                 b.permissions.requests.iter().map(|r| r.capability).filter(askable).collect();
-            Some(AppPermissions { id: b.info.id.as_str().to_owned(), name: b.info.name.clone(), capabilities })
+            AppPermissions { id: b.info.id.as_str().to_owned(), name: b.info.name.clone(), capabilities }
         })
         .collect();
-    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out.sort_by_key(|a| a.name.to_lowercase());
     out
 }
 
@@ -101,6 +101,8 @@ enum Confirm {
     SignOut,
 }
 
+// Messages are moved around once each; boxing the large one buys nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 enum Message {
     Refresh,
@@ -454,7 +456,7 @@ impl App {
         let mut section = settings::section().title("Services");
         for svc in &s.services {
             let name = svc.name.clone();
-            let toggle = ok.then(|| move |on| Message::Run(Request::SetService { name: name.clone(), on }));
+            let toggle = ok.then_some(move |on| Message::Run(Request::SetService { name: name.clone(), on }));
             section = section.add(settings::item::builder(svc.description.clone()).toggler_maybe(svc.on, toggle));
         }
         settings::view_column(vec![section.into()]).into()
@@ -501,7 +503,7 @@ impl App {
         let a = s.assistant.clone();
         let on = {
             let a = a.clone();
-            ok.then(|| move |enabled| Message::AssistantSet(AssistantSettings { enabled, ..a.clone() }))
+            ok.then_some(move |enabled| Message::AssistantSet(AssistantSettings { enabled, ..a.clone() }))
         };
         let main = settings::section().title("Assistant").add(
             settings::item::builder("Use the assistant")
@@ -539,7 +541,7 @@ impl App {
             }
             let full = {
                 let a = a.clone();
-                ok.then(|| move |full_access| Message::AssistantSet(AssistantSettings { full_access, ..a.clone() }))
+                ok.then_some(move |full_access| Message::AssistantSet(AssistantSettings { full_access, ..a.clone() }))
             };
             modes = modes.add(
                 settings::item::builder("Full access")

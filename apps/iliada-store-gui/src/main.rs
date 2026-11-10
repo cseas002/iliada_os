@@ -43,6 +43,8 @@ enum Status {
     Failed(String),
 }
 
+// Messages are moved around once each; boxing the large one buys nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 enum Message {
     Loaded(Result<Catalog, String>),
@@ -85,7 +87,7 @@ impl App {
             Some(h) => widget::icon::icon(h.clone()).size(56).into(),
             None => widget::icon::from_name("application-x-executable").size(56).icon().into(),
         };
-        let mut meta = format!("{:.0} MB", app.archive.size as f64 / 1e6);
+        let mut meta = format!("{:.0} MB", app.local_archive().map_or(0, |a| a.size) as f64 / 1e6);
         if app.network {
             meta.push_str("  ·  Uses the internet");
         }

@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
                     "{:<20} {:<10} {:>7.1} MB  {:<36} {state}{net}",
                     app.name,
                     app.category,
-                    app.archive.size as f64 / 1e6,
+                    app.local_archive().map_or(0, |a| a.size) as f64 / 1e6,
                     app.summary
                 );
             }

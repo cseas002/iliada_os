@@ -3,7 +3,10 @@
 //!   iliada-prompt --app GIMP --wants "access your Pictures folder" \
 //!                 --purpose "…" [--icon /Applications/GIMP.app/Contents/Resources/gimp.png]
 //!
-//! Exit status: 0 allowed, 1 not allowed, 2 closed without answering.
+//!   iliada-prompt --app Firefox --notice "Firefox is made for …"
+//!
+//! Exit status: 0 allowed, 1 not allowed, 2 closed without answering. With
+//! `--notice` it only tells the user something (one OK button; exit 0).
 //! `iliada-run` runs it before starting an app and remembers the answer.
 
 use std::path::PathBuf;
@@ -19,6 +22,8 @@ struct Ask {
     wants: String,
     purpose: String,
     icon: Option<PathBuf>,
+    /// A message instead of a question.
+    notice: String,
 }
 
 /// Untrusted text (it comes from the app's bundle): no control characters,
@@ -41,10 +46,11 @@ fn parse() -> Option<Ask> {
             "--wants" => a.wants = clean(&v, 120),
             "--purpose" => a.purpose = clean(&v, 300),
             "--icon" => a.icon = Some(PathBuf::from(v)),
+            "--notice" => a.notice = clean(&v, 400),
             _ => return None,
         }
     }
-    (!a.app.is_empty() && !a.wants.is_empty()).then_some(a)
+    (!a.app.is_empty() && (!a.wants.is_empty() || !a.notice.is_empty())).then_some(a)
 }
 
 const WIDTH: f32 = 480.0;
@@ -53,6 +59,9 @@ const WIDTH: f32 = 480.0;
 /// estimated from the text (the content also scrolls, so nothing is cut).
 fn height(a: &Ask) -> f32 {
     let lines = |text: &str, per_line: usize| text.chars().count().div_ceil(per_line).max(1) as f32;
+    if !a.notice.is_empty() {
+        return (200.0 + 22.0 * lines(&a.notice, 50)).clamp(280.0, 560.0);
+    }
     let title = lines(&format!("“{}” would like to {}.", a.app, a.wants), 34);
     let purpose = if a.purpose.is_empty() { 0.0 } else { lines(&a.purpose, 62) };
     (250.0 + 30.0 * title + 20.0 * purpose).clamp(320.0, 640.0)
@@ -60,7 +69,7 @@ fn height(a: &Ask) -> f32 {
 
 fn main() {
     let Some(ask) = parse() else {
-        eprintln!("usage: iliada-prompt --app NAME --wants TEXT [--purpose TEXT] [--icon PATH]");
+        eprintln!("usage: iliada-prompt --app NAME (--wants TEXT [--purpose TEXT] | --notice TEXT) [--icon PATH]");
         std::process::exit(2);
     };
     let settings = Settings::default().size(Size::new(WIDTH, height(&ask))).resizable(None);
@@ -95,7 +104,11 @@ impl cosmic::Application for App {
     fn init(core: Core, ask: Ask) -> (Self, Task<Message>) {
         let mut app = App { core, ask };
         app.core.window.show_headerbar = false;
-        let title = format!("{} wants permission", app.ask.app);
+        let title = if app.ask.notice.is_empty() {
+            format!("{} wants permission", app.ask.app)
+        } else {
+            format!("{} can't open", app.ask.app)
+        };
         let t = match app.core.main_window_id() {
             Some(id) => app.set_window_title(title, id),
             None => Task::none(),
@@ -115,6 +128,17 @@ impl cosmic::Application for App {
             Some(p) if p.is_file() => widget::icon::icon(widget::icon::from_path(p.clone())).size(64).into(),
             _ => widget::icon::from_name("dialog-question").size(64).icon().into(),
         };
+        if !self.ask.notice.is_empty() {
+            let col = widget::column::with_capacity(3)
+                .push(icon)
+                .push(widget::text::body(self.ask.notice.as_str()).width(Length::Fill).align_x(Alignment::Center))
+                .push(widget::button::suggested("OK").on_press(Message::Answer(true)))
+                .spacing(spacing.space_s)
+                .align_x(Alignment::Center);
+            return widget::scrollable(widget::container(col).center_x(Length::Fill).padding(spacing.space_m))
+                .height(Length::Fill)
+                .into();
+        }
         let mut col = widget::column::with_capacity(5)
             .push(icon)
             .push(
@@ -125,9 +149,8 @@ impl cosmic::Application for App {
             .spacing(spacing.space_s)
             .align_x(Alignment::Center);
         if !self.ask.purpose.is_empty() {
-            col = col.push(
-                widget::text::caption(self.ask.purpose.as_str()).width(Length::Fill).align_x(Alignment::Center),
-            );
+            col = col
+                .push(widget::text::caption(self.ask.purpose.as_str()).width(Length::Fill).align_x(Alignment::Center));
         }
         col = col.push(
             widget::text::caption("You can change this later in Iliada Settings → Privacy.")

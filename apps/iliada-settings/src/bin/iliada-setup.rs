@@ -45,6 +45,8 @@ enum Step {
     Done,
 }
 
+// Messages are moved around once each; boxing the large one buys nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 enum Message {
     Status(Result<Status, String>),
@@ -159,10 +161,10 @@ impl cosmic::Application for App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Status(s) => {
-                if let Ok(s) = &s {
-                    if self.name.is_empty() {
-                        self.name = s.hostname.clone();
-                    }
+                if let Ok(s) = &s
+                    && self.name.is_empty()
+                {
+                    self.name = s.hostname.clone();
                 }
                 self.status = s.ok();
             }
