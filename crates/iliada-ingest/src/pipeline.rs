@@ -347,18 +347,28 @@ impl Ingestor {
         }
 
         // 5. Assemble the bundle.
+        let place = |name: &str, src: &Path| -> PathBuf {
+            match private_library(src) {
+                Some(rel) => layout.fhs_root().join(rel),
+                None => layout.libraries().join(name),
+            }
+        };
         for soname in &closure.bundle {
             let src = &deps.available[soname].path;
-            let dst = layout.libraries().join(soname);
-            fs::copy(src, &dst).with_context(|| format!("copying {}", src.display()))?;
-            fs::set_permissions(&dst, fs::Permissions::from_mode(0o755))?;
+            let dst = place(soname, src);
+            if fs::symlink_metadata(&dst).is_err() {
+                fs::create_dir_all(dst.parent().expect("has a parent"))?;
+                fs::copy(src, &dst).with_context(|| format!("copying {}", src.display()))?;
+                fs::set_permissions(&dst, fs::Permissions::from_mode(0o755))?;
+            }
         }
         // The rest of each library package in use: libraries it loads at
         // runtime (dlopen) never show up as DT_NEEDED anywhere.
         for pkg in in_use(&closure) {
             for (name, src) in deps.pkg_libs.get(&pkg).into_iter().flatten() {
-                let dst = layout.libraries().join(name);
+                let dst = place(name, src);
                 if fs::symlink_metadata(&dst).is_err() && !self.runtime.provides_soname(name) {
+                    fs::create_dir_all(dst.parent().expect("has a parent"))?;
                     fs::copy(src, &dst).with_context(|| format!("copying {}", src.display()))?;
                     fs::set_permissions(&dst, fs::Permissions::from_mode(0o755))?;
                 }
@@ -677,6 +687,24 @@ fn is_plugin_path(rel: &Path) -> bool {
 /// Copy each package's `usr/share/doc/<pkg>/copyright` (documentation is
 /// otherwise skipped). A doc directory that is a symlink to another package's
 /// is kept as a symlink.
+/// A dependency's library in a program's own directory (LibreOffice's
+/// `usr/lib/libreoffice/program`), not on the standard loader path: its path
+/// inside the package. Such libraries keep their place in the app's tree,
+/// because programs find them (and their data, like `unorc`) relative to
+/// themselves. `src` is under `<staging>/deps/<package>/`.
+fn private_library(src: &Path) -> Option<PathBuf> {
+    let comps: Vec<_> = src.components().collect();
+    let i = comps.iter().position(|c| c.as_os_str() == "deps")?;
+    let rel: PathBuf = comps.get(i + 2..)?.iter().collect();
+    let dir = rel.parent()?.to_string_lossy().into_owned();
+    // lib, usr/lib, (usr/)lib64, and (usr/)lib/<multiarch triplet>.
+    let standard = match dir.strip_prefix("usr/").unwrap_or(&dir) {
+        "lib" | "lib64" => true,
+        d => d.strip_prefix("lib/").is_some_and(|t| t.contains("-linux-") && !t.contains('/')),
+    };
+    (!standard).then_some(rel)
+}
+
 fn merge_copyright(src: &Path, dst: &Path) -> Result<()> {
     let Ok(rd) = fs::read_dir(src) else { return Ok(()) };
     for e in rd.flatten() {
@@ -856,6 +884,26 @@ fn copy_resources(layout: &BundleLayout, root: &Path, desktop: Option<&DesktopEn
     let name = format!("icon.{ext}");
     fs::copy(root.join(rel), layout.resources().join(&name))?;
     Ok(Some(format!("Resources/{name}")))
+}
+
+#[cfg(test)]
+mod private_library_tests {
+    use super::private_library;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn standard_paths_go_to_libraries_private_ones_stay() {
+        let at = |p: &str| private_library(Path::new(&format!("/tmp/x/deps/pkg/{p}")));
+        assert_eq!(at("usr/lib/x86_64-linux-gnu/libz.so.1"), None);
+        assert_eq!(at("usr/lib/aarch64-linux-gnu/libz.so.1"), None);
+        assert_eq!(at("lib/x86_64-linux-gnu/libc.so.6"), None);
+        assert_eq!(at("usr/lib/libfoo.so.1"), None);
+        assert_eq!(
+            at("usr/lib/libreoffice/program/libuno_sal.so.3"),
+            Some(PathBuf::from("usr/lib/libreoffice/program/libuno_sal.so.3"))
+        );
+        assert_eq!(private_library(Path::new("/elsewhere/libz.so.1")), None);
+    }
 }
 
 #[cfg(test)]
