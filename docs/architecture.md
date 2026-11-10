@@ -101,14 +101,18 @@ this design they are the same mechanism.
 | FS view | bundle `Root` at `/`, runtime base, private data dir | same: virtio-fs shares (host `/nix/store` and the app read-only) mounted at their host paths |
 | Display | the host Wayland socket | waypipe over vsock (guest port 7001), software rendering |
 | Channel out | broker Unix socket bind-mounted | vsock `CID 2:7000` → broker socket |
-| Network, sound | when declared / allowed | not yet |
+| Network | when declared: the host's network namespace | when declared: virtio-net served by passt (user-mode, runs as the user; nothing forwarded in; the host's own local services unreachable) |
+| Sound | when allowed: the sound server's sockets | when allowed: the guest relays the PulseAudio socket over vsock (port 7002); `iliada-run` hands it to the user's sound server |
 | Used for | **every app, by default** (native speed) | opt-in: "Extra isolation" per app (Settings → Privacy), or "High security mode" for all |
 
 A micro-VM boots the host's kernel with a small initrd whose `/init` is
 `iliada-guest-init` (Rust). It mounts the shares listed in `spec.json`,
-starts waypipe, and waypipe starts the app's bubblewrap sandbox; when the
-app exits, the guest powers off. The host side (`iliada-run`) starts one
-unprivileged virtiofsd per share, a waypipe client and cloud-hypervisor.
+brings up the loopback (and the network card, with fixed private
+addresses, for apps that have a network), starts the sound relay if the
+app may play sound, then starts waypipe, and waypipe starts the app's
+bubblewrap sandbox; when the app exits, the guest powers off. The host side
+(`iliada-run`) starts one unprivileged virtiofsd per share, a waypipe
+client, passt for the network, and cloud-hypervisor.
 
 *Why not Firecracker:* no virtio-gpu, no virtio-fs (only block devices), and no
 display path. Desktop apps need all three. cloud-hypervisor is Rust,

@@ -204,7 +204,7 @@ pub fn plan(
         env: vec![
             ("PATH".into(), "/bin".into()),
             ("XDG_RUNTIME_DIR".into(), GUEST_RUNTIME.into()),
-            ("HOME".into(), "/root".into()),
+            ("HOME".into(), "/tmp".into()),
         ],
         network: net.as_ref().map(|_| GuestNetwork::passt()),
         links: if net.is_some() { certs.to_vec() } else { vec![] },
@@ -249,8 +249,9 @@ pub fn plan(
 }
 
 /// virtiofsd arguments for one share. virtiofsd runs as the user, in a
-/// user namespace where that user is root: the guest (which runs as root)
-/// then reads and writes the user's files as the user. `owner` is the
+/// user namespace where that user is root; it translates the guest's
+/// `owner` (the app runs as the user's own uid in the VM) to that root, so
+/// the guest reads and writes the user's files as the user. `owner` is the
 /// user's `(uid, gid)`.
 pub fn virtiofsd_args(socket: &Path, shared_dir: &Path, readonly: bool, owner: (u32, u32)) -> Vec<String> {
     let mut a = vec![
@@ -260,6 +261,8 @@ pub fn virtiofsd_args(socket: &Path, shared_dir: &Path, readonly: bool, owner: (
         "--sandbox=namespace".into(),
         format!("--uid-map=:0:{}:1:", owner.0),
         format!("--gid-map=:0:{}:1:", owner.1),
+        format!("--translate-uid=map:{}:0:1", owner.0),
+        format!("--translate-gid=map:{}:0:1", owner.1),
     ];
     if readonly {
         a.push("--readonly".into());
@@ -321,7 +324,17 @@ impl IsolationBackend for CloudHypervisorBackend {
         }
         tokio::fs::create_dir_all(&spec.data_dir).await?;
         crate::namespace::write_identity(&spec.data_dir)?;
-        let plan = plan(spec, &self.host, &dir, &resolved_desktop(), &cert_links());
+        // The user running the app owns its data directory. Inside the VM
+        // the app runs as that user too, not as root: an app's own sandbox
+        // (Firefox's, Chromium's) can then create its user namespaces,
+        // which the kernel refuses when they would map real root.
+        let owner = {
+            use std::os::unix::fs::MetadataExt;
+            let m = std::fs::metadata(&spec.data_dir)?;
+            (m.uid(), m.gid())
+        };
+        let mut plan = plan(spec, &self.host, &dir, &resolved_desktop(), &cert_links());
+        plan.guest.user = Some(owner);
         tokio::fs::write(dir.join("spec/spec.json"), serde_json::to_vec_pretty(&plan.guest)?).await?;
 
         let spawn = |bin: &Path, args: Vec<String>, what: &str| {
@@ -335,12 +348,6 @@ impl IsolationBackend for CloudHypervisorBackend {
         };
         let mut helpers = Vec::new();
         let spec_share = HostShare { tag: SPEC_TAG.into(), host: dir.join("spec"), readonly: true };
-        // The user running the app owns its data directory.
-        let owner = {
-            use std::os::unix::fs::MetadataExt;
-            let m = std::fs::metadata(&spec.data_dir)?;
-            (m.uid(), m.gid())
-        };
         for s in plan.shares.iter().chain([&spec_share]) {
             let sock = VmPlan::fs_socket(&dir, &s.tag);
             helpers.push(spawn(&self.host.virtiofsd, virtiofsd_args(&sock, &s.host, s.readonly, owner), "virtiofsd")?);
@@ -553,7 +560,9 @@ mod tests {
     fn app_share_is_readonly_data_share_is_not() {
         let a = virtiofsd_args(Path::new("/s"), Path::new("/a"), true, (1000, 100));
         assert!(a.contains(&"--readonly".to_string()));
-        assert!(a.contains(&"--uid-map=:0:1000:1:".to_string()), "guest root is the user");
+        assert!(a.contains(&"--uid-map=:0:1000:1:".to_string()), "virtiofsd's root is the user");
+        assert!(a.contains(&"--translate-uid=map:1000:0:1".to_string()), "the guest's user is the user");
+        assert!(a.contains(&"--translate-gid=map:100:0:1".to_string()));
         assert!(
             !virtiofsd_args(Path::new("/s"), Path::new("/d"), false, (1000, 100)).contains(&"--readonly".to_string())
         );

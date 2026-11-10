@@ -45,6 +45,10 @@ pub struct GuestSpec {
     /// ([`GUEST_PULSE_SOCKET`]) and relays to [`SOUND_VSOCK_PORT`].
     #[serde(default)]
     pub sound: Option<String>,
+    /// `(uid, gid)` to run the program as: the user's own (shares carry
+    /// the user's files under it). Root when unset.
+    #[serde(default)]
+    pub user: Option<(u32, u32)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +90,7 @@ mod tests {
             network: Some(GuestNetwork::passt()),
             links: vec![("/etc/ssl/certs/ca-certificates.crt".into(), "/nix/store/x-ca/ca.crt".into())],
             sound: Some(GUEST_PULSE_SOCKET.into()),
+            user: Some((1000, 100)),
         };
         let j = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<GuestSpec>(&j).unwrap(), s);

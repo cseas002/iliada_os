@@ -114,13 +114,21 @@ mod linux {
             use std::os::unix::fs::PermissionsExt;
             std::fs::create_dir_all(dir)?;
             std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+            if let Some((uid, gid)) = spec.user {
+                std::os::unix::fs::chown(dir, Some(uid), Some(gid))?;
+            }
         }
 
         if let Some(socket) = &spec.sound {
-            sound_relay(socket)?;
+            sound_relay(socket, spec.user)?;
         }
 
-        let status = Command::new(&spec.program)
+        let mut program = Command::new(&spec.program);
+        if let Some((uid, gid)) = spec.user {
+            use std::os::unix::process::CommandExt;
+            program.uid(uid).gid(gid);
+        }
+        let status = program
             .args(&spec.args)
             .env_clear()
             .envs(spec.env.iter().map(|(k, v)| (k, v)))
@@ -180,12 +188,15 @@ mod linux {
     /// Listen where the sandbox expects the sound server and carry each
     /// connection to the host over vsock, where `iliada-run` hands it to
     /// the user's sound server.
-    fn sound_relay(socket: &str) -> Result<()> {
+    fn sound_relay(socket: &str, user: Option<(u32, u32)>) -> Result<()> {
         use std::os::unix::net::UnixListener;
         if let Some(dir) = Path::new(socket).parent() {
             std::fs::create_dir_all(dir)?;
         }
         let listener = UnixListener::bind(socket).with_context(|| format!("listening on {socket}"))?;
+        if let Some((uid, gid)) = user {
+            std::os::unix::fs::chown(socket, Some(uid), Some(gid))?;
+        }
         std::thread::spawn(move || {
             for app in listener.incoming().flatten() {
                 std::thread::spawn(move || {
