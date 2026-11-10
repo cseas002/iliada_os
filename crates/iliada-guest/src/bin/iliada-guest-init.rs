@@ -1,7 +1,8 @@
 //! `iliada-guest-init`: PID 1 of an app's micro-VM.
 //!
 //! Mounts the basics, loads the virtio drivers, reads `spec.json` from the
-//! `spec` share, brings up the network if the spec has one, mounts the
+//! `spec` share, brings up the network and the sound relay if the spec
+//! has them, mounts the
 //! shares it lists (at their host paths) and runs the program it names:
 //! waypipe, carrying the app's window to the host, around the same
 //! bubblewrap sandbox as Tier 1. When the program exits, the VM powers off.
@@ -31,7 +32,7 @@ mod linux {
     use std::process::Command;
 
     use anyhow::{Context, Result};
-    use iliada_ipc::guest::{GuestNetwork, GuestSpec, SPEC_DIR, SPEC_TAG};
+    use iliada_ipc::guest::{GuestNetwork, GuestSpec, SOUND_VSOCK_PORT, SPEC_DIR, SPEC_TAG};
     use rustix::mount::{MountFlags, UnmountFlags, mount, mount_move, unmount};
     use rustix::process::{chdir, chroot};
 
@@ -115,6 +116,10 @@ mod linux {
             std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
         }
 
+        if let Some(socket) = &spec.sound {
+            sound_relay(socket)?;
+        }
+
         let status = Command::new(&spec.program)
             .args(&spec.args)
             .env_clear()
@@ -169,6 +174,38 @@ mod linux {
             }
             std::os::unix::fs::symlink(target, path).with_context(|| format!("linking {path}"))?;
         }
+        Ok(())
+    }
+
+    /// Listen where the sandbox expects the sound server and carry each
+    /// connection to the host over vsock, where `iliada-run` hands it to
+    /// the user's sound server.
+    fn sound_relay(socket: &str) -> Result<()> {
+        use std::os::unix::net::UnixListener;
+        if let Some(dir) = Path::new(socket).parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let listener = UnixListener::bind(socket).with_context(|| format!("listening on {socket}"))?;
+        std::thread::spawn(move || {
+            for app in listener.incoming().flatten() {
+                std::thread::spawn(move || {
+                    let host = match vsock::VsockStream::connect_with_cid_port(vsock::VMADDR_CID_HOST, SOUND_VSOCK_PORT)
+                    {
+                        Ok(h) => h,
+                        Err(e) => return eprintln!("iliada-guest-init: sound: {e}"),
+                    };
+                    let (Ok(mut app_r), Ok(mut host_w)) = (app.try_clone(), host.try_clone()) else { return };
+                    let up = std::thread::spawn(move || {
+                        let _ = std::io::copy(&mut app_r, &mut host_w);
+                        let _ = host_w.shutdown(std::net::Shutdown::Write);
+                    });
+                    let (mut app_w, mut host_r) = (app, host);
+                    let _ = std::io::copy(&mut host_r, &mut app_w);
+                    let _ = app_w.shutdown(std::net::Shutdown::Write);
+                    let _ = up.join();
+                });
+            }
+        });
         Ok(())
     }
 

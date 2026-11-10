@@ -20,7 +20,10 @@
 //!   services are not reachable from the VM)
 //! * virtio-rng, the serial console logged to a file
 //!
-//! No sound and no GPU yet: apps render in software (llvmpipe).
+//! Sound, for apps allowed it, goes over vsock too: the guest's init
+//! listens where the sandbox expects the PulseAudio socket and relays each
+//! connection to guest port 7002; on the host, `iliada-run` relays those to
+//! the user's sound server. No GPU yet: apps render in software (llvmpipe).
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -29,7 +32,8 @@ use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use iliada_bundle::IsolationTier;
 use iliada_ipc::guest::{
-    DISPLAY_VSOCK_PORT, GUEST_ADDRESS, GUEST_DNS, GUEST_GATEWAY, GuestNetwork, GuestSpec, SPEC_TAG, Share,
+    DISPLAY_VSOCK_PORT, GUEST_ADDRESS, GUEST_DNS, GUEST_GATEWAY, GUEST_PULSE_SOCKET, GuestNetwork, GuestSpec,
+    SOUND_VSOCK_PORT, SPEC_TAG, Share,
 };
 use iliada_types::AppId;
 use tokio::process::{Child, Command};
@@ -66,6 +70,8 @@ pub struct VmPlan {
     pub console_log: PathBuf,
     /// The passt (vhost-user) socket, when the VM has a network.
     pub net: Option<PathBuf>,
+    /// The user's sound server (PulseAudio socket), when the app may use it.
+    pub sound: Option<PathBuf>,
 }
 
 impl VmPlan {
@@ -77,6 +83,11 @@ impl VmPlan {
     /// Where guest connections to the display port arrive on the host.
     pub fn display_socket(&self) -> PathBuf {
         PathBuf::from(format!("{}_{DISPLAY_VSOCK_PORT}", self.vsock.display()))
+    }
+
+    /// Where guest connections to the sound port arrive on the host.
+    pub fn sound_socket(&self) -> PathBuf {
+        PathBuf::from(format!("{}_{SOUND_VSOCK_PORT}", self.vsock.display()))
     }
 }
 
@@ -162,7 +173,10 @@ pub fn plan(
         inner.network = NetworkPolicy::None;
     }
     inner.grants.camera = false;
-    inner.grants.sound = None;
+    // Sound: the guest's relay socket stands in for the host's.
+    let sound = spec.grants.sound.as_ref().and_then(|s| s.pulse.clone());
+    inner.grants.sound =
+        sound.as_ref().map(|_| crate::SoundSockets { pipewire: None, pulse: Some(GUEST_PULSE_SOCKET.into()) });
     inner.files.clear();
     inner.display = Some(Path::new(GUEST_RUNTIME).join(GUEST_DISPLAY));
     inner.env.extend([
@@ -194,6 +208,7 @@ pub fn plan(
         ],
         network: net.as_ref().map(|_| GuestNetwork::passt()),
         links: if net.is_some() { certs.to_vec() } else { vec![] },
+        sound: sound.as_ref().map(|_| GUEST_PULSE_SOCKET.to_owned()),
     };
 
     let vsock = dir.join("vsock.sock");
@@ -230,7 +245,7 @@ pub fn plan(
         vmm_args.push("--net".into());
         vmm_args.push(format!("vhost_user=true,socket={},vhost_mode=client", p(sock)));
     }
-    VmPlan { shares, guest, vmm_args, vsock, console_log, net }
+    VmPlan { shares, guest, vmm_args, vsock, console_log, net, sound }
 }
 
 /// virtiofsd arguments for one share. virtiofsd runs as the user, in a
@@ -353,6 +368,9 @@ impl IsolationBackend for CloudHypervisorBackend {
         if let Some(sock) = &plan.net {
             wait_for_socket(sock).await?;
         }
+        if let Some(server) = &plan.sound {
+            relay_sound(plan.sound_socket(), server.clone())?;
+        }
         wait_for_socket(&plan.display_socket()).await?;
         let vmm = spawn(&self.host.cloud_hypervisor, plan.vmm_args.clone(), "cloud-hypervisor")?;
         tracing::info!(app = %spec.app_id, cid = guest_cid(&spec.app_id), "micro-VM started");
@@ -386,6 +404,28 @@ impl SandboxHandle for VmHandle {
         }
         Ok(status.code())
     }
+}
+
+/// Relay the guest's sound connections to the user's sound server, for as
+/// long as `iliada-run` runs. Plain bytes: PipeWire's PulseAudio server
+/// never uses shared memory, so nothing but the socket stream is needed.
+fn relay_sound(listen: PathBuf, server: PathBuf) -> Result<()> {
+    let listener =
+        tokio::net::UnixListener::bind(&listen).with_context(|| format!("listening on {}", listen.display()))?;
+    tokio::spawn(async move {
+        while let Ok((mut guest, _)) = listener.accept().await {
+            let server = server.clone();
+            tokio::spawn(async move {
+                match tokio::net::UnixStream::connect(&server).await {
+                    Ok(mut host) => {
+                        let _ = tokio::io::copy_bidirectional(&mut guest, &mut host).await;
+                    }
+                    Err(e) => tracing::warn!("sound server {}: {e}", server.display()),
+                }
+            });
+        }
+    });
+    Ok(())
 }
 
 async fn wait_for_socket(p: &Path) -> Result<()> {
@@ -438,6 +478,7 @@ mod tests {
         assert!(p.vmm_args.iter().any(|a| a.starts_with("tag=spec,socket=")));
         assert!(!p.vmm_args.iter().any(|a| a == "--net"), "no network unless declared");
         assert_eq!(p.guest.network, None);
+        assert_eq!((p.sound.as_ref(), p.guest.sound.as_ref()), (None, None), "no sound unless allowed");
         assert_eq!(p.display_socket(), Path::new("/run/user/1000/iliada-vm/org.debian.jq/vsock.sock_7001"));
 
         // waypipe server -- bwrap <Tier-1 args>, without network or host sockets.
@@ -472,6 +513,23 @@ mod tests {
         let p = plan(&spec(), &offline, Path::new("/d"), &HostDesktop::default(), &certs);
         assert!(p.net.is_none() && p.guest.network.is_none() && p.guest.links.is_empty());
         assert!(!p.guest.args.contains(&"--share-net".to_owned()));
+    }
+
+    #[test]
+    fn sound_goes_through_the_guests_relay_socket() {
+        let mut s = spec();
+        s.grants.sound = Some(crate::SoundSockets {
+            pipewire: Some("/run/user/1000/pipewire-0".into()),
+            pulse: Some("/run/user/1000/pulse/native".into()),
+        });
+        let p = plan(&s, &HostIsolationConfig::example(), Path::new("/d"), &HostDesktop::default(), &[]);
+        assert_eq!(p.sound.as_deref(), Some(Path::new("/run/user/1000/pulse/native")));
+        assert_eq!(p.sound_socket(), Path::new("/d/vsock.sock_7002"));
+        assert_eq!(p.guest.sound.as_deref(), Some(GUEST_PULSE_SOCKET));
+        // Inside the guest the sandbox binds the relay, not a host socket.
+        let a = &p.guest.args;
+        assert!(a.windows(3).any(|w| w[0] == "--ro-bind" && w[1] == GUEST_PULSE_SOCKET));
+        assert!(!a.iter().any(|x| x.contains("/run/user/1000/p")), "no host sound sockets in the guest");
     }
 
     #[test]

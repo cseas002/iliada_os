@@ -12,6 +12,11 @@ pub const SPEC_TAG: &str = "spec";
 pub const SPEC_DIR: &str = "/run/iliada/spec";
 /// Guest port the display (waypipe) connects to on the host.
 pub const DISPLAY_VSOCK_PORT: u32 = 7001;
+/// Guest port the sound relay connects to: the host relays each connection
+/// to the user's sound server (PulseAudio protocol, served by PipeWire).
+pub const SOUND_VSOCK_PORT: u32 = 7002;
+/// Where the guest's relay listens, for the sandbox to bind.
+pub const GUEST_PULSE_SOCKET: &str = "/run/iliada/pulse/native";
 
 /// The guest's network, when the app may use one (passt on the host: the
 /// addresses are private to the VM, and passt carries its connections out
@@ -36,6 +41,10 @@ pub struct GuestSpec {
     /// CA certificates in the store, for `/etc/ssl`.
     #[serde(default)]
     pub links: Vec<(String, String)>,
+    /// Set when the app may play sound: the guest listens here
+    /// ([`GUEST_PULSE_SOCKET`]) and relays to [`SOUND_VSOCK_PORT`].
+    #[serde(default)]
+    pub sound: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +85,7 @@ mod tests {
             env: vec![("A".into(), "b".into())],
             network: Some(GuestNetwork::passt()),
             links: vec![("/etc/ssl/certs/ca-certificates.crt".into(), "/nix/store/x-ca/ca.crt".into())],
+            sound: Some(GUEST_PULSE_SOCKET.into()),
         };
         let j = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<GuestSpec>(&j).unwrap(), s);
@@ -92,5 +102,6 @@ mod compat {
         let s: GuestSpec = serde_json::from_str(j).unwrap();
         assert_eq!(s.network, None);
         assert!(s.links.is_empty());
+        assert_eq!(s.sound, None);
     }
 }
