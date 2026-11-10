@@ -1,10 +1,10 @@
 //! `iliada-guest-init`: PID 1 of an app's micro-VM.
 //!
-//! Mounts the basics, loads the virtio-fs and vsock drivers, reads
-//! `spec.json` from the `spec` share, mounts the shares it lists (at their
-//! host paths) and runs the program it names: waypipe, carrying the app's
-//! window to the host, around the same bubblewrap sandbox as Tier 1. When
-//! the program exits, the VM powers off.
+//! Mounts the basics, loads the virtio drivers, reads `spec.json` from the
+//! `spec` share, brings up the network if the spec has one, mounts the
+//! shares it lists (at their host paths) and runs the program it names:
+//! waypipe, carrying the app's window to the host, around the same
+//! bubblewrap sandbox as Tier 1. When the program exits, the VM powers off.
 
 #[cfg(target_os = "linux")]
 fn main() {
@@ -31,8 +31,8 @@ mod linux {
     use std::process::Command;
 
     use anyhow::{Context, Result};
-    use iliada_ipc::guest::{GuestSpec, SPEC_DIR, SPEC_TAG};
-    use rustix::mount::{MountFlags, mount, mount_move};
+    use iliada_ipc::guest::{GuestNetwork, GuestSpec, SPEC_DIR, SPEC_TAG};
+    use rustix::mount::{MountFlags, UnmountFlags, mount, mount_move, unmount};
     use rustix::process::{chdir, chroot};
 
     fn mount_fs(source: &str, target: &str, fs: &str, flags: MountFlags) -> Result<()> {
@@ -60,11 +60,22 @@ mod linux {
 
         // Drivers for the shares and the host channel (modules in the initrd).
         let status = Command::new("/bin/modprobe")
-            .args(["-a", "virtio_pci", "virtiofs", "vmw_vsock_virtio_transport", "virtio_rng"])
+            .args(["-a", "virtio_pci", "virtiofs", "vmw_vsock_virtio_transport", "virtio_rng", "virtio_net"])
             .status()
             .context("running modprobe")?;
         if !status.success() {
             eprintln!("iliada-guest-init: some drivers did not load");
+        }
+
+        // What to run. Read now, while `ip` (in the initramfs) is at hand.
+        mount_fs(SPEC_TAG, SPEC_DIR, "virtiofs", MountFlags::RDONLY | nosuid)?;
+        let spec: GuestSpec =
+            serde_json::from_slice(&std::fs::read(Path::new(SPEC_DIR).join("spec.json")).context("reading spec.json")?)
+                .context("parsing spec.json")?;
+        unmount(SPEC_DIR, UnmountFlags::empty()).context("unmounting the spec")?;
+        ip(&["link", "set", "lo", "up"])?;
+        if let Some(net) = &spec.network {
+            network(net)?;
         }
 
         // Leave the initramfs for a tmpfs root, as switch_root does: the
@@ -89,10 +100,7 @@ mod linux {
             mount("tmpfs", "/dev/shm", "tmpfs", nosuid, None).map_err(std::io::Error::from)
         });
 
-        mount_fs(SPEC_TAG, SPEC_DIR, "virtiofs", MountFlags::RDONLY | nosuid)?;
-        let spec: GuestSpec =
-            serde_json::from_slice(&std::fs::read(Path::new(SPEC_DIR).join("spec.json")).context("reading spec.json")?)
-                .context("parsing spec.json")?;
+        etc(&spec)?;
         for share in &spec.shares {
             let mut flags = MountFlags::NODEV;
             if share.readonly {
@@ -114,6 +122,54 @@ mod linux {
             .status()
             .with_context(|| format!("starting {}", spec.program))?;
         Ok(status.code().unwrap_or(1))
+    }
+
+    fn ip(args: &[&str]) -> Result<()> {
+        let status = Command::new("/bin/ip").args(args).status().context("running ip")?;
+        anyhow::ensure!(status.success(), "ip {} failed", args.join(" "));
+        Ok(())
+    }
+
+    /// The first network card (virtio-net), once its driver has bound.
+    fn card() -> Result<String> {
+        for _ in 0..50 {
+            if let Ok(dir) = std::fs::read_dir("/sys/class/net") {
+                let mut names: Vec<String> =
+                    dir.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n != "lo").collect();
+                names.sort();
+                if let Some(n) = names.into_iter().next() {
+                    return Ok(n);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        anyhow::bail!("the VM's network card did not appear")
+    }
+
+    /// Static addresses (passt answers for the gateway and DNS); IPv6, if
+    /// the host has it, configures itself from passt's router adverts.
+    fn network(net: &GuestNetwork) -> Result<()> {
+        let card = card()?;
+        ip(&["link", "set", &card, "up"])?;
+        ip(&["addr", "add", &net.address, "dev", &card])?;
+        ip(&["route", "add", "default", "via", &net.gateway, "dev", &card])?;
+        Ok(())
+    }
+
+    /// `/etc` in the guest's root: what the sandbox binds from it.
+    fn etc(spec: &GuestSpec) -> Result<()> {
+        std::fs::create_dir_all("/etc")?;
+        std::fs::write("/etc/hosts", "127.0.0.1 localhost iliada-app\n::1 localhost iliada-app\n")?;
+        if let Some(net) = &spec.network {
+            std::fs::write("/etc/resolv.conf", format!("nameserver {}\n", net.dns))?;
+        }
+        for (path, target) in &spec.links {
+            if let Some(parent) = Path::new(path).parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::os::unix::fs::symlink(target, path).with_context(|| format!("linking {path}"))?;
+        }
+        Ok(())
     }
 
     pub fn power_off() -> ! {

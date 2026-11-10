@@ -108,7 +108,7 @@ in
 
   config = {
     users.groups.iliada-sandbox = { };
-    environment.systemPackages = with pkgs; [ cloud-hypervisor virtiofsd bubblewrap waypipe ];
+    environment.systemPackages = with pkgs; [ cloud-hypervisor virtiofsd bubblewrap waypipe passt ];
     systemd.tmpfiles.rules = [
       "d ${cfg.socketDir} 0770 root iliada-sandbox -"
       "d ${cfg.dataRoot} 0750 root iliada-sandbox -"
@@ -120,6 +120,7 @@ in
       virtiofsd = lib.getExe pkgs.virtiofsd;
       bwrap = lib.getExe pkgs.bubblewrap;
       waypipe = lib.getExe pkgs.waypipe;
+      passt = "${pkgs.passt}/bin/passt";
       runtimeDir = "${cfg.runtime}";
       socketDir = cfg.socketDir;
       dataRoot = cfg.dataRoot;

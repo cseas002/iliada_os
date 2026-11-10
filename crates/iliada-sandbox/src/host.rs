@@ -19,6 +19,10 @@ pub struct HostIsolationConfig {
     /// Carries a micro-VM app's window to the host's Wayland compositor.
     #[serde(default = "default_waypipe")]
     pub waypipe: PathBuf,
+    /// The user-mode network for micro-VMs (passt); without it, VMs have
+    /// no network.
+    #[serde(default)]
+    pub passt: Option<PathBuf>,
     /// Read-only runtime base (glibc, Mesa, …) mapped into every sandbox.
     pub runtime_dir: PathBuf,
     /// Per-app sockets (VMM API, vsock, broker).
@@ -53,6 +57,7 @@ impl HostIsolationConfig {
             virtiofsd: "/run/current-system/sw/bin/virtiofsd".into(),
             bwrap: "/run/current-system/sw/bin/bwrap".into(),
             waypipe: default_waypipe(),
+            passt: Some("/run/current-system/sw/bin/passt".into()),
             runtime_dir: "/run/current-system/iliada/runtime/iliada-base-1".into(),
             socket_dir: "/run/iliada/sandbox".into(),
             data_root: "/var/lib/iliada/apps".into(),

@@ -14,9 +14,13 @@
 //! * virtio-fs `spec`  — what to run (`spec.json`), read-only
 //! * virtio-vsock      — the only channel to the host: the app's window
 //!   (waypipe, guest port 7001) and the broker (port 7000)
+//! * virtio-net       — only for apps that declare a network: served by
+//!   passt, which runs as the user and carries the VM's connections out as
+//!   the user's own sockets (no root, no bridge; the host's own local
+//!   services are not reachable from the VM)
 //! * virtio-rng, the serial console logged to a file
 //!
-//! No network, no sound, no GPU yet: apps render in software (llvmpipe).
+//! No sound and no GPU yet: apps render in software (llvmpipe).
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -24,7 +28,9 @@ use std::process::Stdio;
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use iliada_bundle::IsolationTier;
-use iliada_ipc::guest::{DISPLAY_VSOCK_PORT, GuestSpec, SPEC_TAG, Share};
+use iliada_ipc::guest::{
+    DISPLAY_VSOCK_PORT, GUEST_ADDRESS, GUEST_DNS, GUEST_GATEWAY, GuestNetwork, GuestSpec, SPEC_TAG, Share,
+};
 use iliada_types::AppId;
 use tokio::process::{Child, Command};
 
@@ -58,6 +64,8 @@ pub struct VmPlan {
     /// The vsock Unix socket (cloud-hypervisor's "hybrid vsock").
     pub vsock: PathBuf,
     pub console_log: PathBuf,
+    /// The passt (vhost-user) socket, when the VM has a network.
+    pub net: Option<PathBuf>,
 }
 
 impl VmPlan {
@@ -80,8 +88,62 @@ fn resolved_desktop() -> HostDesktop {
     HostDesktop { fonts: r(d.fonts), icons: r(d.icons), mime: r(d.mime), opengl_driver: r(d.opengl_driver) }
 }
 
-/// Plan a VM for `spec`. `dir`: a private directory for its sockets and spec.
-pub fn plan(spec: &SandboxSpec, host: &HostIsolationConfig, dir: &Path, desktop: &HostDesktop) -> VmPlan {
+/// The host's CA certificates as `(guest path, store path)` symlinks, so
+/// apps in a VM can check TLS certificates like apps outside one.
+pub fn cert_links() -> Vec<(String, String)> {
+    let mut links = Vec::new();
+    let Ok(dir) = std::fs::read_dir("/etc/ssl/certs") else { return links };
+    for e in dir.flatten() {
+        if let Ok(target) = std::fs::canonicalize(e.path())
+            && target.starts_with("/nix/store")
+        {
+            links.push((e.path().display().to_string(), target.display().to_string()));
+        }
+    }
+    links.sort();
+    links
+}
+
+/// passt arguments: a vhost-user network for one VM. The guest gets fixed
+/// private addresses; nothing is forwarded into it, and the gateway is not
+/// mapped to the host's loopback, so the VM can reach the internet and the
+/// local network, but not services listening only on this computer.
+pub fn passt_args(socket: &Path) -> Vec<String> {
+    let (addr, prefix) = GUEST_ADDRESS.split_once('/').expect("address/prefix");
+    [
+        "--vhost-user",
+        "--socket",
+        &socket.display().to_string(),
+        "--foreground",
+        "--quiet",
+        "--one-off",
+        "--address",
+        addr,
+        "--netmask",
+        prefix,
+        "--gateway",
+        GUEST_GATEWAY,
+        "--dns-forward",
+        GUEST_DNS,
+        "--no-map-gw",
+        "--tcp-ports",
+        "none",
+        "--udp-ports",
+        "none",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// Plan a VM for `spec`. `dir`: a private directory for its sockets and
+/// spec; `certs`: [`cert_links`].
+pub fn plan(
+    spec: &SandboxSpec,
+    host: &HostIsolationConfig,
+    dir: &Path,
+    desktop: &HostDesktop,
+    certs: &[(String, String)],
+) -> VmPlan {
     let p = |x: &Path| x.display().to_string();
     let mut shares = vec![
         HostShare { tag: "store".into(), host: "/nix/store".into(), readonly: true },
@@ -92,9 +154,13 @@ pub fn plan(spec: &SandboxSpec, host: &HostIsolationConfig, dir: &Path, desktop:
         shares.push(HostShare { tag: format!("f{i}"), host: folder.clone(), readonly: false });
     }
 
+    let net = (spec.network == NetworkPolicy::Nat && host.passt.is_some()).then(|| dir.join("net.sock"));
+
     // The sandbox inside the guest: Tier 1's, minus what the VM doesn't have.
     let mut inner = spec.clone();
-    inner.network = NetworkPolicy::None;
+    if net.is_none() {
+        inner.network = NetworkPolicy::None;
+    }
     inner.grants.camera = false;
     inner.grants.sound = None;
     inner.files.clear();
@@ -126,6 +192,8 @@ pub fn plan(spec: &SandboxSpec, host: &HostIsolationConfig, dir: &Path, desktop:
             ("XDG_RUNTIME_DIR".into(), GUEST_RUNTIME.into()),
             ("HOME".into(), "/root".into()),
         ],
+        network: net.as_ref().map(|_| GuestNetwork::passt()),
+        links: if net.is_some() { certs.to_vec() } else { vec![] },
     };
 
     let vsock = dir.join("vsock.sock");
@@ -158,7 +226,11 @@ pub fn plan(spec: &SandboxSpec, host: &HostIsolationConfig, dir: &Path, desktop:
         "off".into(),
     ];
     vmm_args.extend(fs);
-    VmPlan { shares, guest, vmm_args, vsock, console_log }
+    if let Some(sock) = &net {
+        vmm_args.push("--net".into());
+        vmm_args.push(format!("vhost_user=true,socket={},vhost_mode=client", p(sock)));
+    }
+    VmPlan { shares, guest, vmm_args, vsock, console_log, net }
 }
 
 /// virtiofsd arguments for one share. virtiofsd runs as the user, in a
@@ -234,7 +306,7 @@ impl IsolationBackend for CloudHypervisorBackend {
         }
         tokio::fs::create_dir_all(&spec.data_dir).await?;
         crate::namespace::write_identity(&spec.data_dir)?;
-        let plan = plan(spec, &self.host, &dir, &resolved_desktop());
+        let plan = plan(spec, &self.host, &dir, &resolved_desktop(), &cert_links());
         tokio::fs::write(dir.join("spec/spec.json"), serde_json::to_vec_pretty(&plan.guest)?).await?;
 
         let spawn = |bin: &Path, args: Vec<String>, what: &str| {
@@ -272,8 +344,14 @@ impl IsolationBackend for CloudHypervisorBackend {
             ],
             "waypipe",
         )?);
+        if let (Some(sock), Some(passt)) = (&plan.net, &self.host.passt) {
+            helpers.push(spawn(passt, passt_args(sock), "passt (the app's network)")?);
+        }
         for s in plan.shares.iter().chain([&spec_share]) {
             wait_for_socket(&VmPlan::fs_socket(&dir, &s.tag)).await?;
+        }
+        if let Some(sock) = &plan.net {
+            wait_for_socket(sock).await?;
         }
         wait_for_socket(&plan.display_socket()).await?;
         let vmm = spawn(&self.host.cloud_hypervisor, plan.vmm_args.clone(), "cloud-hypervisor")?;
@@ -350,14 +428,16 @@ mod tests {
         let mut s = spec();
         s.grants.folders.push(("/home/alex/Pictures".into(), "Pictures".into()));
         let host = HostIsolationConfig::example();
-        let p = plan(&s, &host, Path::new("/run/user/1000/iliada-vm/org.debian.jq"), &HostDesktop::default());
+        s.network = NetworkPolicy::None;
+        let p = plan(&s, &host, Path::new("/run/user/1000/iliada-vm/org.debian.jq"), &HostDesktop::default(), &[]);
 
         let tags: Vec<_> = p.shares.iter().map(|s| (s.tag.as_str(), s.readonly)).collect();
         assert_eq!(tags, [("store", true), ("app", true), ("data", false), ("f0", false)]);
         assert_eq!(p.guest.shares[1].path, "/Applications/jq.app", "mounted at the host path");
         assert_eq!(value_after(&p.vmm_args, "--memory"), Some("size=512M,shared=on"));
         assert!(p.vmm_args.iter().any(|a| a.starts_with("tag=spec,socket=")));
-        assert!(!p.vmm_args.iter().any(|a| a == "--net"), "no network in micro-VMs yet");
+        assert!(!p.vmm_args.iter().any(|a| a == "--net"), "no network unless declared");
+        assert_eq!(p.guest.network, None);
         assert_eq!(p.display_socket(), Path::new("/run/user/1000/iliada-vm/org.debian.jq/vsock.sock_7001"));
 
         // waypipe server -- bwrap <Tier-1 args>, without network or host sockets.
@@ -369,6 +449,39 @@ mod tests {
         assert!(a.windows(3).any(|w| w[0] == "--ro-bind" && w[1] == "/run/user/0/wayland-iliada"));
         assert!(a.windows(3).any(|w| w[0] == "--bind" && w[1] == "/home/alex/Pictures"));
         assert!(a.contains(&"LIBGL_ALWAYS_SOFTWARE".to_owned()));
+    }
+
+    #[test]
+    fn an_app_with_a_network_gets_passt_and_the_sandbox_shares_it() {
+        let host = HostIsolationConfig::example();
+        let certs = [("/etc/ssl/certs/ca-certificates.crt".to_owned(), "/nix/store/x-nss-cacert/ca.crt".to_owned())];
+        let p =
+            plan(&spec(), &host, Path::new("/run/user/1000/iliada-vm/org.debian.jq"), &HostDesktop::default(), &certs);
+        assert_eq!(p.net.as_deref(), Some(Path::new("/run/user/1000/iliada-vm/org.debian.jq/net.sock")));
+        assert_eq!(
+            value_after(&p.vmm_args, "--net"),
+            Some("vhost_user=true,socket=/run/user/1000/iliada-vm/org.debian.jq/net.sock,vhost_mode=client")
+        );
+        assert_eq!(p.guest.network, Some(GuestNetwork::passt()));
+        assert_eq!(p.guest.links, certs);
+        assert!(p.guest.args.contains(&"--share-net".to_owned()), "the inner sandbox uses the VM's network");
+
+        // Without passt on the host, the VM stays offline.
+        let mut offline = host.clone();
+        offline.passt = None;
+        let p = plan(&spec(), &offline, Path::new("/d"), &HostDesktop::default(), &certs);
+        assert!(p.net.is_none() && p.guest.network.is_none() && p.guest.links.is_empty());
+        assert!(!p.guest.args.contains(&"--share-net".to_owned()));
+    }
+
+    #[test]
+    fn passt_forwards_nothing_in_and_hides_the_hosts_loopback() {
+        let a = passt_args(Path::new("/d/net.sock"));
+        assert_eq!(value_after(&a, "--socket"), Some("/d/net.sock"));
+        assert_eq!(value_after(&a, "--tcp-ports"), Some("none"));
+        assert_eq!(value_after(&a, "--udp-ports"), Some("none"));
+        assert!(a.contains(&"--no-map-gw".to_owned()));
+        assert!(a.contains(&"--vhost-user".to_owned()) && a.contains(&"--foreground".to_owned()));
     }
 
     #[test]
