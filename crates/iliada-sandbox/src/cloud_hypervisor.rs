@@ -161,13 +161,18 @@ pub fn plan(spec: &SandboxSpec, host: &HostIsolationConfig, dir: &Path, desktop:
     VmPlan { shares, guest, vmm_args, vsock, console_log }
 }
 
-/// virtiofsd arguments for one share (unprivileged: in a user namespace).
-pub fn virtiofsd_args(socket: &Path, shared_dir: &Path, readonly: bool) -> Vec<String> {
+/// virtiofsd arguments for one share. virtiofsd runs as the user, in a
+/// user namespace where that user is root: the guest (which runs as root)
+/// then reads and writes the user's files as the user. `owner` is the
+/// user's `(uid, gid)`.
+pub fn virtiofsd_args(socket: &Path, shared_dir: &Path, readonly: bool, owner: (u32, u32)) -> Vec<String> {
     let mut a = vec![
         format!("--socket-path={}", socket.display()),
         format!("--shared-dir={}", shared_dir.display()),
         format!("--cache={}", if readonly { "auto" } else { "never" }),
         "--sandbox=namespace".into(),
+        format!("--uid-map=:0:{}:1:", owner.0),
+        format!("--gid-map=:0:{}:1:", owner.1),
     ];
     if readonly {
         a.push("--readonly".into());
@@ -242,9 +247,15 @@ impl IsolationBackend for CloudHypervisorBackend {
         };
         let mut helpers = Vec::new();
         let spec_share = HostShare { tag: SPEC_TAG.into(), host: dir.join("spec"), readonly: true };
+        // The user running the app owns its data directory.
+        let owner = {
+            use std::os::unix::fs::MetadataExt;
+            let m = std::fs::metadata(&spec.data_dir)?;
+            (m.uid(), m.gid())
+        };
         for s in plan.shares.iter().chain([&spec_share]) {
             let sock = VmPlan::fs_socket(&dir, &s.tag);
-            helpers.push(spawn(&self.host.virtiofsd, virtiofsd_args(&sock, &s.host, s.readonly), "virtiofsd")?);
+            helpers.push(spawn(&self.host.virtiofsd, virtiofsd_args(&sock, &s.host, s.readonly, owner), "virtiofsd")?);
         }
         // The app's window: the guest's waypipe dials host port 7001, which
         // cloud-hypervisor delivers to this Unix socket.
@@ -368,7 +379,9 @@ mod tests {
 
     #[test]
     fn app_share_is_readonly_data_share_is_not() {
-        assert!(virtiofsd_args(Path::new("/s"), Path::new("/a"), true).contains(&"--readonly".to_string()));
-        assert!(!virtiofsd_args(Path::new("/s"), Path::new("/d"), false).contains(&"--readonly".to_string()));
+        let a = virtiofsd_args(Path::new("/s"), Path::new("/a"), true, (1000, 100));
+        assert!(a.contains(&"--readonly".to_string()));
+        assert!(a.contains(&"--uid-map=:0:1000:1:".to_string()), "guest root is the user");
+        assert!(!virtiofsd_args(Path::new("/s"), Path::new("/d"), false, (1000, 100)).contains(&"--readonly".to_string()));
     }
 }
