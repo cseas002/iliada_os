@@ -32,7 +32,8 @@ mod linux {
 
     use anyhow::{Context, Result};
     use iliada_ipc::guest::{GuestSpec, SPEC_DIR, SPEC_TAG};
-    use rustix::mount::{MountFlags, mount};
+    use rustix::mount::{MountFlags, mount, mount_move};
+    use rustix::process::{chdir, chroot};
 
     fn mount_fs(source: &str, target: &str, fs: &str, flags: MountFlags) -> Result<()> {
         std::fs::create_dir_all(target)?;
@@ -56,14 +57,6 @@ mod linux {
         mount_fs("proc", "/proc", "proc", nosuid | MountFlags::NOEXEC)?;
         mount_fs("sysfs", "/sys", "sysfs", nosuid | MountFlags::NOEXEC)?;
         mount_fs("devtmpfs", "/dev", "devtmpfs", MountFlags::NOSUID)?;
-        mount_fs("tmpfs", "/run", "tmpfs", nosuid)?;
-        mount_fs("tmpfs", "/tmp", "tmpfs", nosuid)?;
-        std::fs::create_dir_all("/dev/pts")?;
-        let _ = mount("devpts", "/dev/pts", "devpts", MountFlags::NOSUID | MountFlags::NOEXEC, None);
-        let _ = mount("tmpfs", "/dev/shm", "tmpfs", nosuid, None).or_else(|_| {
-            std::fs::create_dir_all("/dev/shm")?;
-            mount("tmpfs", "/dev/shm", "tmpfs", nosuid, None).map_err(std::io::Error::from)
-        });
 
         // Drivers for the shares and the host channel (modules in the initrd).
         let status = Command::new("/bin/modprobe")
@@ -73,6 +66,28 @@ mod linux {
         if !status.success() {
             eprintln!("iliada-guest-init: some drivers did not load");
         }
+
+        // Leave the initramfs for a tmpfs root, as switch_root does: the
+        // sandbox (bubblewrap) needs pivot_root, which rootfs refuses.
+        mount_fs("tmpfs", "/sysroot", "tmpfs", MountFlags::empty())?;
+        for d in ["proc", "sys", "dev"] {
+            let to = format!("/sysroot/{d}");
+            std::fs::create_dir_all(&to)?;
+            mount_move(format!("/{d}"), &to).with_context(|| format!("moving /{d}"))?;
+        }
+        chdir("/sysroot")?;
+        mount_move(".", "/").context("moving the new root")?;
+        chroot(".").context("entering the new root")?;
+        chdir("/")?;
+
+        mount_fs("tmpfs", "/run", "tmpfs", nosuid)?;
+        mount_fs("tmpfs", "/tmp", "tmpfs", nosuid)?;
+        std::fs::create_dir_all("/dev/pts")?;
+        let _ = mount("devpts", "/dev/pts", "devpts", MountFlags::NOSUID | MountFlags::NOEXEC, None);
+        let _ = mount("tmpfs", "/dev/shm", "tmpfs", nosuid, None).or_else(|_| {
+            std::fs::create_dir_all("/dev/shm")?;
+            mount("tmpfs", "/dev/shm", "tmpfs", nosuid, None).map_err(std::io::Error::from)
+        });
 
         mount_fs(SPEC_TAG, SPEC_DIR, "virtiofs", MountFlags::RDONLY | nosuid)?;
         let spec: GuestSpec =
