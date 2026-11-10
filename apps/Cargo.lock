@@ -2930,8 +2930,11 @@ dependencies = [
 name = "iliada-store-gui"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "iliada-catalog",
+ "iliada-settings",
  "iliada-store",
+ "iliada-system",
  "libcosmic",
  "reqwest",
  "tokio",
