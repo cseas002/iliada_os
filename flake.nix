@@ -60,7 +60,16 @@
           installer-iso = self.nixosConfigurations."installer-${arch system}".config.system.build.isoImage;
           # Ready-to-run VM disk (UTM on Apple Silicon: the aarch64 one).
           utm-image = pkgs.callPackage ./nix/utm-image.nix {
-            image = self.nixosConfigurations."utm-${arch system}".config.system.build.image;
+            image =
+              let image = self.nixosConfigurations."utm-${arch system}".config.system.build.image; in
+              # Built on an x86 machine, the ARM image runs under emulation,
+              # where `unshare --map-root-user` fails; fakeroot alone gives
+              # the files their owners.
+              if system == "aarch64-linux" then
+                image.overrideAttrs (old: {
+                  buildPhase = lib.replaceStrings [ "unshare --map-root-user fakeroot" ] [ "fakeroot" ] old.buildPhase;
+                })
+              else image;
           };
         });
 
