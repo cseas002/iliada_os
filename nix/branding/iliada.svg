@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>Iliada</title>
+  <defs>
+    <linearGradient id="bronze" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f4cb78"/>
+      <stop offset="0.5" stop-color="#cf8f33"/>
+      <stop offset="1" stop-color="#8c5a1b"/>
+    </linearGradient>
+    <linearGradient id="crest" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#e8493c"/>
+      <stop offset="1" stop-color="#a8231b"/>
+    </linearGradient>
+  </defs>
+  <!-- Crest: horsehair arching from the brow to the back -->
+  <path fill="url(#crest)" d="M52 104 C 52 38, 150 14, 214 46 C 236 58, 246 82, 240 112
+    C 228 92, 212 80, 194 76 C 160 70, 120 72, 92 86 C 76 94, 62 100, 52 104 Z"/>
+  <g fill="none" stroke="#7a1912" stroke-width="2.5" stroke-linecap="round" opacity="0.5">
+    <path d="M70 92 C 90 54, 150 36, 206 52"/>
+    <path d="M86 84 C 110 58, 160 50, 220 70"/>
+    <path d="M62 98 C 76 66, 120 40, 180 38"/>
+  </g>
+  <!-- Helmet, facing left: dome, long cheek piece, neck guard -->
+  <path fill="url(#bronze)" fill-rule="evenodd" d="
+    M62 118 C 66 84, 104 70, 146 72 C 188 74, 214 98, 214 138
+    L 212 184 C 212 200, 220 210, 234 216 C 222 226, 196 228, 178 220
+    C 166 214, 160 204, 160 190 L 160 172
+    C 146 170, 134 178, 128 192 L 118 228 C 114 240, 100 244, 90 236
+    C 74 222, 64 196, 62 168 Z
+    M70 136 C 86 124, 112 124, 132 134 C 116 146, 90 148, 72 144 C 68 142, 68 139, 70 136 Z"/>
+  <!-- Highlight along the dome -->
+  <path d="M80 104 C 100 88, 150 82, 190 100" fill="none" stroke="#fde7b0" stroke-width="4" stroke-linecap="round" opacity="0.6"/>
+</svg>

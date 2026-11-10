@@ -1,0 +1,15 @@
+// The system information shown by `fastfetch` (and `neofetch`): the Iliada
+// helmet, crest in red, bronze helmet. The logo path is filled in by Nix.
+{
+  "logo": {
+    "type": "file",
+    "source": "@logo@",
+    "color": { "1": "red", "2": "yellow" },
+    "padding": { "top": 1, "right": 3 }
+  },
+  "modules": [
+    "title", "separator", "os", "host", "kernel", "uptime", "packages", "shell",
+    "display", "de", "wm", "terminal", "cpu", "gpu", "memory", "disk", "locale",
+    "break", "colors"
+  ]
+}
