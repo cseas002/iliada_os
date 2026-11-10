@@ -20,6 +20,7 @@
 //! See `docs/ipc-protocol.md` for the full specification.
 
 mod frame;
+pub mod guest;
 mod proto;
 pub mod transport;
 

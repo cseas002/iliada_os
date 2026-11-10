@@ -1,16 +1,22 @@
 //! Tier 2: one cloud-hypervisor micro-VM per app.
 //!
-//! Device model (nothing else is attached):
-//! * virtio-fs `app`  — the `.app` bundle, **read-only** (virtiofsd `--readonly`)
-//! * virtio-fs `data` — the app's private data directory, read-write
-//! * virtio-vsock     — the only channel to the host; the guest agent dials
-//!   `CID 2 : 7000` and cloud-hypervisor forwards it to the broker socket
-//! * virtio-rng, a null serial console
-//! * virtio-net       — only when the system policy grants NAT
-//! * (Phase 2) virtio-gpu / Wayland cross-domain for display
+//! The app gets its own kernel. Inside the VM it runs in the same bubblewrap
+//! sandbox as Tier 1 (defence in depth, and one way of assembling the app's
+//! world): the guest's `iliada-guest-init` mounts the host's shares at their
+//! host paths, so the Tier-1 bubblewrap arguments work unchanged.
 //!
-//! The runtime base is part of the guest initrd, so it is covered by the
-//! same dm-verity root of trust as the host image.
+//! Devices (nothing else is attached):
+//! * virtio-fs `store` — the host's `/nix/store`, **read-only** (runtime base,
+//!   bubblewrap, waypipe, Mesa)
+//! * virtio-fs `app`   — the `.app` bundle, **read-only**
+//! * virtio-fs `data`  — the app's private data directory
+//! * virtio-fs `f<n>`  — folders the user allowed (Pictures, …)
+//! * virtio-fs `spec`  — what to run (`spec.json`), read-only
+//! * virtio-vsock      — the only channel to the host: the app's window
+//!   (waypipe, guest port 7001) and the broker (port 7000)
+//! * virtio-rng, a virtio console logged to a file
+//!
+//! No network, no sound, no GPU yet: apps render in software (llvmpipe).
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -18,130 +24,148 @@ use std::process::Stdio;
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use iliada_bundle::IsolationTier;
-use iliada_ipc::{BROKER_VSOCK_PORT, transport};
+use iliada_ipc::guest::{DISPLAY_VSOCK_PORT, GuestSpec, SPEC_TAG, Share};
 use iliada_types::AppId;
-use serde::Serialize;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 
+use crate::namespace::{HostDesktop, bwrap_args};
 use crate::{HostIsolationConfig, IsolationBackend, NetworkPolicy, SandboxHandle, SandboxSpec};
 
-/// `PUT /api/v1/vm.create` body (cloud-hypervisor `VmConfig`, subset).
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct VmConfig {
-    pub payload: Payload,
-    pub cpus: Cpus,
-    pub memory: Memory,
-    pub fs: Vec<Fs>,
-    pub vsock: Vsock,
-    pub rng: Rng,
-    pub serial: ConsoleCfg,
-    pub console: ConsoleCfg,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub net: Option<Vec<Net>>,
-}
+/// Where the guest's waypipe creates the app's Wayland socket.
+const GUEST_RUNTIME: &str = "/run/user/0";
+const GUEST_DISPLAY: &str = "wayland-iliada";
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct Payload {
-    pub kernel: PathBuf,
-    pub initramfs: PathBuf,
-    pub cmdline: String,
-}
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct Cpus {
-    pub boot_vcpus: u8,
-    pub max_vcpus: u8,
-}
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct Memory {
-    pub size: u64,
-    /// Required for virtio-fs (vhost-user needs shared guest memory).
-    pub shared: bool,
-}
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct Fs {
-    pub tag: String,
-    pub socket: PathBuf,
-    pub num_queues: u8,
-    pub queue_size: u16,
-}
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct Vsock {
-    pub cid: u32,
-    pub socket: PathBuf,
-}
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct Rng {
-    pub src: PathBuf,
-}
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct ConsoleCfg {
-    pub mode: String,
-}
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct Net {
-    pub tap: String,
-}
-
-/// Per-app socket paths under the host socket directory.
-#[derive(Debug, Clone)]
-pub struct VmSockets {
-    pub api: PathBuf,
-    pub vsock: PathBuf,
-    pub app_fs: PathBuf,
-    pub data_fs: PathBuf,
-}
-
-impl VmSockets {
-    pub fn new(dir: &Path, app: &AppId) -> Self {
-        Self {
-            api: dir.join(format!("{app}.api")),
-            vsock: transport::vm_vsock_socket(dir, app),
-            app_fs: dir.join(format!("{app}.app-fs")),
-            data_fs: dir.join(format!("{app}.data-fs")),
-        }
-    }
-}
-
-/// Guest context ids 0–2 are reserved; derive a stable one from the app id
-/// so restarts keep their CID (collisions are detected by the VMM).
+/// A per-app vsock context id (3 and up; 0–2 are reserved).
 pub fn guest_cid(app: &AppId) -> u32 {
-    let h = app.as_str().bytes().fold(0x811c9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x01000193));
-    3 + (h % 0x7fff_0000)
+    let h = app.as_str().bytes().fold(2166136261u32, |h, b| (h ^ b as u32).wrapping_mul(16777619));
+    3 + h % 0x00ff_ffff
 }
 
-pub fn vm_config(spec: &SandboxSpec, host: &HostIsolationConfig, sockets: &VmSockets) -> VmConfig {
-    let cmdline = format!(
-        "console=hvc0 quiet panic=-1 iliada.app={} iliada.entry=/{} iliada.broker_port={}",
-        spec.app_id, spec.entry, BROKER_VSOCK_PORT
-    );
-    VmConfig {
-        payload: Payload { kernel: host.guest_kernel.clone(), initramfs: host.guest_initrd.clone(), cmdline },
-        cpus: Cpus { boot_vcpus: spec.vcpus.max(1), max_vcpus: spec.vcpus.max(1) },
-        memory: Memory { size: u64::from(spec.memory_mib) << 20, shared: true },
-        fs: vec![
-            Fs { tag: "app".into(), socket: sockets.app_fs.clone(), num_queues: 1, queue_size: 1024 },
-            Fs { tag: "data".into(), socket: sockets.data_fs.clone(), num_queues: 1, queue_size: 1024 },
-        ],
-        vsock: Vsock { cid: guest_cid(&spec.app_id), socket: sockets.vsock.clone() },
-        rng: Rng { src: "/dev/urandom".into() },
-        serial: ConsoleCfg { mode: "Null".into() },
-        console: ConsoleCfg { mode: "Off".into() },
-        net: match spec.network {
-            NetworkPolicy::None => None,
-            NetworkPolicy::Nat => Some(vec![Net { tap: format!("il{:08x}", guest_cid(&spec.app_id)) }]),
-        },
+/// One virtio-fs share: a virtiofsd serving `host` under `tag`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostShare {
+    pub tag: String,
+    pub host: PathBuf,
+    pub readonly: bool,
+}
+
+/// Everything needed to start one app's VM.
+#[derive(Debug, Clone)]
+pub struct VmPlan {
+    pub shares: Vec<HostShare>,
+    pub guest: GuestSpec,
+    pub vmm_args: Vec<String>,
+    /// The vsock Unix socket (cloud-hypervisor's "hybrid vsock").
+    pub vsock: PathBuf,
+    pub console_log: PathBuf,
+}
+
+impl VmPlan {
+    /// The socket virtiofsd serves a share on.
+    pub fn fs_socket(dir: &Path, tag: &str) -> PathBuf {
+        dir.join(format!("fs-{tag}.sock"))
+    }
+
+    /// Where guest connections to the display port arrive on the host.
+    pub fn display_socket(&self) -> PathBuf {
+        PathBuf::from(format!("{}_{DISPLAY_VSOCK_PORT}", self.vsock.display()))
     }
 }
 
-/// virtiofsd arguments for one share.
+/// Host paths the sandbox binds, resolved into the Nix store so they exist
+/// in the guest too (the guest sees only the store and the shares).
+fn resolved_desktop() -> HostDesktop {
+    let d = HostDesktop::default();
+    let r = |p: PathBuf| std::fs::canonicalize(&p).unwrap_or(p);
+    HostDesktop { fonts: r(d.fonts), icons: r(d.icons), mime: r(d.mime), opengl_driver: r(d.opengl_driver) }
+}
+
+/// Plan a VM for `spec`. `dir`: a private directory for its sockets and spec.
+pub fn plan(spec: &SandboxSpec, host: &HostIsolationConfig, dir: &Path, desktop: &HostDesktop) -> VmPlan {
+    let p = |x: &Path| x.display().to_string();
+    let mut shares = vec![
+        HostShare { tag: "store".into(), host: "/nix/store".into(), readonly: true },
+        HostShare { tag: "app".into(), host: spec.bundle.clone(), readonly: true },
+        HostShare { tag: "data".into(), host: spec.data_dir.clone(), readonly: false },
+    ];
+    for (i, (folder, _)) in spec.grants.folders.iter().enumerate() {
+        shares.push(HostShare { tag: format!("f{i}"), host: folder.clone(), readonly: false });
+    }
+
+    // The sandbox inside the guest: Tier 1's, minus what the VM doesn't have.
+    let mut inner = spec.clone();
+    inner.network = NetworkPolicy::None;
+    inner.grants.camera = false;
+    inner.grants.sound = None;
+    inner.files.clear();
+    inner.display = Some(Path::new(GUEST_RUNTIME).join(GUEST_DISPLAY));
+    inner.env.extend([
+        ("LIBGL_ALWAYS_SOFTWARE".to_owned(), "1".to_owned()),
+        ("GSK_RENDERER".to_owned(), "cairo".to_owned()),
+    ]);
+    let mut args = vec![
+        "--vsock".to_owned(),
+        "--no-gpu".into(),
+        "--compress".into(),
+        "none".into(),
+        "-s".into(),
+        format!("2:{DISPLAY_VSOCK_PORT}"),
+        "--display".into(),
+        GUEST_DISPLAY.into(),
+        "server".into(),
+        "--".into(),
+        p(&host.bwrap),
+    ];
+    args.extend(bwrap_args(&inner, host, desktop));
+    let guest = GuestSpec {
+        shares: shares.iter().map(|s| Share { tag: s.tag.clone(), path: p(&s.host), readonly: s.readonly }).collect(),
+        program: p(&host.waypipe),
+        args,
+        env: vec![
+            ("PATH".into(), "/bin".into()),
+            ("XDG_RUNTIME_DIR".into(), GUEST_RUNTIME.into()),
+            ("HOME".into(), "/root".into()),
+        ],
+    };
+
+    let vsock = dir.join("vsock.sock");
+    let console_log = dir.join("console.log");
+    let mut fs = vec!["--fs".to_owned()];
+    for tag in shares.iter().map(|s| s.tag.as_str()).chain([SPEC_TAG]) {
+        fs.push(format!("tag={tag},socket={}", p(&VmPlan::fs_socket(dir, tag))));
+    }
+    let mut vmm_args = vec![
+        "--kernel".to_owned(),
+        p(&host.guest_kernel),
+        "--initramfs".into(),
+        p(&host.guest_initrd),
+        "--cmdline".into(),
+        "console=hvc0 quiet panic=-1".into(),
+        "--cpus".into(),
+        format!("boot={}", spec.vcpus.max(1)),
+        "--memory".into(),
+        // virtio-fs (vhost-user) needs memory shared with virtiofsd.
+        format!("size={}M,shared=on", spec.memory_mib.max(256)),
+        "--vsock".into(),
+        format!("cid={},socket={}", guest_cid(&spec.app_id), p(&vsock)),
+        "--rng".into(),
+        "src=/dev/urandom".into(),
+        "--console".into(),
+        format!("file={}", p(&console_log)),
+        "--serial".into(),
+        "off".into(),
+    ];
+    vmm_args.extend(fs);
+    VmPlan { shares, guest, vmm_args, vsock, console_log }
+}
+
+/// virtiofsd arguments for one share (unprivileged: in a user namespace).
 pub fn virtiofsd_args(socket: &Path, shared_dir: &Path, readonly: bool) -> Vec<String> {
     let mut a = vec![
         format!("--socket-path={}", socket.display()),
         format!("--shared-dir={}", shared_dir.display()),
-        "--cache=never".into(),
+        format!("--cache={}", if readonly { "auto" } else { "never" }),
         "--sandbox=namespace".into(),
-        "--xattr".into(),
     ];
     if readonly {
         a.push("--readonly".into());
@@ -158,13 +182,30 @@ impl CloudHypervisorBackend {
     pub fn new(host: HostIsolationConfig) -> Self {
         Self { host }
     }
+
+    /// Whether micro-VMs can start here (KVM, the VMM, a guest kernel and initrd).
+    pub fn available(host: &HostIsolationConfig) -> bool {
+        Path::new("/dev/kvm").exists()
+            && host.guest_kernel.exists()
+            && host.guest_initrd.exists()
+            && host.cloud_hypervisor.exists()
+            && host.waypipe.exists()
+    }
 }
 
 #[derive(Debug)]
 struct VmHandle {
     app: AppId,
-    api: PathBuf,
-    children: Vec<Child>,
+    vmm: Child,
+    /// virtiofsd and waypipe: stopped when the VM is.
+    helpers: Vec<Child>,
+    dir: PathBuf,
+}
+
+/// A private directory for one VM's sockets, under the user's runtime dir.
+fn vm_dir(app: &AppId) -> Result<PathBuf> {
+    let base = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    Ok(base.join("iliada-vm").join(app.as_str()))
 }
 
 #[async_trait]
@@ -174,34 +215,56 @@ impl IsolationBackend for CloudHypervisorBackend {
     }
 
     async fn launch(&self, spec: &SandboxSpec) -> Result<Box<dyn SandboxHandle>> {
-        if !cfg!(target_os = "linux") || !Path::new("/dev/kvm").exists() {
-            bail!("micro-VM sandboxes need Linux with /dev/kvm");
+        if !Self::available(&self.host) {
+            bail!("micro-VMs are not available on this computer (needs KVM and the Iliada guest image)");
         }
-        let sockets = VmSockets::new(&self.host.socket_dir, &spec.app_id);
-        tokio::fs::create_dir_all(&self.host.socket_dir).await?;
+        let dir = vm_dir(&spec.app_id)?;
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        tokio::fs::create_dir_all(dir.join("spec")).await?;
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        }
         tokio::fs::create_dir_all(&spec.data_dir).await?;
-        for s in [&sockets.api, &sockets.vsock, &sockets.app_fs, &sockets.data_fs] {
-            let _ = tokio::fs::remove_file(s).await;
-        }
-        let spawn = |bin: &Path, args: Vec<String>| {
-            Command::new(bin).args(args).stdin(Stdio::null()).kill_on_drop(true).spawn()
+        let plan = plan(spec, &self.host, &dir, &resolved_desktop());
+        tokio::fs::write(dir.join("spec/spec.json"), serde_json::to_vec_pretty(&plan.guest)?).await?;
+
+        let spawn = |bin: &Path, args: Vec<String>, what: &str| {
+            Command::new(bin)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .with_context(|| format!("starting {what}"))
         };
-        let mut children = vec![
-            spawn(&self.host.virtiofsd, virtiofsd_args(&sockets.app_fs, &spec.bundle, true))
-                .context("virtiofsd (app)")?,
-            spawn(&self.host.virtiofsd, virtiofsd_args(&sockets.data_fs, &spec.data_dir, false))
-                .context("virtiofsd (data)")?,
-        ];
-        children.push(
-            spawn(&self.host.cloud_hypervisor, vec!["--api-socket".into(), format!("path={}", sockets.api.display())])
-                .context("cloud-hypervisor")?,
-        );
-        wait_for_socket(&sockets.api).await?;
-        let cfg = serde_json::to_vec(&vm_config(spec, &self.host, &sockets))?;
-        api_put(&sockets.api, "vm.create", Some(&cfg)).await?;
-        api_put(&sockets.api, "vm.boot", None).await?;
-        tracing::info!(app = %spec.app_id, cid = guest_cid(&spec.app_id), "micro-VM booted");
-        Ok(Box::new(VmHandle { app: spec.app_id.clone(), api: sockets.api, children }))
+        let mut helpers = Vec::new();
+        let spec_share = HostShare { tag: SPEC_TAG.into(), host: dir.join("spec"), readonly: true };
+        for s in plan.shares.iter().chain([&spec_share]) {
+            let sock = VmPlan::fs_socket(&dir, &s.tag);
+            helpers.push(spawn(&self.host.virtiofsd, virtiofsd_args(&sock, &s.host, s.readonly), "virtiofsd")?);
+        }
+        // The app's window: the guest's waypipe dials host port 7001, which
+        // cloud-hypervisor delivers to this Unix socket.
+        helpers.push(spawn(
+            &self.host.waypipe,
+            vec![
+                "--no-gpu".into(),
+                "--compress".into(),
+                "none".into(),
+                "-s".into(),
+                plan.display_socket().display().to_string(),
+                "client".into(),
+            ],
+            "waypipe",
+        )?);
+        for s in plan.shares.iter().chain([&spec_share]) {
+            wait_for_socket(&VmPlan::fs_socket(&dir, &s.tag)).await?;
+        }
+        wait_for_socket(&plan.display_socket()).await?;
+        let vmm = spawn(&self.host.cloud_hypervisor, plan.vmm_args.clone(), "cloud-hypervisor")?;
+        tracing::info!(app = %spec.app_id, cid = guest_cid(&spec.app_id), "micro-VM started");
+        Ok(Box::new(VmHandle { app: spec.app_id.clone(), vmm, helpers, dir }))
     }
 }
 
@@ -211,22 +274,30 @@ impl SandboxHandle for VmHandle {
         &self.app
     }
     async fn stop(&mut self) -> Result<()> {
-        let _ = api_put(&self.api, "vm.shutdown", None).await;
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        for c in &mut self.children {
+        let _ = self.vmm.kill().await;
+        for c in &mut self.helpers {
             let _ = c.kill().await;
         }
         Ok(())
     }
     async fn wait(&mut self) -> Result<Option<i32>> {
-        // The VMM is the last child.
-        let status = self.children.last_mut().context("no VMM process")?.wait().await?;
+        // The guest powers off when the app exits; the VMM then exits.
+        let status = self.vmm.wait().await?;
+        for c in &mut self.helpers {
+            let _ = c.kill().await;
+        }
+        if !status.success() {
+            eprintln!(
+                "iliada-run: the micro-VM stopped ({status}); its console log is {}",
+                self.dir.join("console.log").display()
+            );
+        }
         Ok(status.code())
     }
 }
 
 async fn wait_for_socket(p: &Path) -> Result<()> {
-    for _ in 0..100 {
+    for _ in 0..250 {
         if p.exists() {
             return Ok(());
         }
@@ -235,37 +306,18 @@ async fn wait_for_socket(p: &Path) -> Result<()> {
     bail!("{} did not appear", p.display())
 }
 
-/// Minimal HTTP/1.1 PUT over the VMM's Unix API socket.
-pub async fn api_put(socket: &Path, endpoint: &str, body: Option<&[u8]>) -> Result<()> {
-    let mut s = tokio::net::UnixStream::connect(socket).await?;
-    let body = body.unwrap_or_default();
-    let head = format!(
-        "PUT /api/v1/{endpoint} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
-    s.write_all(head.as_bytes()).await?;
-    s.write_all(body).await?;
-    let mut resp = Vec::new();
-    s.read_to_end(&mut resp).await?;
-    let status = String::from_utf8_lossy(&resp).lines().next().unwrap_or_default().to_owned();
-    if !(status.contains(" 200") || status.contains(" 204")) {
-        bail!("cloud-hypervisor {endpoint} failed: {status}");
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn spec(network: NetworkPolicy) -> SandboxSpec {
+    fn spec() -> SandboxSpec {
         SandboxSpec {
             app_id: AppId::new("org.debian.jq").unwrap(),
             bundle: "/Applications/jq.app".into(),
             entry: "usr/bin/jq".into(),
-            data_dir: "/var/lib/iliada/apps/org.debian.jq".into(),
-            network,
-            display: None,
+            data_dir: "/home/alex/.local/share/iliada/apps/org.debian.jq".into(),
+            network: NetworkPolicy::Nat,
+            display: Some("/run/user/1000/wayland-1".into()),
             env: vec![],
             vcpus: 1,
             memory_mib: 512,
@@ -275,55 +327,46 @@ mod tests {
         }
     }
 
-    #[test]
-    fn config_is_minimal_and_wired_to_the_broker() {
-        let host = HostIsolationConfig::example();
-        let s = spec(NetworkPolicy::None);
-        let socks = VmSockets::new(&host.socket_dir, &s.app_id);
-        let cfg = vm_config(&s, &host, &socks);
-        let json = serde_json::to_value(&cfg).unwrap();
-
-        assert_eq!(json["memory"]["size"], 512u64 << 20);
-        assert_eq!(json["memory"]["shared"], true, "virtio-fs needs shared memory");
-        assert!(json.get("net").is_none(), "no network device unless policy says so");
-        assert_eq!(json["fs"][0]["tag"], "app");
-        assert_eq!(json["vsock"]["socket"], "/run/iliada/sandbox/org.debian.jq.vsock");
-        // cloud-hypervisor forwards guest port 7000 to "<vsock socket>_7000" — the broker's socket.
-        assert_eq!(
-            transport::broker_socket(&host.socket_dir, &s.app_id),
-            PathBuf::from(format!("{}_{}", cfg.vsock.socket.display(), BROKER_VSOCK_PORT))
-        );
-        assert!(cfg.payload.cmdline.contains("iliada.entry=/usr/bin/jq"));
-        assert!(cfg.vsock.cid >= 3);
+    fn value_after<'a>(a: &'a [String], flag: &str) -> Option<&'a str> {
+        a.windows(2).find(|w| w[0] == flag).map(|w| w[1].as_str())
     }
 
     #[test]
-    fn nat_adds_exactly_one_nic() {
+    fn plan_shares_store_app_and_data_and_runs_the_tier1_sandbox_through_waypipe() {
+        let mut s = spec();
+        s.grants.folders.push(("/home/alex/Pictures".into(), "Pictures".into()));
         let host = HostIsolationConfig::example();
-        let s = spec(NetworkPolicy::Nat);
-        let cfg = vm_config(&s, &host, &VmSockets::new(&host.socket_dir, &s.app_id));
-        assert_eq!(cfg.net.unwrap().len(), 1);
+        let p = plan(&s, &host, Path::new("/run/user/1000/iliada-vm/org.debian.jq"), &HostDesktop::default());
+
+        let tags: Vec<_> = p.shares.iter().map(|s| (s.tag.as_str(), s.readonly)).collect();
+        assert_eq!(tags, [("store", true), ("app", true), ("data", false), ("f0", false)]);
+        assert_eq!(p.guest.shares[1].path, "/Applications/jq.app", "mounted at the host path");
+        assert_eq!(value_after(&p.vmm_args, "--memory"), Some("size=512M,shared=on"));
+        assert!(p.vmm_args.iter().any(|a| a.starts_with("tag=spec,socket=")));
+        assert!(!p.vmm_args.iter().any(|a| a == "--net"), "no network in micro-VMs yet");
+        assert_eq!(p.display_socket(), Path::new("/run/user/1000/iliada-vm/org.debian.jq/vsock.sock_7001"));
+
+        // waypipe server -- bwrap <Tier-1 args>, without network or host sockets.
+        let a = &p.guest.args;
+        assert_eq!(value_after(a, "-s"), Some("2:7001"));
+        let bwrap = a.iter().position(|x| x == "--").unwrap() + 1;
+        assert_eq!(a[bwrap], host.bwrap.display().to_string());
+        assert!(!a.contains(&"--share-net".to_owned()));
+        assert!(a.windows(3).any(|w| w[0] == "--ro-bind" && w[1] == "/run/user/0/wayland-iliada"));
+        assert!(a.windows(3).any(|w| w[0] == "--bind" && w[1] == "/home/alex/Pictures"));
+        assert!(a.contains(&"LIBGL_ALWAYS_SOFTWARE".to_owned()));
+    }
+
+    #[test]
+    fn cids_are_stable_and_not_reserved() {
+        let a = AppId::new("org.debian.jq").unwrap();
+        assert_eq!(guest_cid(&a), guest_cid(&a));
+        assert!(guest_cid(&a) >= 3);
     }
 
     #[test]
     fn app_share_is_readonly_data_share_is_not() {
         assert!(virtiofsd_args(Path::new("/s"), Path::new("/a"), true).contains(&"--readonly".to_string()));
         assert!(!virtiofsd_args(Path::new("/s"), Path::new("/d"), false).contains(&"--readonly".to_string()));
-    }
-
-    #[tokio::test]
-    async fn api_put_speaks_http() {
-        let dir = tempfile::tempdir().unwrap();
-        let sock = dir.path().join("api");
-        let l = tokio::net::UnixListener::bind(&sock).unwrap();
-        let server = tokio::spawn(async move {
-            let (mut s, _) = l.accept().await.unwrap();
-            let mut buf = vec![0u8; 4096];
-            let n = s.read(&mut buf).await.unwrap();
-            s.write_all(b"HTTP/1.1 204 No Content\r\n\r\n").await.unwrap();
-            String::from_utf8_lossy(&buf[..n]).into_owned()
-        });
-        api_put(&sock, "vm.boot", None).await.unwrap();
-        assert!(server.await.unwrap().starts_with("PUT /api/v1/vm.boot HTTP/1.1"));
     }
 }

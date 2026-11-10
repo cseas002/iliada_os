@@ -16,6 +16,9 @@ pub struct HostIsolationConfig {
     pub cloud_hypervisor: PathBuf,
     pub virtiofsd: PathBuf,
     pub bwrap: PathBuf,
+    /// Carries a micro-VM app's window to the host's Wayland compositor.
+    #[serde(default = "default_waypipe")]
+    pub waypipe: PathBuf,
     /// Read-only runtime base (glibc, Mesa, …) mapped into every sandbox.
     pub runtime_dir: PathBuf,
     /// Per-app sockets (VMM API, vsock, broker).
@@ -27,6 +30,10 @@ pub struct HostIsolationConfig {
     /// High security mode: every app gets its own micro-VM, whatever it declares.
     #[serde(default)]
     pub high_security: bool,
+}
+
+fn default_waypipe() -> PathBuf {
+    "/run/current-system/sw/bin/waypipe".into()
 }
 
 impl HostIsolationConfig {
@@ -45,6 +52,7 @@ impl HostIsolationConfig {
             cloud_hypervisor: "/run/current-system/sw/bin/cloud-hypervisor".into(),
             virtiofsd: "/run/current-system/sw/bin/virtiofsd".into(),
             bwrap: "/run/current-system/sw/bin/bwrap".into(),
+            waypipe: default_waypipe(),
             runtime_dir: "/run/current-system/iliada/runtime/iliada-base-1".into(),
             socket_dir: "/run/iliada/sandbox".into(),
             data_root: "/var/lib/iliada/apps".into(),

@@ -38,9 +38,13 @@ in
       description = "Kernel booted inside app micro-VMs.";
     };
     guestInitrd = lib.mkOption {
-      type = lib.types.str;
-      default = "/run/current-system/iliada/guest/initrd";
-      description = "Guest initramfs with the Iliada guest agent (built in Phase 2).";
+      type = lib.types.package;
+      default = pkgs.callPackage ../guest/initrd.nix {
+        kernel = cfg.guestKernel;
+        iliadaPackage = config.iliada.package;
+      };
+      defaultText = lib.literalExpression "the Iliada guest initramfs (nix/guest/initrd.nix)";
+      description = "Initramfs of app micro-VMs: iliada-guest-init and the drivers it loads.";
     };
     runtime = lib.mkOption {
       type = lib.types.package;
@@ -102,17 +106,18 @@ in
 
   config = {
     users.groups.iliada-sandbox = { };
-    environment.systemPackages = with pkgs; [ cloud-hypervisor virtiofsd bubblewrap ];
+    environment.systemPackages = with pkgs; [ cloud-hypervisor virtiofsd bubblewrap waypipe ];
     systemd.tmpfiles.rules = [
       "d ${cfg.socketDir} 0770 root iliada-sandbox -"
       "d ${cfg.dataRoot} 0750 root iliada-sandbox -"
     ];
     environment.etc."iliada/isolation.json".text = builtins.toJSON {
       guestKernel = "${cfg.guestKernel}/${kernelFile}";
-      guestInitrd = cfg.guestInitrd;
+      guestInitrd = "${cfg.guestInitrd}/initrd";
       cloudHypervisor = lib.getExe pkgs.cloud-hypervisor;
       virtiofsd = lib.getExe pkgs.virtiofsd;
       bwrap = lib.getExe pkgs.bubblewrap;
+      waypipe = lib.getExe pkgs.waypipe;
       runtimeDir = "${cfg.runtime}";
       socketDir = cfg.socketDir;
       dataRoot = cfg.dataRoot;

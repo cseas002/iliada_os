@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use iliada_bundle::decisions::{Decision, Decisions};
 use iliada_bundle::{Bundle, IsolationTier, PermissionRequest};
+use iliada_sandbox::cloud_hypervisor::CloudHypervisorBackend;
 use iliada_sandbox::{Grants, HostIsolationConfig, NetworkPolicy, SandboxSpec, SoundSockets, backend_for};
 use iliada_types::{Capability, FileScope, KnownDir};
 
@@ -49,6 +50,16 @@ fn wayland_socket() -> Option<PathBuf> {
     let path = PathBuf::from(display);
     let path = if path.is_absolute() { path } else { PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?).join(path) };
     path.exists().then_some(path)
+}
+
+/// The user asked for this app to run in its own micro-VM (Settings →
+/// Privacy → Extra isolation): `~/.config/iliada/extra-isolation` lists app ids.
+fn extra_isolation(app: &str) -> bool {
+    let Some(home) = home() else { return false };
+    let cfg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".config"));
+    std::fs::read_to_string(cfg.join("iliada/extra-isolation"))
+        .map(|t| t.lines().any(|l| l.trim() == app))
+        .unwrap_or(false)
 }
 
 fn home() -> Option<PathBuf> {
@@ -187,12 +198,16 @@ async fn main() -> Result<()> {
 
     let host = HostIsolationConfig::load(&config)?;
     let bundle = find_bundle(&target)?;
-    // The app's own setting, unless High security mode puts every app in a VM.
-    let mut tier = if host.high_security { IsolationTier::MicroVm } else { bundle.info.isolation };
-    if tier == IsolationTier::MicroVm {
-        // Tier 2 is configured but not yet bootable (no guest image yet).
+    // The app's own setting (or the user's "Extra isolation" for it), unless
+    // High security mode puts every app in a VM.
+    let mut tier = if host.high_security || extra_isolation(bundle.info.id.as_str()) {
+        IsolationTier::MicroVm
+    } else {
+        bundle.info.isolation
+    };
+    if tier == IsolationTier::MicroVm && !CloudHypervisorBackend::available(&host) {
         eprintln!(
-            "iliada-run: micro-VM sandboxes are not available yet; running {} in a namespace sandbox",
+            "iliada-run: micro-VMs are not available on this computer; running {} in its sandbox",
             bundle.info.id
         );
         tier = IsolationTier::Namespace;

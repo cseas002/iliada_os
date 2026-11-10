@@ -7,15 +7,23 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[[bin]]
+name = "iliada-guest-init"
+path = "src/bin/iliada-guest-init.rs"
+
 [dependencies]
 iliada-types.workspace = true
 iliada-ipc.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net", "io-util"] }
 tracing.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1", features = ["mount", "system", "fs"] }
+
 [dev-dependencies]
-anyhow.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]
