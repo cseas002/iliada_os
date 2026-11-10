@@ -30,7 +30,9 @@
 
   options.iliada.version = lib.mkOption {
     type = lib.types.str;
-    default = "0.1.0";
+    # One place for the version: VERSION at the top of the source (checked
+    # by `iliada-catalog release`).
+    default = lib.trim (builtins.readFile ../../VERSION);
     readOnly = true;
     description = "Iliada release version.";
   };

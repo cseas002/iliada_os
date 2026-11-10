@@ -73,6 +73,7 @@ enum Cmd {
     /// Package an Iliada release: the committed source tree as
     /// iliada-<version>-source.tar.zst, and a signed release.json naming it.
     /// Upload both (and release.json.sig) to the GitHub release v<version>.
+    /// The committed VERSION file must say <version>.
     Release {
         /// A git checkout of iliada_os at the release commit.
         #[arg(long)]
@@ -388,6 +389,18 @@ async fn main() -> Result<()> {
 
 fn release(source: &Path, version: &str, key: &Path, out: &Path, base_url: &str) -> Result<()> {
     let sk = iliada_catalog::parse_signing_key(&fs::read_to_string(key)?)?;
+    // Systems learn their version from the source's VERSION: a release whose
+    // source says otherwise would be offered again and again after installing.
+    let declared = std::process::Command::new("git")
+        .arg("-C")
+        .arg(source)
+        .args(["show", "HEAD:VERSION"])
+        .output()
+        .context("running git show")?;
+    let declared = String::from_utf8_lossy(&declared.stdout).trim().to_owned();
+    if declared != version {
+        bail!("the source's committed VERSION is {declared:?}, not {version:?}: change VERSION and commit first");
+    }
     fs::create_dir_all(out)?;
     // Committed files only, under one folder.
     let tar = std::process::Command::new("git")
