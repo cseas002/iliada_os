@@ -1,4 +1,4 @@
-{ lib, rustPlatform, pkg-config, zstd, git, bash }:
+{ lib, rustPlatform, pkg-config, zstd, git }:
 
 rustPlatform.buildRustPackage {
   pname = "iliada-tools";
@@ -22,8 +22,7 @@ rustPlatform.buildRustPackage {
   nativeBuildInputs = [ pkg-config ];
   buildInputs = [ zstd ];
   # iliada-system's tests drive git (the configuration is a repository).
-  # bash: the assistant runs commands with it (its tests start it).
-  nativeCheckInputs = [ git bash ];
+  nativeCheckInputs = [ git ];
 
   # Only the default members (crates/*) are built; xtask is dev tooling.
   meta = {

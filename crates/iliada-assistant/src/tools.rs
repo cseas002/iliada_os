@@ -515,7 +515,7 @@ const MAX_OUTPUT: usize = 10_000;
 /// status and (cut) output, stdout and stderr together.
 pub async fn run_command(command: &str, timeout: std::time::Duration) -> Result<String> {
     use tokio::io::AsyncReadExt;
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| "/".into());
+    let home = std::env::var_os("HOME").map(PathBuf::from).filter(|h| h.is_dir()).unwrap_or_else(|| "/".into());
     let mut child = tokio::process::Command::new("bash")
         .args(["-c", &format!("exec 2>&1\n{command}")])
         .current_dir(home)
