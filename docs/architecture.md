@@ -222,7 +222,7 @@ justification, runtime base), validated by the same Rust types.
 | IPC protocol, broker, guest client | done; end-to-end tests over real sockets |
 | Tier-1 sandbox (`iliada-run`) | done; every published app runs sandboxed from the launcher |
 | Permissions: first-launch prompts, Settings → Privacy, opened files | built; unit-tested |
-| Tier-2 micro-VMs (guest init, initrd, virtio-fs, waypipe) | works: GNOME Calculator in its own VM, window on the desktop, saves its settings |
+| Tier-2 micro-VMs (guest init, initrd, virtio-fs, waypipe, passt, sound relay) | works: Firefox in its own VM loads HTTPS pages (its own content sandbox runs too); GNOME Calculator saves its settings |
 | Desktop (COSMIC), app registry (`iliada-appd`) | done |
 | Apps without rebuild (drag a .app in, Trash, auto-recorded list) | done; validated in the VM |
 | Iliada Store (GUI + CLI), signed catalog, automatic updates | done; validated in the VM |
@@ -265,11 +265,10 @@ then continues the backup's.
 **Next**
 
 1. Test GitHub backup and restore end to end (needs the GitHub OAuth app).
-2. Boot-test micro-VMs; then network and sound inside them, and opened files.
+2. Micro-VMs: test sound end to end; opened files (one share per file).
 3. Publish a signed Iliada release (`iliada-catalog release`) so updates work.
-4. Republish the apps with their declared folders and sound.
-5. LibreOffice: it now starts (configuration, fonts, services) but opens no
-   window yet. VLC and Sudoku (replacing 2048) work.
+4. Republish the apps with their declared folders and sound (LibreOffice
+   Writer, VLC and Sudoku, replacing 2048, work).
 
 **Later**
 

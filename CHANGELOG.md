@@ -20,8 +20,8 @@
 - The Store has **Software** (Python, Node.js, ffmpeg…) and **Services**
   (nginx, PostgreSQL, MariaDB, Redis, Docker, SSH, printing), labeled as not
   apps; they install through the system service.
-- New apps: Sudoku (replaces 2048), VLC. LibreOffice Writer starts but
-  opens no window yet.
+- New apps: Sudoku (replaces 2048), VLC. LibreOffice Writer works (it had
+  picked up Debian's headless core).
 - Recipes can declare folders, permissions and `copy` steps (what a Debian
   install script would have done; Iliada never runs those).
 - Apps see a one-user `/etc/passwd` (theirs) and a home with the usual folders.
@@ -36,7 +36,10 @@
   with an app are given to it one by one.
 - **Micro-VMs**: Settings → Privacy → Extra isolation runs an app in its own
   virtual machine (its own kernel; window through waypipe; software
-  rendering; no network or sound yet).
+  rendering). Apps that declare a network get one through passt (no root;
+  nothing forwarded in; the computer's own local services stay out of
+  reach); sound goes over vsock to your sound server. Inside the VM the app
+  runs as you, so browsers' own sandboxes work.
 
 **The assistant.**
 - Ask Iliada in plain words (Assistant app, `iliada ask`). **Ask** mode
