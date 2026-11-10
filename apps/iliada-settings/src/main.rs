@@ -41,7 +41,29 @@ fn askable(c: &Capability) -> bool {
     matches!(c, Capability::Camera | Capability::Microphone | Capability::Files(FileScope::KnownDir(_)))
 }
 
-/// Installed apps that declare an askable permission.
+fn extra_isolation_path() -> Option<std::path::PathBuf> {
+    let home = std::path::PathBuf::from(std::env::var_os("HOME")?);
+    let cfg = std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from).unwrap_or_else(|| home.join(".config"));
+    Some(cfg.join("iliada/extra-isolation"))
+}
+
+/// Apps the user put in their own micro-VM (`iliada-run` reads the same file).
+fn load_extra_isolation() -> Vec<String> {
+    extra_isolation_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| t.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+fn save_extra_isolation(ids: &[String]) -> std::io::Result<()> {
+    let Some(p) = extra_isolation_path() else { return Ok(()) };
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    std::fs::write(p, ids.iter().map(|i| format!("{i}\n")).collect::<String>())
+}
+
+/// Installed apps, with the permissions they can be asked for.
 fn installed_permissions() -> Vec<AppPermissions> {
     let mut out: Vec<AppPermissions> = std::fs::read_dir("/Applications")
         .into_iter()
@@ -51,11 +73,7 @@ fn installed_permissions() -> Vec<AppPermissions> {
         .filter_map(|b| {
             let capabilities: Vec<Capability> =
                 b.permissions.requests.iter().map(|r| r.capability).filter(askable).collect();
-            (!capabilities.is_empty()).then(|| AppPermissions {
-                id: b.info.id.as_str().to_owned(),
-                name: b.info.name.clone(),
-                capabilities,
-            })
+            Some(AppPermissions { id: b.info.id.as_str().to_owned(), name: b.info.name.clone(), capabilities })
         })
         .collect();
     out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
@@ -91,6 +109,7 @@ enum Message {
     Backups(Result<Vec<Backup>, String>),
     Ask(Confirm),
     Permission(String, Capability, bool),
+    ExtraIsolation(String, bool),
     Confirmed,
     Cancel,
     Dismiss,
@@ -115,6 +134,7 @@ struct App {
     confirm: Option<Confirm>,
     privacy: Vec<AppPermissions>,
     decisions: Decisions,
+    extra_isolation: Vec<String>,
 }
 
 fn load_status() -> Task<Message> {
@@ -412,7 +432,7 @@ impl App {
             ),
         )];
         if self.privacy.is_empty() {
-            items.push(info("No installed app has asked for anything yet", None));
+            items.push(info("No apps are installed yet", None));
         }
         for app in &self.privacy {
             let mut section = settings::section().title(app.name.clone());
@@ -427,6 +447,12 @@ impl App {
                     Message::Permission(id.clone(), c, on)
                 }));
             }
+            let id = app.id.clone();
+            section = section.add(
+                settings::item::builder("Extra isolation")
+                    .description("Run it in its own virtual machine: stronger isolation, slower start and graphics, no internet or sound yet.")
+                    .toggler(self.extra_isolation.contains(&app.id), move |on| Message::ExtraIsolation(id.clone(), on)),
+            );
             items.push(section.into());
         }
         settings::view_column(items).into()
@@ -509,6 +535,7 @@ impl cosmic::Application for App {
             confirm: None,
             privacy: Vec::new(),
             decisions: Decisions::default(),
+            extra_isolation: Vec::new(),
         };
         app.set_header_title("Iliada Settings".into());
         let title = match app.core.main_window_id() {
@@ -527,6 +554,7 @@ impl cosmic::Application for App {
         if self.page() == Page::Privacy {
             self.privacy = installed_permissions();
             self.decisions = Decisions::default_path().map(|p| Decisions::load(&p)).unwrap_or_default();
+            self.extra_isolation = load_extra_isolation();
         }
         load_status()
     }
@@ -625,6 +653,15 @@ impl cosmic::Application for App {
             }
             Message::Backups(b) => self.backups = Some(b),
             Message::Ask(c) => self.confirm = Some(c),
+            Message::ExtraIsolation(app, on) => {
+                self.extra_isolation.retain(|a| *a != app);
+                if on {
+                    self.extra_isolation.push(app);
+                }
+                if let Err(e) = save_extra_isolation(&self.extra_isolation) {
+                    self.error = Some(format!("Could not save: {e}"));
+                }
+            }
             Message::Permission(app, cap, allow) => {
                 self.decisions.set(&app, &cap, if allow { Decision::Allow } else { Decision::Deny });
                 if let Some(p) = Decisions::default_path()
