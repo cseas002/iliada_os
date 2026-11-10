@@ -14,7 +14,7 @@
 //! * virtio-fs `spec`  — what to run (`spec.json`), read-only
 //! * virtio-vsock      — the only channel to the host: the app's window
 //!   (waypipe, guest port 7001) and the broker (port 7000)
-//! * virtio-rng, a virtio console logged to a file
+//! * virtio-rng, the serial console logged to a file
 //!
 //! No network, no sound, no GPU yet: apps render in software (llvmpipe).
 
@@ -140,7 +140,9 @@ pub fn plan(spec: &SandboxSpec, host: &HostIsolationConfig, dir: &Path, desktop:
         "--initramfs".into(),
         p(&host.guest_initrd),
         "--cmdline".into(),
-        "console=hvc0 quiet panic=-1".into(),
+        // The serial port is built into the kernel (virtio-console is a
+        // module, absent while it boots), so the whole boot is logged.
+        format!("console={} panic=-1 loglevel=4", if cfg!(target_arch = "aarch64") { "ttyAMA0" } else { "ttyS0" }),
         "--cpus".into(),
         format!("boot={}", spec.vcpus.max(1)),
         "--memory".into(),
@@ -150,9 +152,9 @@ pub fn plan(spec: &SandboxSpec, host: &HostIsolationConfig, dir: &Path, desktop:
         format!("cid={},socket={}", guest_cid(&spec.app_id), p(&vsock)),
         "--rng".into(),
         "src=/dev/urandom".into(),
-        "--console".into(),
-        format!("file={}", p(&console_log)),
         "--serial".into(),
+        format!("file={}", p(&console_log)),
+        "--console".into(),
         "off".into(),
     ];
     vmm_args.extend(fs);
