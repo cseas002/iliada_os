@@ -137,7 +137,12 @@ fn bwrap_prefix(spec: &SandboxSpec, host: &HostIsolationConfig, desktop: &HostDe
     push(&["--bind", &p(&spec.data_dir), "/home/app"]);
     push(&["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"]);
     push(&["--perms", "0700", "--dir", GUEST_XDG_RUNTIME_DIR]);
-    push(&["--ro-bind-try", &p(&transport::broker_socket(&host.socket_dir, &spec.app_id)), GUEST_BROKER_SOCKET]);
+    // bwrap's "-try" skips only a missing source: a socket folder this user
+    // may not enter (not in iliada-sandbox) would stop the app from starting.
+    let broker = transport::broker_socket(&host.socket_dir, &spec.app_id);
+    if !std::fs::metadata(&broker).is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied) {
+        push(&["--ro-bind-try", &p(&broker), GUEST_BROKER_SOCKET]);
+    }
 
     if let Some(wayland) = &spec.display {
         push(&["--ro-bind", &p(wayland), &format!("{GUEST_XDG_RUNTIME_DIR}/wayland-0")]);

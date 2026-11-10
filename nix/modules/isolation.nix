@@ -107,7 +107,16 @@ in
   };
 
   config = {
-    users.groups.iliada-sandbox = { };
+    # Everyone who uses the desktop runs apps: their sandboxes reach the
+    # broker through socketDir, and micro-VMs need /dev/kvm.
+    users.groups =
+      let
+        without = g: lib.attrNames (lib.filterAttrs (_: u: u.isNormalUser && !(lib.elem g u.extraGroups)) config.users.users);
+      in
+      {
+        iliada-sandbox.members = without "iliada-sandbox";
+        kvm.members = without "kvm";
+      };
     environment.systemPackages = with pkgs; [ cloud-hypervisor virtiofsd bubblewrap waypipe passt ];
     systemd.tmpfiles.rules = [
       "d ${cfg.socketDir} 0770 root iliada-sandbox -"
