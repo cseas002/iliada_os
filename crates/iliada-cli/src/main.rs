@@ -187,13 +187,34 @@ async fn main() -> Result<()> {
         Cmd::List => {
             let s = store().await?;
             let (catalog, installed) = (s.catalog().await?, s.installed());
+            println!("Apps (iliada install <name>)");
             for a in &catalog.apps {
                 let mark = match installed.get(&a.id) {
                     Some(i) if i.version == a.version => "installed",
                     Some(_) => "update available",
                     None => "",
                 };
-                println!("{:<20} {:<10} {:<34} {mark}", a.name, a.category, a.summary);
+                println!("  {:<20} {:<10} {:<34} {mark}", a.name, a.category, a.summary);
+            }
+            let st = client::status().await.ok();
+            use iliada_system::software::{CATALOG, Kind};
+            for (kind, title) in [
+                (Kind::Software, "Software for the Terminal (iliada tool add <id>)"),
+                (Kind::Service, "Services (iliada service enable <id>)"),
+            ] {
+                println!("\n{title}");
+                for i in CATALOG.iter().filter(|i| i.kind == kind) {
+                    let on = st.as_ref().is_some_and(|st| match kind {
+                        Kind::Software => st.tools.iter().any(|t| t == i.id),
+                        Kind::Service => st.services.iter().any(|x| x.name == i.id && x.on),
+                    });
+                    let mark = match (kind, on) {
+                        (_, false) => "",
+                        (Kind::Software, true) => "installed",
+                        (Kind::Service, true) => "on",
+                    };
+                    println!("  {:<12} {:<16} {:<44} {mark}", i.id, i.name, i.summary);
+                }
             }
         }
         Cmd::Install { app } => {
