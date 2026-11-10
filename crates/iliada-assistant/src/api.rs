@@ -45,6 +45,7 @@ pub fn save_key(key: &str) -> Result<()> {
 pub struct Claude {
     http: reqwest::Client,
     key: String,
+    url: String,
     pub model: String,
 }
 
@@ -57,12 +58,17 @@ impl std::fmt::Debug for Claude {
 
 impl Claude {
     pub fn new(key: String, model: String) -> Self {
+        Self::with_url(key, model, URL.into())
+    }
+
+    /// Against another endpoint (tests).
+    pub fn with_url(key: String, model: String, url: String) -> Self {
         let http = reqwest::Client::builder()
             .user_agent(concat!("iliada-assistant/", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(600))
             .build()
             .expect("http client");
-        Claude { http, key, model }
+        Claude { http, key, url, model }
     }
 
     /// One Messages API call. Returns the response object.
@@ -76,7 +82,7 @@ impl Claude {
         });
         let r = self
             .http
-            .post(URL)
+            .post(&self.url)
             .header("x-api-key", &self.key)
             .header("anthropic-version", VERSION)
             .json(&body)

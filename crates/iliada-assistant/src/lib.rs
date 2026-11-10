@@ -74,6 +74,11 @@ impl Assistant {
         })
     }
 
+    /// From parts (tests, other frontends).
+    pub fn with_parts(claude: api::Claude, mode: AssistantMode, store: Store) -> Self {
+        Assistant { claude, mode, store, tools: tools::definitions(), messages: Vec::new() }
+    }
+
     pub fn mode(&self) -> AssistantMode {
         self.mode
     }
@@ -138,6 +143,117 @@ fn text_of(content: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// A stand-in for the Messages API: answers with `replies` in order and
+    /// records each request body.
+    async fn fake_api(replies: Vec<Value>) -> (String, Arc<Mutex<Vec<Value>>>) {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/messages", l.local_addr().unwrap());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let s = seen.clone();
+        tokio::spawn(async move {
+            for reply in replies {
+                let (mut c, _) = l.accept().await.unwrap();
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 8192];
+                let body = loop {
+                    let n = c.read(&mut chunk).await.unwrap();
+                    buf.extend_from_slice(&chunk[..n]);
+                    let text = String::from_utf8_lossy(&buf).to_string();
+                    if let Some(i) = text.find("\r\n\r\n") {
+                        let len: usize = text[..i]
+                            .lines()
+                            .find_map(|l| {
+                                l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse().unwrap())
+                            })
+                            .unwrap_or(0);
+                        if buf.len() >= i + 4 + len {
+                            break buf[i + 4..i + 4 + len].to_vec();
+                        }
+                    }
+                };
+                s.lock().unwrap().push(serde_json::from_slice::<Value>(&body).unwrap());
+                let out = reply.to_string();
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{out}",
+                    out.len()
+                );
+                c.write_all(resp.as_bytes()).await.unwrap();
+            }
+        });
+        (url, seen)
+    }
+
+    struct Decline(Mutex<Vec<String>>);
+    #[async_trait]
+    impl Frontend for Decline {
+        async fn approve(&self, action: &str) -> bool {
+            self.0.lock().unwrap().push(action.to_owned());
+            false
+        }
+        fn progress(&self, _: &str) {}
+    }
+
+    #[tokio::test]
+    async fn tool_loop_keeps_turns_verbatim_and_asks_before_acting() {
+        let first = json!({
+            "stop_reason": "tool_use",
+            "content": [
+                { "type": "thinking", "thinking": "The user wants Firefox.", "signature": "sig-abc" },
+                { "type": "text", "text": "I'll install Firefox." },
+                { "type": "tool_use", "id": "toolu_1", "name": "install_app", "input": { "app": "Firefox" } }
+            ]
+        });
+        let second =
+            json!({ "stop_reason": "end_turn", "content": [ { "type": "text", "text": "Okay, I left it." } ] });
+        let (url, seen) = fake_api(vec![first.clone(), second]).await;
+        let mut cfg = StoreConfig::from_env().unwrap();
+        cfg.catalog = "/nonexistent/catalog.json".into();
+        cfg.apps_dir = std::env::temp_dir().join("iliada-assistant-test-apps");
+        cfg.app_list = None;
+        let store = Store::new(cfg).unwrap();
+        let claude = api::Claude::with_url("sk-test".into(), "claude-opus-5-5".into(), url);
+        let mut a = Assistant::with_parts(claude, AssistantMode::Ask, store);
+        let ui = Decline(Mutex::new(Vec::new()));
+        let answer = a.send("install firefox", &ui).await.unwrap();
+
+        assert_eq!(answer, "Okay, I left it.");
+        assert_eq!(*ui.0.lock().unwrap(), ["Install Firefox"], "asked before acting");
+        let reqs = seen.lock().unwrap();
+        assert_eq!(reqs.len(), 2);
+        assert_eq!(reqs[0]["model"], "claude-opus-5-5");
+        assert!(reqs[0].get("thinking").is_none(), "Opus 5.5 thinks without being told");
+        let msgs = reqs[1]["messages"].as_array().unwrap();
+        assert_eq!(msgs[1]["content"], first["content"], "assistant turn sent back verbatim");
+        let result = &msgs[2]["content"][0];
+        assert_eq!(result["type"], "tool_result");
+        assert_eq!(result["tool_use_id"], "toolu_1");
+        assert_eq!(result["is_error"], true);
+        assert!(result["content"].as_str().unwrap().contains("declined"));
+    }
+
+    #[tokio::test]
+    async fn auto_mode_acts_without_asking_and_reports_failures_as_failures() {
+        let first = json!({ "stop_reason": "tool_use", "content": [
+            { "type": "tool_use", "id": "toolu_9", "name": "install_app", "input": { "app": "Firefox" } } ] });
+        let second = json!({ "stop_reason": "end_turn", "content": [ { "type": "text", "text": "It failed." } ] });
+        let (url, seen) = fake_api(vec![first, second]).await;
+        let mut cfg = StoreConfig::from_env().unwrap();
+        cfg.catalog = "/nonexistent/catalog.json".into();
+        cfg.apps_dir = std::env::temp_dir().join("iliada-assistant-test-apps");
+        cfg.app_list = None;
+        let claude = api::Claude::with_url("sk-test".into(), "claude-opus-5-5".into(), url);
+        let mut a = Assistant::with_parts(claude, AssistantMode::Auto, Store::new(cfg).unwrap());
+        let ui = Decline(Mutex::new(Vec::new()));
+        assert_eq!(a.send("install firefox", &ui).await.unwrap(), "It failed.");
+        assert!(ui.0.lock().unwrap().is_empty(), "auto mode does not ask");
+        let reqs = seen.lock().unwrap();
+        let result = &reqs[1]["messages"][2]["content"][0];
+        assert_eq!(result["is_error"], true);
+        assert!(!result["content"].as_str().unwrap().contains("declined"));
+    }
 
     #[test]
     fn only_text_blocks_are_the_answer() {
