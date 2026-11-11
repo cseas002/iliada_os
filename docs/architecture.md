@@ -267,7 +267,8 @@ then continues the backup's.
 **Next**
 
 1. Test GitHub backup and restore end to end (needs the GitHub OAuth app).
-2. Each release: set `VERSION`, commit, tag `v<version>`, `iliada-catalog release`,
+2. Each release: set `VERSION` and the two Cargo workspace versions, commit, tag
+   `v<version>`, `iliada-catalog release` (it checks all three),
    upload `release.json`, its `.sig` and the source archive to the GitHub release
    (0.2.0 published 2026-11-11). Systems fetch them anonymously, so iliada_os must
    be public for updates to reach them.
