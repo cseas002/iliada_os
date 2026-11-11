@@ -3,12 +3,12 @@
 //! Declaring a capability never grants it; it only allows the app to ask.
 //! Inferring declarations for ingested apps keeps them working (an app that
 //! links PulseAudio will want the microphone) while every actual use still
-//! goes through a user prompt in the broker. The purpose strings say they
-//! were inferred so the prompt is honest about where the claim came from.
+//! goes through a user prompt in the broker. The prompt says plainly that
+//! the app did not give a reason ([`INFERRED_PURPOSE`]).
 
 use std::collections::BTreeSet;
 
-use iliada_bundle::{PermissionRequest, Permissions};
+use iliada_bundle::{INFERRED_PURPOSE, PermissionRequest, Permissions};
 use iliada_types::{Capability, ClipboardAccess, FileScope, LocationPrecision};
 
 const RULES: &[(&str, &[Capability], &str)] = &[
@@ -65,14 +65,11 @@ pub fn infer_permissions<'a>(sonames: impl IntoIterator<Item = &'a str>) -> Perm
     let sonames: BTreeSet<&str> = sonames.into_iter().collect();
     let mut seen = BTreeSet::new();
     let mut requests = Vec::new();
-    for (prefix, caps, why) in RULES {
+    for (prefix, caps, _what) in RULES {
         if sonames.iter().any(|s| s.starts_with(prefix)) {
             for cap in *caps {
                 if seen.insert(*cap) {
-                    requests.push(PermissionRequest {
-                        capability: *cap,
-                        purpose: format!("Inferred: the app links a {why} library and may ask to {cap}."),
-                    });
+                    requests.push(PermissionRequest { capability: *cap, purpose: INFERRED_PURPOSE.into() });
                 }
             }
         }

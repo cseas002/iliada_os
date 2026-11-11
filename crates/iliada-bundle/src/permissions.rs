@@ -64,6 +64,18 @@ pub struct PermissionRequest {
     pub purpose: String,
 }
 
+/// The reason shown for a permission Iliada worked out from what an app is
+/// built with, rather than one its maker wrote.
+pub const INFERRED_PURPOSE: &str = "The app is able to use this but didn't say why.";
+
+impl PermissionRequest {
+    /// The reason as it should be shown to people. Apps packaged before
+    /// 0.2.1 carry a technical note ("Inferred: the app links …") instead.
+    pub fn shown_purpose(&self) -> &str {
+        if self.purpose.starts_with("Inferred:") { INFERRED_PURPOSE } else { &self.purpose }
+    }
+}
+
 impl Permissions {
     /// The declared request that covers `requested`, if any.
     pub fn declaration_for(&self, requested: &Capability) -> Option<&PermissionRequest> {
@@ -91,6 +103,17 @@ impl Permissions {
 mod tests {
     use super::*;
     use iliada_types::{FileScope, LocationPrecision};
+
+    #[test]
+    fn old_technical_reasons_are_shown_plainly() {
+        let old = PermissionRequest {
+            capability: Capability::Microphone,
+            purpose: "Inferred: the app links a audio (ALSA) library and may ask to use your microphone.".into(),
+        };
+        assert_eq!(old.shown_purpose(), INFERRED_PURPOSE);
+        let own = PermissionRequest { capability: Capability::Microphone, purpose: "To record your voice.".into() };
+        assert_eq!(own.shown_purpose(), "To record your voice.");
+    }
 
     #[test]
     fn capabilities_from_newer_iliada_are_skipped() {

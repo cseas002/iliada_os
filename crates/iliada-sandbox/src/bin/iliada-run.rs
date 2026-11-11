@@ -100,7 +100,7 @@ fn ask(bundle: &Bundle, req: &PermissionRequest) -> Option<Decision> {
         _ => {}
     }
     let mut cmd = std::process::Command::new("iliada-prompt");
-    cmd.args(["--app", &bundle.info.name, "--wants", &req.capability.to_string(), "--purpose", &req.purpose]);
+    cmd.args(["--app", &bundle.info.name, "--wants", &req.capability.to_string(), "--purpose", req.shown_purpose()]);
     if let Some(icon) = &bundle.info.icon {
         cmd.arg("--icon").arg(bundle.layout.contents().join(icon));
     }

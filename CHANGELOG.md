@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Permission prompts say "The app is able to use this but didn't say why" when the app
+  gave no reason (they showed a technical note about libraries).
+
 ## 0.2.0 (2026-11-11)
 
 **No terminal, no sudo.**

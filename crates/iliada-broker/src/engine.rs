@@ -92,7 +92,7 @@ impl Engine {
             app_id: app.id.clone(),
             app_name: sanitize_untrusted(&app.name, 64),
             capability: *cap,
-            declared_purpose: decl.purpose.clone(),
+            declared_purpose: decl.shown_purpose().to_owned(),
             app_reason: app_reason.map(|r| sanitize_untrusted(r, 200)),
         };
         Ok(match self.frontend.ask(&req).await {

@@ -27,5 +27,5 @@ mod provenance;
 pub use error::BundleError;
 pub use info::{Info, IsolationTier};
 pub use layout::{Bundle, BundleLayout};
-pub use permissions::{PermissionRequest, Permissions};
+pub use permissions::{INFERRED_PURPOSE, PermissionRequest, Permissions};
 pub use provenance::{LibraryRecord, PackageRecord, PackageRole, Provenance, ResolutionStatus, SourceRecord};
