@@ -233,7 +233,7 @@ justification, runtime base), validated by the same Rust types.
 | GitHub backup and restore | built; needs a GitHub OAuth app to test |
 | Assistant (Ask / Auto, Settings → Assistant, `iliada ask`, the Assistant app) | live-tested in the x86 VM with DeepSeek V4 Flash (OpenRouter): app install, dark/light, volume, commands, email (local mail server; approval and decline), a prompt-injected file not obeyed; Settings → Assistant and the app clicked through |
 | Store: Software and Services (not apps) | built |
-| Iliada updates (signed release manifest) | validated privately: an installed test VM found a locally served, signed 0.2.0, installed it from Settings → Updates, reported 0.2.0 after the restart and then "up to date"; needs a public release. The service restarting itself after an apply that changes its own settings (found here) is built, not yet re-tested |
+| Iliada updates (signed release manifest) | validated privately: an installed test VM found a locally served, signed 0.2.0, installed it from Settings → Updates, reported 0.2.0 after the restart and then "up to date"; 0.2.0 is published (reachable once the repository is public). The service restarting itself after an apply that changes its own settings (found here) is built, not yet re-tested |
 | Graphical installer, `iliada-install`, config template | built; the script's end-to-end install test passes |
 | Ready-to-run VM image (UTM on Apple Silicon, QEMU) | x86 validated; ARM image boots (emulated here) and runs the ARM apps once the sandbox group fix is in |
 | Rust userland (uutils, sudo-rs, ntpd-rs, fish) | done |
@@ -267,11 +267,13 @@ then continues the backup's.
 **Next**
 
 1. Test GitHub backup and restore end to end (needs the GitHub OAuth app).
-2. Publish a signed Iliada release so updates work: set `VERSION`, commit,
-   `iliada-catalog release` (it refuses a version the source does not declare).
+2. Each release: set `VERSION`, commit, tag `v<version>`, `iliada-catalog release`,
+   upload `release.json`, its `.sig` and the source archive to the GitHub release
+   (0.2.0 published 2026-11-11). Systems fetch them anonymously, so iliada_os must
+   be public for updates to reach them.
 3. LibreOffice Writer on ARM (its ARM build stops at start-up with a UNO
    exception; the x86-64 build works).
-4. The Assistant as a keyboard-first panel (a shortcut from anywhere).
+4. The Assistant panel: frosted glass, answers that appear as they are written.
 
 **Later**
 

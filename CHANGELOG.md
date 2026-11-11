@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (in progress)
+## 0.2.0 (2026-11-11)
 
 **No terminal, no sudo.**
 - **Iliada system service** (`iliada-systemd`): the one thing that changes
@@ -50,7 +50,8 @@
   it one by one, like outside a VM.
 
 **The assistant.**
-- Ask Iliada in plain words (Assistant app, `iliada ask`). **Ask** mode
+- Ask Iliada in plain words: press **Alt+Space** anywhere for the "Ask
+  Iliada…" panel (or open the Assistant app, or `iliada ask`). **Ask** mode
   approves every action; **Auto** mode acts on its own. Claude (Opus 5.5 by
   default) or any OpenRouter model, such as DeepSeek V4 Flash at a fraction
   of a cent per request; what it has cost is shown in Settings. Every action
@@ -63,6 +64,9 @@
   you when a file tried.
 
 **For testers and developers.**
+- Everyday command-line tools on every system: lspci, lsusb, sensors, dig,
+  traceroute, ifconfig, lsof, killall, jq, vim, git, tmux, ripgrep, tldr and
+  more (`iliada.baseTools`), next to lscpu, ip and the other basics.
 - The Iliada logo: a Greek helmet with a horsehair crest, shown by
   `fastfetch` (and `neofetch`).
 - Ready-to-run VM images (UTM on Apple Silicon, QEMU) that set up

@@ -2,7 +2,7 @@
 
 rustPlatform.buildRustPackage {
   pname = "iliada-tools";
-  version = "0.1.0";
+  version = lib.trim (builtins.readFile ../VERSION);
 
   src = lib.fileset.toSource {
     root = ../.;

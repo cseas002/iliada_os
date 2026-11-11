@@ -17,7 +17,8 @@ in
     enable = lib.mkEnableOption "the immutable Iliada appliance image";
     version = lib.mkOption {
       type = lib.types.str;
-      default = "0.1.0";
+      default = config.iliada.version;
+      defaultText = lib.literalExpression "config.iliada.version";
       description = "Image version; sysupdate compares it to pick the newest slot.";
     };
     updateUrl = lib.mkOption {
