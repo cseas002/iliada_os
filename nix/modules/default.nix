@@ -7,6 +7,7 @@
 #   iliada.desktop       COSMIC desktop
 #   iliada.workstation   networking, audio, bluetooth, firmware, boot loader
 #   iliada.rustUserland  Rust coreutils, sudo-rs, ntpd-rs, fish
+#   iliada.baseTools     everyday command-line tools (lspci, dig, lsof, jq, …)
 #   iliada.settingsFile  settings.toml: command-line tools, services
 #   iliada.store         the Store catalog and automatic app updates
 #   iliada.system        the system service: tools, services, updates, backups
@@ -21,6 +22,7 @@
     ./desktop.nix
     ./workstation.nix
     ./rust-userland.nix
+    ./base-tools.nix
     ./settings.nix
     ./store.nix
     ./system.nix

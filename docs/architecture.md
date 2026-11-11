@@ -237,6 +237,7 @@ justification, runtime base), validated by the same Rust types.
 | Graphical installer, `iliada-install`, config template | built; the script's end-to-end install test passes |
 | Ready-to-run VM image (UTM on Apple Silicon, QEMU) | x86 validated; ARM image boots (emulated here) and runs the ARM apps once the sandbox group fix is in |
 | Rust userland (uutils, sudo-rs, ntpd-rs, fish) | done |
+| Everyday command-line tools (`iliada.baseTools`: lspci, lsusb, dig, traceroute, ifconfig, lsof, killall, jq, vim, git, tmux, ripgrep, …) | done: every tool runs in the dev VM |
 | Immutable appliance image | evaluates; build and boot not yet tested |
 
 ## 8b. The user layer: no terminal, configuration that follows you
