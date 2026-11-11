@@ -389,17 +389,30 @@ async fn main() -> Result<()> {
 
 fn release(source: &Path, version: &str, key: &Path, out: &Path, base_url: &str) -> Result<()> {
     let sk = iliada_catalog::parse_signing_key(&fs::read_to_string(key)?)?;
+    let committed = |file: &str| -> Result<String> {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(source)
+            .args(["show", &format!("HEAD:{file}")])
+            .output()
+            .context("running git show")?;
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    };
     // Systems learn their version from the source's VERSION: a release whose
     // source says otherwise would be offered again and again after installing.
-    let declared = std::process::Command::new("git")
-        .arg("-C")
-        .arg(source)
-        .args(["show", "HEAD:VERSION"])
-        .output()
-        .context("running git show")?;
-    let declared = String::from_utf8_lossy(&declared.stdout).trim().to_owned();
+    let declared = committed("VERSION")?.trim().to_owned();
     if declared != version {
         bail!("the source's committed VERSION is {declared:?}, not {version:?}: change VERSION and commit first");
+    }
+    // The programs report their Cargo version (`iliada --version`).
+    for manifest in ["Cargo.toml", "apps/Cargo.toml"] {
+        let text = committed(manifest)?;
+        let cargo = toml::from_str::<toml::Value>(&text)
+            .ok()
+            .and_then(|v| v.get("workspace")?.get("package")?.get("version")?.as_str().map(str::to_owned));
+        if cargo.as_deref() != Some(version) {
+            bail!("the committed {manifest} declares version {cargo:?}, not {version:?}: change it and commit first");
+        }
     }
     fs::create_dir_all(out)?;
     // Committed files only, under one folder.
