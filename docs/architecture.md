@@ -233,8 +233,8 @@ justification, runtime base), validated by the same Rust types.
 | GitHub backup and restore | built; needs a GitHub OAuth app to test |
 | Assistant (Ask / Auto, Settings → Assistant, `iliada ask`, the Assistant app) | live-tested in the x86 VM with DeepSeek V4 Flash (OpenRouter): app install, dark/light, volume, commands, email (local mail server; approval and decline), a prompt-injected file not obeyed; Settings → Assistant and the app clicked through |
 | Store: Software and Services (not apps) | built |
-| Iliada updates (signed release manifest) | validated privately: an installed test VM found a locally served, signed 0.2.0, installed it from Settings → Updates, reported 0.2.0 after the restart and then "up to date"; 0.2.0 is published (reachable once the repository is public). The service restarting itself after an apply that changes its own settings (found here) is built, not yet re-tested |
-| Graphical installer, `iliada-install`, config template | built; the script's end-to-end install test passes |
+| Iliada updates (signed release manifest) | validated privately: an installed test VM found a locally served, signed 0.2.0, installed it from Settings → Updates, reported 0.2.0 after the restart and then "up to date"; 0.2.0 is published: a fresh 0.2.0 install checks GitHub from Settings → Updates and reports "up to date". The service restarts itself after an apply that changes its own settings (verified on the installed 0.2.0: restarted 5 s after the apply, with the new update address) |
+| Graphical installer, `iliada-install`, config template | built; the script's end-to-end install test passes (0.2.0 ISO, 2026-11-11: installed system boots, Setup Assistant, Settings, SSH from Settings, Store install of Audacity with its permission prompt, Alt+Space all checked by hand) |
 | Ready-to-run VM image (UTM on Apple Silicon, QEMU) | x86 validated; ARM image boots (emulated here) and runs the ARM apps once the sandbox group fix is in |
 | Rust userland (uutils, sudo-rs, ntpd-rs, fish) | done |
 | Everyday command-line tools (`iliada.baseTools`: lspci, lsusb, dig, traceroute, ifconfig, lsof, killall, jq, vim, git, tmux, ripgrep, …) | done: every tool runs in the dev VM |
@@ -270,8 +270,8 @@ then continues the backup's.
 2. Each release: set `VERSION` and the two Cargo workspace versions, commit, tag
    `v<version>`, `iliada-catalog release` (it checks all three),
    upload `release.json`, its `.sig` and the source archive to the GitHub release
-   (0.2.0 published 2026-11-11). Systems fetch them anonymously, so iliada_os must
-   be public for updates to reach them.
+   (0.2.0 published 2026-11-11). Systems fetch them anonymously from the public
+   repository.
 3. LibreOffice Writer on ARM (its ARM build stops at start-up with a UNO
    exception; the x86-64 build works).
 4. The Assistant panel: frosted glass, answers that appear as they are written.
