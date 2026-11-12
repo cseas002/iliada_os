@@ -70,6 +70,24 @@ enum Cmd {
         #[arg(required = true)]
         catalogs: Vec<PathBuf>,
     },
+    /// Write recipes for the most used Debian desktop apps that have none
+    /// yet (Debian's AppStream list and popularity contest). Prints the new
+    /// recipes' names, one per line.
+    Suggest {
+        #[arg(long)]
+        recipes: PathBuf,
+        /// Debian's Components-<arch>.yml (DEP-11), uncompressed.
+        #[arg(long)]
+        apps: PathBuf,
+        /// popcon.debian.org/by_inst, uncompressed.
+        #[arg(long)]
+        popcon: PathBuf,
+        /// Packages tried before that didn't work (one per line, `#` comments).
+        #[arg(long)]
+        rejected: Option<PathBuf>,
+        #[arg(long, default_value_t = 5)]
+        count: usize,
+    },
     /// Package an Iliada release: the committed source tree as
     /// iliada-<version>-source.tar.zst, and a signed release.json naming it.
     /// Upload both (and release.json.sig) to the GitHub release v<version>.
@@ -352,6 +370,34 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
     match Cli::parse().cmd {
+        Cmd::Suggest { recipes, apps, popcon, rejected, count } => {
+            let apps = iliada_ingest::appstream::parse(&fs::read_to_string(&apps)?);
+            let users = iliada_catalog::suggest::popcon(&fs::read_to_string(&popcon)?);
+            let mut skip = std::collections::HashSet::new();
+            for e in fs::read_dir(&recipes)?.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "toml")) {
+                let r: Recipe = toml::from_str(&fs::read_to_string(e.path())?)
+                    .with_context(|| format!("reading {}", e.path().display()))?;
+                skip.insert(r.source.debian);
+            }
+            if let Some(p) = rejected {
+                let text = fs::read_to_string(p).unwrap_or_default();
+                skip.extend(
+                    text.lines()
+                        .filter_map(|l| l.split('#').next())
+                        .map(str::trim)
+                        .filter(|l| !l.is_empty())
+                        .map(str::to_owned),
+                );
+            }
+            for (stem, recipe) in iliada_catalog::suggest::suggest(&apps, &users, &skip, count) {
+                let path = recipes.join(format!("{stem}.toml"));
+                if path.exists() {
+                    continue;
+                }
+                fs::write(&path, recipe)?;
+                println!("{stem}");
+            }
+        }
         Cmd::Keygen { out } => {
             fs::create_dir_all(&out)?;
             let (key, public) = (out.join("catalog.key"), out.join("catalog.pub"));

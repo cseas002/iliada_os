@@ -5,6 +5,9 @@
 //! archive is authenticated by the SHA-256 recorded in the signed catalog.
 //! The public key is built into Iliada. See `iliada_apps/CATALOG.md`.
 
+#[cfg(feature = "builder")]
+pub mod suggest;
+
 use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
