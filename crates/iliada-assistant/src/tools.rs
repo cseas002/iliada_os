@@ -35,7 +35,7 @@ pub fn all() -> Vec<Tool> {
     vec![
         Tool {
             name: "get_status",
-            description: "This computer: Iliada version and update state, command-line tools, services (on/off), backup state, and whether the user is an administrator.",
+            description: "This computer now: Iliada version and update state, command-line tools, services (on/off), backup state, whether the user is an administrator, and the desktop (dark or light appearance, volume).",
             schema: none(),
             acts: false,
             full_access: false,
@@ -94,6 +94,13 @@ pub fn all() -> Vec<Tool> {
             description: "Uninstall command-line tools. Rebuilds the system.",
             schema: obj(json!({ "packages": { "type": "array", "items": { "type": "string" } } }), &["packages"]),
             acts: true,
+            full_access: false,
+        },
+        Tool {
+            name: "recent_changes",
+            description: "What changed on this computer recently, newest first: every change to its configuration (apps, software, services, settings, updates; made in Settings, the Store, the terminal or by you), and the actions you took for this person (including ones they undid). Use it for \"what changed?\" and \"why is X different?\".",
+            schema: none(),
+            acts: false,
             full_access: false,
         },
         Tool {
@@ -248,6 +255,62 @@ fn list(input: &Value, k: &str) -> Vec<String> {
     input[k].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()).unwrap_or_default()
 }
 
+/// The desktop as it is now: dark or light, and the volume.
+async fn desktop_state() -> Value {
+    let dark = config_home()
+        .ok()
+        .and_then(|h| std::fs::read_to_string(h.join("cosmic/com.system76.CosmicTheme.Mode/v1/is_dark")).ok())
+        // COSMIC starts dark when nothing is set.
+        .is_none_or(|s| s.trim() != "false");
+    let mut v = json!({ "appearance": if dark { "dark" } else { "light" } });
+    // "Volume: 0.40" or "Volume: 0.40 [MUTED]".
+    if let Ok(out) = tokio::process::Command::new("wpctl").args(["get-volume", "@DEFAULT_AUDIO_SINK@"]).output().await {
+        let text = String::from_utf8_lossy(&out.stdout);
+        if let Some(level) = text.split_whitespace().nth(1).and_then(|n| n.parse::<f64>().ok()) {
+            v["volume_percent"] = json!((level * 100.0).round() as u64);
+            v["muted"] = json!(text.contains("MUTED"));
+        }
+    }
+    v
+}
+
+/// What an action changes ("app:vlc", "appearance"): two actions with the
+/// same target change the same thing, so only the later can be undone.
+pub fn target(name: &str, input: &Value) -> Option<String> {
+    Some(match name {
+        "install_app" | "remove_app" => format!("app:{}", s(input, "app").to_lowercase()),
+        "add_tools" | "remove_tools" => {
+            let mut p = list(input, "packages");
+            p.sort();
+            format!("tools:{}", p.join(","))
+        }
+        "set_service" => format!("service:{}", s(input, "name")),
+        "set_permission" => format!("permission:{}:{}", s(input, "app"), s(input, "permission")),
+        "set_appearance" => "appearance".into(),
+        _ => return None,
+    })
+}
+
+/// The action that reverses `name` with `input`, when there is one: what
+/// an Undo button runs.
+pub fn undo(name: &str, input: &Value) -> Option<(&'static str, Value)> {
+    let flip = |k: &str| {
+        let mut i = input.clone();
+        i[k] = Value::Bool(input[k].as_bool() != Some(true));
+        i
+    };
+    Some(match name {
+        "install_app" => ("remove_app", input.clone()),
+        "remove_app" => ("install_app", input.clone()),
+        "add_tools" => ("remove_tools", input.clone()),
+        "remove_tools" => ("add_tools", input.clone()),
+        "set_service" => ("set_service", flip("on")),
+        "set_permission" => ("set_permission", flip("allow")),
+        "set_appearance" => ("set_appearance", flip("dark")),
+        _ => return None,
+    })
+}
+
 /// How an action reads in an approval prompt.
 pub fn describe(name: &str, input: &Value) -> String {
     match name {
@@ -320,7 +383,11 @@ async fn system(request: Request) -> Result<Value> {
 /// Run one tool; the result is text for the model.
 pub async fn run(store: &Store, name: &str, input: &Value) -> Result<String> {
     let out: Value = match name {
-        "get_status" => serde_json::to_value(client::status().await?)?,
+        "get_status" => {
+            let mut v = serde_json::to_value(client::status().await?)?;
+            v["desktop"] = desktop_state().await;
+            v
+        }
         "search_store" => {
             let q = s(input, "query").to_lowercase();
             let installed = store.installed();
@@ -391,6 +458,25 @@ pub async fn run(store: &Store, name: &str, input: &Value) -> Result<String> {
         "set_service" => {
             let on = input["on"].as_bool().context("\"on\" must be true or false")?;
             system(Request::SetService { name: s(input, "name").to_owned(), on }).await?
+        }
+        "recent_changes" => {
+            let fmt = |t: u64| {
+                let secs = crate::history::now().saturating_sub(t);
+                match secs {
+                    s if s < 3600 => format!("{} minutes ago", s / 60),
+                    s if s < 48 * 3600 => format!("{} hours ago", s / 3600),
+                    s => format!("{} days ago", s / 86400),
+                }
+            };
+            let changes = match tokio::task::spawn_blocking(|| iliada_system::changes(25)).await {
+                Ok(Ok(c)) => c.into_iter().map(|c| json!({ "when": fmt(c.time), "change": c.what })).collect(),
+                _ => Vec::new(),
+            };
+            let actions: Vec<Value> = crate::activity(25)
+                .into_iter()
+                .map(|a| json!({ "when": fmt(a.time), "action": a.action.lines().next().unwrap_or(""), "outcome": a.outcome }))
+                .collect();
+            json!({ "configuration_changes": changes, "assistant_actions": actions })
         }
         "list_software" => {
             use iliada_system::software::{CATALOG, Kind};
@@ -570,6 +656,25 @@ pub async fn run_command(command: &str, timeout: std::time::Duration) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reversible_actions_have_an_undo() {
+        assert_eq!(undo("install_app", &json!({ "app": "vlc" })), Some(("remove_app", json!({ "app": "vlc" }))));
+        assert_eq!(
+            undo("set_service", &json!({ "name": "ssh", "on": true })),
+            Some(("set_service", json!({ "name": "ssh", "on": false })))
+        );
+        assert_eq!(
+            undo("set_appearance", &json!({ "dark": false })),
+            Some(("set_appearance", json!({ "dark": true })))
+        );
+        assert_eq!(undo("send_email", &json!({})), None);
+        assert_eq!(undo("run_command", &json!({})), None);
+        for (name, input) in
+            [("remove_tools", json!({ "packages": ["jq"] })), ("set_permission", json!({ "allow": true }))]
+        {
+            assert!(acts(undo(name, &input).unwrap().0));
+        }
+    }
 
     #[tokio::test]
     async fn commands_report_exit_status_and_output_and_stop_on_time() {

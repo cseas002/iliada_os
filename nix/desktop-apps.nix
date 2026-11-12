@@ -36,6 +36,12 @@ rustPlatform.buildRustPackage {
   doCheck = false;
 
   postInstall = ''
+    # Alt+Space: the assistant's quick panel.
+    cat > $out/bin/iliada-ask <<EOS
+    #!/bin/sh
+    exec $out/bin/iliada-assistant-app --panel "\$@"
+    EOS
+    chmod +x $out/bin/iliada-ask
     install -Dm644 -t $out/share/applications \
       apps/iliada-store-gui/res/org.iliada.Store.desktop \
       apps/iliada-settings/res/org.iliada.Settings.desktop \

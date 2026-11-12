@@ -72,13 +72,13 @@ in
             "com.system76.CosmicSettings",
         ]
         EOF
-        # Alt+Space opens the Assistant from anywhere (Super+Space stays the
+        # Alt+Space opens the assistant's quick panel from anywhere (Super+Space stays the
         # keyboard-layout switch).
         keys=$out/share/cosmic/com.system76.CosmicSettings.Shortcuts/v1
         mkdir -p $keys
         cat > $keys/custom <<'EOF'
         {
-            (modifiers: [Alt], key: "space"): Spawn("iliada-assistant-app"),
+            (modifiers: [Alt], key: "space"): Spawn("iliada-ask"),
         }
         EOF
         # Frosted glass: windows, the panel and dock, their menus and the

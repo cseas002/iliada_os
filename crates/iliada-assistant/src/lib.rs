@@ -14,6 +14,7 @@
 
 pub mod api;
 pub mod email;
+pub mod history;
 pub mod tools;
 
 use anyhow::{Context, Result};
@@ -30,7 +31,9 @@ You help the person using this computer by doing things for them with the tools 
 installing, opening and removing apps from the Iliada Store, installing command-line software \
 (Python, Node.js, …), turning background services (SSH server, printing, nginx, databases, …) on and off, updating apps and Iliada, backing up, \
 changing app permissions, switching dark or light appearance, the volume, opening links, and sending email \
-from their own account (they see each email before it goes).";
+from their own account (they see each email before it goes). \
+This computer runs Iliada: Linux with the COSMIC desktop, not macOS, Windows or GNOME. get_status shows its \
+current state, including dark or light appearance and the volume: use it before trying commands.";
 
 const LIMITED: &str =
     "Those tools are all you can do; you cannot run commands, read or change files, or browse the web.";
@@ -90,6 +93,8 @@ pub struct Assistant {
     log: Option<std::path::PathBuf>,
     /// Where the running total of what the assistant cost is kept.
     spend_file: Option<std::path::PathBuf>,
+    /// The saved conversation this is (for the activity log).
+    conversation: Option<String>,
 }
 
 impl Assistant {
@@ -130,11 +135,40 @@ impl Assistant {
             spent: 0.0,
             log: None,
             spend_file: None,
+            conversation: None,
         }
     }
 
     pub fn mode(&self) -> AssistantMode {
         self.mode
+    }
+
+    /// Which saved conversation this is: its actions are logged with it.
+    pub fn set_conversation(&mut self, id: &str) {
+        self.conversation = Some(id.to_owned());
+    }
+
+    /// The conversation so far, as the model sees it (to save it).
+    pub fn messages(&self) -> &[Value] {
+        &self.messages
+    }
+
+    /// Continues a saved conversation. Saved with another provider's model:
+    /// only the words are kept (its thinking and tool calls are that
+    /// provider's own).
+    pub fn restore(&mut self, messages: Vec<Value>, saved_with: &str) {
+        let same = api::Provider::of(saved_with) == api::Provider::of(&self.api.model);
+        self.messages = if same { messages } else { history::portable(&messages) };
+        // A conversation cut off in the middle of an action can't continue
+        // from there: it continues from the last full answer.
+        while let Some(last) = self.messages.last() {
+            let ends_well = last["role"] == "assistant"
+                && last["content"].as_array().is_none_or(|blocks| !blocks.iter().any(|b| b["type"] == "tool_use"));
+            if ends_well {
+                break;
+            }
+            self.messages.pop();
+        }
     }
 
     /// What this conversation has cost (US dollars; 0 when the provider
@@ -181,7 +215,15 @@ impl Assistant {
                     let action = tools::describe(name, input);
                     let ask = self.mode == AssistantMode::Ask || tools::always_asks(name);
                     if ask && !ui.approve(&action).await {
-                        audit(self.log.as_deref(), &self.api.model, self.mode, name, input, "declined");
+                        audit(
+                            self.log.as_deref(),
+                            &self.api.model,
+                            self.mode,
+                            self.conversation.as_deref(),
+                            name,
+                            input,
+                            "declined",
+                        );
                         Err(anyhow::anyhow!("the person declined: {action}"))
                     } else {
                         ui.progress(&format!("{action}…"));
@@ -190,6 +232,7 @@ impl Assistant {
                             self.log.as_deref(),
                             &self.api.model,
                             self.mode,
+                            self.conversation.as_deref(),
                             name,
                             input,
                             if r.is_ok() { "done" } else { "failed" },
@@ -232,7 +275,7 @@ fn sender_note(account: &email::EmailAccount) -> String {
 }
 
 /// `~/.local/share/iliada/<name>`.
-fn data_path(name: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn data_path(name: &str) -> Option<std::path::PathBuf> {
     let base = match std::env::var_os("XDG_DATA_HOME") {
         Some(x) => std::path::PathBuf::from(x),
         None => std::path::PathBuf::from(std::env::var_os("HOME")?).join(".local/share"),
@@ -254,15 +297,111 @@ pub fn total_spent() -> f64 {
     data_path("assistant-spend.json").map(|p| total_spent_at(&p)).unwrap_or(0.0)
 }
 
+/// One action from the log, for the Activity page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Activity {
+    /// Seconds since the Unix epoch.
+    pub time: u64,
+    pub tool: String,
+    pub input: Value,
+    /// "done", "failed", "declined", or "undone" (by its Undo).
+    pub outcome: String,
+    pub conversation: Option<String>,
+    /// How it reads ("Install Firefox").
+    pub action: String,
+    /// It can be undone (it was done, and not undone yet).
+    pub can_undo: bool,
+}
+
+/// What the assistant did (newest first), from the action log.
+pub fn activity(limit: usize) -> Vec<Activity> {
+    data_path("assistant-log.jsonl").map(|p| activity_at(&p, limit)).unwrap_or_default()
+}
+
+fn activity_at(path: &std::path::Path, limit: usize) -> Vec<Activity> {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let entries: Vec<Value> = text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+    // An undo is logged as its own entry pointing at the time of what it undid.
+    let undone: std::collections::HashSet<(u64, String)> = entries
+        .iter()
+        .filter(|e| e["outcome"] == "undo")
+        .map(|e| (e["undoes"].as_u64().unwrap_or(0), e["undoes_tool"].as_str().unwrap_or("").to_owned()))
+        .collect();
+    // Only the latest change to a thing can be undone: undoing an older one
+    // ("dark" before "light") would surprise.
+    let mut changed_later = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for e in entries.iter().rev() {
+        let tool = e["tool"].as_str().unwrap_or("").to_owned();
+        let target = tools::target(&tool, &e["input"]);
+        let outcome = e["outcome"].as_str().unwrap_or("");
+        let latest = match &target {
+            Some(t) if matches!(outcome, "done" | "undo") => changed_later.insert(t.clone()),
+            _ => false,
+        };
+        if outcome == "undo" || out.len() >= limit {
+            continue;
+        }
+        let time = e["time"].as_u64().unwrap_or(0);
+        let outcome = if undone.contains(&(time, tool.clone())) { "undone".to_owned() } else { outcome.to_owned() };
+        out.push(Activity {
+            action: tools::describe(&tool, &e["input"]),
+            can_undo: outcome == "done" && latest && tools::undo(&tool, &e["input"]).is_some(),
+            conversation: e["conversation"].as_str().map(str::to_owned),
+            time,
+            tool,
+            input: e["input"].clone(),
+            outcome,
+        });
+    }
+    out
+}
+
+/// Reverses an action from the Activity page (the person pressed Undo:
+/// no model is involved). Returns how the undo reads ("Remove Firefox").
+pub async fn undo(a: &Activity) -> Result<String> {
+    let (tool, input) = tools::undo(&a.tool, &a.input).context("this can't be undone")?;
+    let store = Store::new(StoreConfig::from_env()?)?;
+    tools::run(&store, tool, &input).await?;
+    if let Some(p) = data_path("assistant-log.jsonl") {
+        use std::io::Write;
+        let line = json!({ "time": history::now(), "tool": tool, "input": input, "outcome": "undo",
+                           "undoes": a.time, "undoes_tool": a.tool });
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+            let _ = writeln!(f, "{line}");
+        }
+    }
+    // The conversation it came from learns of it (and so does its model,
+    // with the next question).
+    if let Some(id) = &a.conversation
+        && let Ok(mut c) = history::Conversation::load(id)
+    {
+        let what = a.action.lines().next().unwrap_or("").to_owned();
+        c.lines.push(history::Line::new(history::LineKind::Note, format!("You undid this from Activity: {what}")));
+        c.pending.push(format!("I undid \"{what}\" from the Activity page"));
+        let _ = c.save();
+    }
+    Ok(tools::describe(tool, &input))
+}
+
 /// Every action the assistant takes (or was refused) is appended to the log.
-fn audit(path: Option<&std::path::Path>, model: &str, mode: AssistantMode, tool: &str, input: &Value, outcome: &str) {
+fn audit(
+    path: Option<&std::path::Path>,
+    model: &str,
+    mode: AssistantMode,
+    conversation: Option<&str>,
+    tool: &str,
+    input: &Value,
+    outcome: &str,
+) {
     use std::io::Write;
     let Some(path) = path else { return };
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let line = json!({ "time": time, "model": model, "mode": mode, "tool": tool, "input": input, "outcome": outcome });
+    let line = json!({ "time": time, "model": model, "mode": mode, "conversation": conversation,
+                       "tool": tool, "input": input, "outcome": outcome });
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "{line}");
     }
@@ -286,6 +425,44 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn only_the_latest_change_to_a_thing_can_be_undone() {
+        let p = std::env::temp_dir().join(format!("iliada-activity2-{}.jsonl", std::process::id()));
+        let lines = [
+            json!({ "time": 1, "tool": "set_appearance", "input": { "dark": true }, "outcome": "done" }),
+            json!({ "time": 2, "tool": "install_app", "input": { "app": "vlc" }, "outcome": "done" }),
+            json!({ "time": 3, "tool": "set_appearance", "input": { "dark": false }, "outcome": "done" }),
+        ];
+        std::fs::write(&p, lines.iter().map(|l| l.to_string() + "\n").collect::<String>()).unwrap();
+        let a = activity_at(&p, 10);
+        std::fs::remove_file(&p).unwrap();
+        assert!(a[0].can_undo, "light, the latest appearance change");
+        assert!(a[1].can_undo, "vlc");
+        assert!(!a[2].can_undo, "dark was changed since");
+    }
+
+    #[test]
+    fn activity_lists_actions_newest_first_and_marks_undone_ones() {
+        let p = std::env::temp_dir().join(format!("iliada-activity-{}.jsonl", std::process::id()));
+        let lines = [
+            json!({ "time": 10, "tool": "install_app", "input": { "app": "vlc" }, "outcome": "done", "conversation": "c1" }),
+            json!({ "time": 20, "tool": "set_service", "input": { "name": "ssh", "on": true }, "outcome": "done" }),
+            json!({ "time": 25, "tool": "send_email", "input": { "to": ["a@b"], "subject": "s", "body": "b" }, "outcome": "declined" }),
+            json!({ "time": 30, "tool": "remove_app", "input": { "app": "vlc" }, "outcome": "undo", "undoes": 10, "undoes_tool": "install_app" }),
+        ];
+        std::fs::write(&p, lines.iter().map(|l| l.to_string() + "\n").collect::<String>()).unwrap();
+        let a = activity_at(&p, 10);
+        std::fs::remove_file(&p).unwrap();
+        assert_eq!(a.len(), 3);
+        assert_eq!(a[0].tool, "send_email");
+        assert!(!a[0].can_undo);
+        assert_eq!(a[1].action, "Turn on SSH server");
+        assert!(a[1].can_undo);
+        assert_eq!(a[2].outcome, "undone");
+        assert!(!a[2].can_undo);
+        assert_eq!(a[2].conversation.as_deref(), Some("c1"));
+    }
 
     /// A stand-in for the Messages API: answers with `replies` in order and
     /// records each request body.
