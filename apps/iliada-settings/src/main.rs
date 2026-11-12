@@ -11,12 +11,15 @@ use futures_util::StreamExt;
 use iliada_bundle::decisions::{Decision, Decisions};
 use iliada_settings::{Progress, ago, open_url, run};
 use iliada_system::client;
-use iliada_system::protocol::{AssistantMode, AssistantSettings, Backup, Event, Provider, Request, Status};
+use iliada_system::protocol::{AssistantMode, AssistantSettings, Backup, Event, Provider, Request, Status, model_name};
 
 /// Models offered in Settings (the first is the default). Claude models use
 /// an Anthropic key; "vendor/model" ones an OpenRouter key.
 const MODELS: [&str; 5] =
     ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5", "deepseek/deepseek-v4-flash"];
+/// The models as people read them, in the same order.
+static MODEL_NAMES: std::sync::LazyLock<Vec<String>> =
+    std::sync::LazyLock::new(|| MODELS.iter().map(|m| model_name(m)).collect());
 use iliada_assistant::email::{EmailAccount, Security};
 use iliada_types::{Capability, FileScope};
 
@@ -569,7 +572,7 @@ impl App {
                 ));
             if a.mode == AssistantMode::Auto && !a.recommended_for_auto() {
                 modes = modes.add(info(
-                    format!("{} may make more mistakes on its own", a.model),
+                    format!("{} may make more mistakes on its own", model_name(&a.model)),
                     Some("Opus, Fable and Sonnet are the most careful. Every action is recorded either way.".into()),
                 ));
             }
@@ -588,7 +591,7 @@ impl App {
             let model = settings::section().title("Model").add(
                 settings::item::builder("Model")
                     .description("Opus is the default: careful and reliable. DeepSeek V4 Flash (through OpenRouter) costs a fraction of a cent per request.")
-                    .control(widget::dropdown(&MODELS[..], selected, move |i| {
+                    .control(widget::dropdown(&MODEL_NAMES[..], selected, move |i| {
                         Message::AssistantSet(AssistantSettings { model: MODELS[i].to_owned(), ..model_a.clone() })
                     })),
             );
@@ -792,6 +795,10 @@ impl cosmic::Application for App {
 
     fn on_nav_select(&mut self, id: nav_bar::Id) -> Task<Message> {
         self.nav.activate(id);
+        // "Iliada is up to date" belongs to the page it came from. Something
+        // still running keeps showing.
+        self.error = None;
+        self.notice = None;
         if self.page() == Page::Privacy {
             self.privacy = installed_permissions();
             self.decisions = Decisions::default_path().map(|p| Decisions::load(&p)).unwrap_or_default();

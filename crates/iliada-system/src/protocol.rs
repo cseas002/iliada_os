@@ -157,6 +157,34 @@ impl Provider {
     }
 }
 
+/// A model's name for people: "claude-opus-5-5" is "Claude Opus 5.5",
+/// "deepseek/deepseek-v4-flash" is "DeepSeek V4 Flash".
+pub fn model_name(id: &str) -> String {
+    let id = id.rsplit('/').next().unwrap_or(id);
+    let mut words: Vec<String> = Vec::new();
+    let mut last_numeric = false;
+    for part in id.split('-').filter(|p| !p.is_empty()) {
+        let numeric = part.chars().all(|c| c.is_ascii_digit() || c == '.');
+        match words.last_mut() {
+            // "5-5" is version 5.5.
+            Some(w) if numeric && last_numeric => {
+                w.push('.');
+                w.push_str(part);
+            }
+            _ => words.push(match part {
+                "deepseek" => "DeepSeek".into(),
+                "gpt" | "glm" => part.to_uppercase(),
+                _ => {
+                    let mut c = part.chars();
+                    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+                }
+            }),
+        }
+        last_numeric = numeric;
+    }
+    words.join(" ")
+}
+
 /// Models that make the fewest mistakes acting on their own. Auto mode works
 /// with any model; Settings warns for the others.
 pub const AUTO_MODELS: [&str; 3] = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"];
@@ -215,6 +243,14 @@ pub struct Backup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn models_have_names_for_people() {
+        assert_eq!(model_name("claude-opus-5-5"), "Claude Opus 5.5");
+        assert_eq!(model_name("claude-fable-5-1"), "Claude Fable 5.1");
+        assert_eq!(model_name("deepseek/deepseek-v4-flash"), "DeepSeek V4 Flash");
+        assert_eq!(model_name("openai/gpt-5.1-mini"), "GPT 5.1 Mini");
+    }
 
     #[test]
     fn wire_format_is_tagged_json() {
