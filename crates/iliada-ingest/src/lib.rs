@@ -23,6 +23,7 @@
 //! bundled next to them and found via RUNPATH (patchelf, when available) or a
 //! launcher that sets `LD_LIBRARY_PATH`.
 
+pub mod appstream;
 pub mod closure;
 pub mod control;
 pub mod deb;

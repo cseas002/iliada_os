@@ -113,6 +113,50 @@ struct State {
     fingerprints: BTreeMap<String, String>,
 }
 
+/// Where each app on the list stands, for the Store and the `iliada`
+/// command (in the cache folder, readable by everyone).
+pub const STATUS_FILE: &str = "status.json";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuildState {
+    Queued,
+    Building,
+    Installed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BuildStatus {
+    pub state: BuildState,
+    /// Why it failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Seconds since the Unix epoch.
+    pub time: u64,
+}
+
+/// Status by app-list key ("debian:krita").
+pub type Statuses = BTreeMap<String, BuildStatus>;
+
+/// The statuses the translator last wrote into `cache_dir`.
+pub fn read_status(cache_dir: &Path) -> Statuses {
+    std::fs::read(cache_dir.join(STATUS_FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+async fn set_status(statuses: &Mutex<Statuses>, path: &Path, key: &str, state: BuildState, error: Option<String>) {
+    let time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let mut s = statuses.lock().await;
+    s.insert(key.to_owned(), BuildStatus { state, error, time });
+    let tmp = path.with_extension("tmp");
+    if std::fs::write(&tmp, serde_json::to_vec_pretty(&*s).unwrap_or_default())
+        .and_then(|_| std::fs::rename(&tmp, path))
+        .is_err()
+    {
+        tracing::warn!("could not write the build status");
+    }
+}
+
 /// Where the daemon looks for work.
 #[derive(Debug, Clone)]
 pub struct ServeConfig {
@@ -144,6 +188,8 @@ pub async fn serve(ingestor: Arc<Ingestor>, cfg: ServeConfig) -> Result<()> {
         std::fs::read(&state_path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
     let state = Arc::new(Mutex::new(state));
     let in_flight: Arc<Mutex<BTreeSet<String>>> = Arc::default();
+    let status_path = ingestor.config().cache_dir.join(STATUS_FILE);
+    let statuses = Arc::new(Mutex::new(read_status(&ingestor.config().cache_dir)));
     let (tx, rx) = mpsc::channel::<Job>(256);
     let rx = Arc::new(Mutex::new(rx));
 
@@ -152,23 +198,35 @@ pub async fn serve(ingestor: Arc<Ingestor>, cfg: ServeConfig) -> Result<()> {
         Watchlist { interval_secs: default_interval(), concurrency: default_concurrency(), watches: vec![] }
     });
     for worker in 0..list.concurrency.max(1) {
-        let (ing, rx, state, state_path, in_flight) =
-            (ingestor.clone(), rx.clone(), state.clone(), state_path.clone(), in_flight.clone());
+        let (ing, rx, state, state_path, in_flight, statuses, status_path) = (
+            ingestor.clone(),
+            rx.clone(),
+            state.clone(),
+            state_path.clone(),
+            in_flight.clone(),
+            statuses.clone(),
+            status_path.clone(),
+        );
         tokio::spawn(async move {
             loop {
                 let Some(job) = rx.lock().await.recv().await else { break };
                 match job {
                     Job::Watch(watch, fp) => {
                         let Some(source) = watch.source() else { continue };
+                        set_status(&statuses, &status_path, &watch.key(), BuildState::Building, None).await;
                         match ing.ingest(&source).await {
                             Ok(r) => {
                                 tracing::info!(worker, bundle = %r.bundle.display(), version = %r.version, "installed");
                                 let mut s = state.lock().await;
                                 s.fingerprints.insert(watch.key(), fp);
                                 save_state(&state_path, &s);
+                                drop(s);
+                                set_status(&statuses, &status_path, &watch.key(), BuildState::Installed, None).await;
                             }
                             Err(e) => {
-                                tracing::error!(worker, source = %watch.key(), error = %format!("{e:#}"), "install failed")
+                                tracing::error!(worker, source = %watch.key(), error = %format!("{e:#}"), "install failed");
+                                let why = Some(format!("{e:#}"));
+                                set_status(&statuses, &status_path, &watch.key(), BuildState::Failed, why).await;
                             }
                         }
                         in_flight.lock().await.remove(&watch.key());
@@ -197,6 +255,16 @@ pub async fn serve(ingestor: Arc<Ingestor>, cfg: ServeConfig) -> Result<()> {
         let full_check = Instant::now() >= next_update_check;
         if full_check {
             ingestor.invalidate_indexes().await;
+            // Which apps Debian has, for the Store and the iliada command.
+            let ing = ingestor.clone();
+            tokio::spawn(async move {
+                let c = ing.config();
+                let arch = c.arch.clone().unwrap_or_else(|| host_deb_arch().to_owned());
+                if let Err(e) = crate::appstream::refresh(ing.fetcher(), &c.cache_dir, &c.mirror, &c.suite, &arch).await
+                {
+                    tracing::warn!(error = %format!("{e:#}"), "could not get Debian's app list");
+                }
+            });
             next_update_check = Instant::now() + Duration::from_secs(list.interval_secs.max(60));
         }
         if full_check || list_changed {
@@ -210,6 +278,10 @@ pub async fn serve(ingestor: Arc<Ingestor>, cfg: ServeConfig) -> Result<()> {
                     Ok(fp) => fp,
                     Err(e) => {
                         tracing::warn!(source = %w.key(), error = %format!("{e:#}"), "cannot check source");
+                        if known.is_none() {
+                            let why = Some(format!("{e:#}"));
+                            set_status(&statuses, &status_path, &w.key(), BuildState::Failed, why).await;
+                        }
                         continue;
                     }
                 };
@@ -228,6 +300,7 @@ pub async fn serve(ingestor: Arc<Ingestor>, cfg: ServeConfig) -> Result<()> {
                 }
                 if in_flight.lock().await.insert(w.key()) {
                     tracing::info!(source = %w.key(), "queueing install/update");
+                    set_status(&statuses, &status_path, &w.key(), BuildState::Queued, None).await;
                     tx.send(Job::Watch(w.clone(), fp)).await?;
                 }
             }

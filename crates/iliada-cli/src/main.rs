@@ -17,7 +17,7 @@ use std::io::IsTerminal;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use iliada_store::{Store, StoreConfig};
+use iliada_store::{Store, StoreConfig, translate};
 use iliada_system::client;
 use iliada_system::protocol::{Backup, Event, Request};
 
@@ -59,6 +59,9 @@ enum Cmd {
     Install {
         #[arg(required = true)]
         names: Vec<String>,
+        /// Build apps that aren't in the Store from Debian's package without asking.
+        #[arg(long)]
+        build: bool,
     },
     /// Remove apps or software, or turn services off.
     Remove {
@@ -289,7 +292,7 @@ async fn main() -> Result<()> {
             }
         }
         Cmd::Search { word } => search(&word).await?,
-        Cmd::Install { names } => install(names, v).await?,
+        Cmd::Install { names, build } => install(names, build, v).await?,
         Cmd::Remove { names } => remove(names, v).await?,
         Cmd::Update => {
             let r = store().await?.sync().await?;
@@ -407,7 +410,7 @@ fn names(items: &[&iliada_system::software::Item]) -> String {
 }
 
 /// Install apps and software, turn on services: whatever each name is.
-async fn install(names_typed: Vec<String>, v: bool) -> Result<()> {
+async fn install(names_typed: Vec<String>, build: bool, v: bool) -> Result<()> {
     use iliada_system::software::{Kind, lookup};
     let (mut software, mut services, mut apps) = (Vec::new(), Vec::new(), Vec::new());
     for n in &names_typed {
@@ -419,12 +422,17 @@ async fn install(names_typed: Vec<String>, v: bool) -> Result<()> {
     }
     // Every name is checked before anything is installed.
     let mut entries = Vec::new();
+    // Not in the Store, but Debian has it: Iliada can build it.
+    let mut to_build = Vec::new();
+    let debian = if apps.is_empty() { Vec::new() } else { translate::debian_apps() };
     let s = if apps.is_empty() { None } else { Some(store().await?) };
     if let Some(s) = &s {
         let catalog = s.catalog().await?;
         for n in apps {
-            let e = catalog.apps.iter().find(|a| is_app(&a.id, &a.name, n)).ok_or_else(|| not_in_store(n))?;
-            entries.push(e.clone());
+            match catalog.apps.iter().find(|a| is_app(&a.id, &a.name, n)) {
+                Some(e) => entries.push(e.clone()),
+                None => to_build.push(translate::find(&debian, n).cloned().ok_or_else(|| not_in_store(n))?),
+            }
         }
     }
     if !software.is_empty() {
@@ -456,7 +464,46 @@ async fn install(names_typed: Vec<String>, v: bool) -> Result<()> {
             eprintln!("\n{} is in Applications.", entry.name);
         }
     }
+    for app in &to_build {
+        build_from_debian(app, build).await?;
+    }
     Ok(())
+}
+
+/// An app that isn't in the Store: built from Debian's package on this
+/// computer, after asking (or with --build).
+async fn build_from_debian(app: &translate::DebianApp, yes: bool) -> Result<()> {
+    eprintln!(
+        "{} isn't in the Iliada Store. Iliada can build it from Debian's package \"{}\": it becomes \
+         an ordinary sandboxed app, but a few apps don't work this way.",
+        app.name, app.package
+    );
+    if !yes {
+        anyhow::ensure!(std::io::stdin().is_terminal(), "run `iliada install --build {}` to build it", app.package);
+        eprint!("Build it? [y/N] ");
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        if !matches!(line.trim(), "y" | "Y" | "yes" | "Yes") {
+            eprintln!("Not built.");
+            return Ok(());
+        }
+    }
+    let list = StoreConfig::from_env()?.app_list.unwrap_or_else(|| "/etc/iliada/apps.toml".into());
+    translate::request(&list, &app.package)?;
+    let name = app.name.clone();
+    let r = translate::wait(&app.package, std::time::Duration::from_secs(30 * 60), &move |state| match state {
+        translate::BuildState::Queued => eprintln!("Waiting to build {name}…"),
+        translate::BuildState::Building => eprintln!("Building {name} (this takes a minute or two)…"),
+        _ => {}
+    })
+    .await;
+    match r {
+        Ok(()) => {
+            eprintln!("{} is in Applications.", app.name);
+            Ok(())
+        }
+        Err(e) => anyhow::bail!("{} could not be built: {e:#}", app.name),
+    }
 }
 
 /// Remove apps and software, turn services off.
@@ -531,6 +578,22 @@ async fn search(word: &str) -> Result<()> {
             for i in list {
                 println!("  {:<22} {:<36} iliada install {}", i.name, i.summary, i.id);
             }
+        }
+    }
+    // Not in the Store, but Debian has it (Iliada builds it on this computer).
+    let debian = translate::debian_apps();
+    let more: Vec<_> = translate::search(&debian, word).into_iter().take(12).collect();
+    if !more.is_empty() {
+        found = true;
+        println!("Not in the Store yet: Iliada can build these from Debian's package");
+        for a in more {
+            let summary: String = a.summary.chars().take(36).collect();
+            println!(
+                "  {:<22} {:<36} iliada install {}",
+                a.name.chars().take(22).collect::<String>(),
+                summary,
+                a.package
+            );
         }
     }
     if !found {

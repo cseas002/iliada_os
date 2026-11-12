@@ -248,10 +248,25 @@ impl Ingestor {
         let mut deps = DepState::default();
         let mut dep_roots = control.depends();
         let mut included = Vec::new();
-        if !self.cfg.include.is_empty() {
+        // What Debian would also have installed for a GTK app: the SVG image
+        // loader (icons, game tiles, artwork). Not a dependency there, but
+        // installed on every desktop.
+        let mut includes: Vec<(String, bool)> = self.cfg.include.iter().map(|n| (n.clone(), true)).collect();
+        let uses_gtk = dep_roots
+            .iter()
+            .flatten()
+            .any(|d| d.starts_with("libgtk-3-0") || d.starts_with("libgtk-4-1") || d.starts_with("libgdk-pixbuf"));
+        if uses_gtk && !includes.iter().any(|(n, _)| n == "librsvg2-common") {
+            includes.push(("librsvg2-common".into(), false));
+        }
+        if !includes.is_empty() {
             let idx = self.index(&arch).await?;
-            for name in &self.cfg.include {
-                let e = idx.get(name).with_context(|| format!("included package {name:?} not found"))?;
+            for (name, asked) in &includes {
+                let Some(e) = idx.get(name) else {
+                    // Asked for in the recipe: an error. Added by Iliada: skipped.
+                    ensure!(!*asked, "included package {name:?} not found");
+                    continue;
+                };
                 let url = idx.url_for(e);
                 tracing::info!(package = %e.name, "including package in the app");
                 let f = self.fetcher.fetch(&url).await?;

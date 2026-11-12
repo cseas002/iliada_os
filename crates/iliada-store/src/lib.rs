@@ -10,6 +10,8 @@
 //!    bundle, then move it into place in one rename: exactly what dragging a
 //!    `.app` into Applications does. `iliada-appd` takes it from there.
 
+pub mod translate;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufReader, Write};

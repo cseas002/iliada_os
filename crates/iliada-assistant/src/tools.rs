@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use iliada_bundle::decisions::{Decision, Decisions, key as permission_key};
-use iliada_store::Store;
+use iliada_store::{Store, StoreConfig};
 use iliada_system::client;
 use iliada_system::protocol::Request;
 use serde_json::{Value, json};
@@ -42,7 +42,7 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "search_store",
-            description: "Apps available in the Iliada Store (name, id, category, summary, whether it uses the internet, whether it is installed). Optional query filters by name or summary.",
+            description: "Apps available in the Iliada Store (name, id, category, summary, whether it uses the internet, whether it is installed), and, with a query, desktop apps from Debian that are not in the Store yet (from: \"debian\"; install_app can build them). Optional query filters by name or summary.",
             schema: obj(json!({ "query": { "type": "string" } }), &[]),
             acts: false,
             full_access: false,
@@ -56,7 +56,7 @@ pub fn all() -> Vec<Tool> {
         },
         Tool {
             name: "install_app",
-            description: "Install (or update) an app from the Store.",
+            description: "Install (or update) an app from the Store. An app that is not in the Store but that search_store lists from Debian is built from Debian's package on this computer (a minute or two; a few apps do not work this way): say so when you do it.",
             schema: app(),
             acts: true,
             full_access: false,
@@ -392,20 +392,28 @@ pub async fn run(store: &Store, name: &str, input: &Value) -> Result<String> {
             let q = s(input, "query").to_lowercase();
             let installed = store.installed();
             let catalog = store.catalog().await?;
-            Value::Array(
-                catalog
-                    .apps
-                    .iter()
-                    .filter(|a| {
-                        q.is_empty() || a.name.to_lowercase().contains(&q) || a.summary.to_lowercase().contains(&q)
-                    })
-                    .map(|a| {
-                        json!({ "name": a.name, "id": a.id, "category": a.category, "summary": a.summary,
-                                "uses_internet": a.network, "version": a.version,
-                                "installed": installed.get(&a.id).map(|i| i.version.clone()) })
-                    })
-                    .collect(),
-            )
+            let mut found: Vec<Value> = catalog
+                .apps
+                .iter()
+                .filter(|a| q.is_empty() || a.name.to_lowercase().contains(&q) || a.summary.to_lowercase().contains(&q))
+                .map(|a| {
+                    json!({ "name": a.name, "id": a.id, "category": a.category, "summary": a.summary,
+                            "uses_internet": a.network, "version": a.version, "from": "store",
+                            "installed": installed.get(&a.id).map(|i| i.version.clone()) })
+                })
+                .collect();
+            if !q.is_empty() {
+                let debian = iliada_store::translate::debian_apps();
+                let in_store = |name: &str| catalog.apps.iter().any(|a| a.name.eq_ignore_ascii_case(name));
+                found.extend(
+                    iliada_store::translate::search(&debian, &q)
+                        .into_iter()
+                        .filter(|d| !in_store(&d.name))
+                        .take(8)
+                        .map(|d| json!({ "name": d.name, "id": d.package, "summary": d.summary, "from": "debian" })),
+                );
+            }
+            Value::Array(found)
         }
         "list_installed_apps" => Value::Array(
             store.installed().values().map(|i| json!({ "name": i.name, "id": i.id, "version": i.version })).collect(),
@@ -414,13 +422,21 @@ pub async fn run(store: &Store, name: &str, input: &Value) -> Result<String> {
             let app = s(input, "app");
             let catalog = store.catalog().await?;
             let needle = app.to_lowercase();
-            let entry = catalog
-                .apps
-                .iter()
-                .find(|a| a.id == app || a.name.to_lowercase() == needle)
-                .with_context(|| format!("there is no app called {app:?} in the Store"))?;
-            let path = store.install(entry, &|_, _| {}).await?;
-            json!({ "installed": entry.name, "path": path })
+            if let Some(entry) = catalog.apps.iter().find(|a| a.id == app || a.name.to_lowercase() == needle) {
+                let path = store.install(entry, &|_, _| {}).await?;
+                return Ok(json!({ "installed": entry.name, "path": path }).to_string());
+            }
+            // Not in the Store: Debian's package, built on this computer.
+            let debian = iliada_store::translate::debian_apps();
+            let d = iliada_store::translate::find(&debian, app)
+                .with_context(|| format!("there is no app called {app:?} in the Store or in Debian"))?
+                .clone();
+            let list = StoreConfig::from_env()?.app_list.unwrap_or_else(|| "/etc/iliada/apps.toml".into());
+            iliada_store::translate::request(&list, &d.package)?;
+            match iliada_store::translate::wait(&d.package, std::time::Duration::from_secs(10 * 60), &|_| {}).await {
+                Ok(()) => json!({ "installed": d.name, "built_from_debian": d.package }),
+                Err(e) => anyhow::bail!("{} could not be built from Debian's package: {e:#}", d.name),
+            }
         }
         "remove_app" => {
             let b = find_installed(s(input, "app"))?;

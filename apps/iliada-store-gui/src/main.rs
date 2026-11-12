@@ -15,6 +15,7 @@ use cosmic::{ApplicationExt, Core, Element, executor};
 use futures_util::StreamExt;
 use iliada_catalog::{AppEntry, Catalog};
 use iliada_settings::Progress;
+use iliada_store::translate::{self, DebianApp};
 use iliada_store::{Installed, Store, StoreConfig};
 use iliada_system::protocol::{Request, Status as SystemStatus};
 use iliada_system::software::{CATALOG as SOFTWARE, Item, Kind};
@@ -57,6 +58,9 @@ enum Message {
     System(Result<SystemStatus, String>),
     Change(String, Request),
     Changed(String, Progress),
+    /// Build an app that isn't in the Store from Debian's package.
+    Build(String),
+    Built(String, Result<(), String>),
 }
 
 struct App {
@@ -69,6 +73,8 @@ struct App {
     status: BTreeMap<String, Status>,
     search: String,
     system: Option<Result<SystemStatus, String>>,
+    /// Desktop apps Debian has (search offers to build those not in the Store).
+    debian: Vec<DebianApp>,
 }
 
 impl App {
@@ -138,6 +144,49 @@ fn load_system() -> Task<Message> {
 }
 
 impl App {
+    /// An app Debian has that isn't in the Store: Build, then Open.
+    fn debian_row<'a>(&'a self, d: &'a DebianApp) -> Element<'a, Message> {
+        let spacing = cosmic::theme::spacing();
+        let suffix = format!(".{}", d.package);
+        let installed = self
+            .installed
+            .values()
+            .find(|i| i.id.ends_with(&suffix) || i.name.eq_ignore_ascii_case(&d.name))
+            .map(|i| i.id.clone());
+        let action: Element<_> = match (self.status.get(&d.package), installed) {
+            (Some(Status::Working(what)), _) => widget::row::with_capacity(2)
+                .push(widget::progress_bar::circular::Circular::new().size(20.0))
+                .push(widget::text::body(*what))
+                .spacing(spacing.space_xs)
+                .align_y(Alignment::Center)
+                .into(),
+            (_, Some(id)) => widget::button::standard("Open").on_press(Message::Open(id)).into(),
+            _ => widget::button::standard("Build").on_press(Message::Build(d.package.clone())).into(),
+        };
+        let text = widget::column::with_capacity(3)
+            .push(widget::text::title4(d.name.as_str()))
+            .push(widget::text::body(d.summary.as_str()))
+            .push(widget::text::caption(format!("From Debian · built on this computer · package {}", d.package)))
+            .spacing(spacing.space_xxxs)
+            .width(Length::Fill);
+        let mut col = widget::column::with_capacity(2).push(
+            widget::row::with_capacity(3)
+                .push(widget::icon::from_name("application-x-executable").size(56).icon())
+                .push(text)
+                .push(action)
+                .spacing(spacing.space_m)
+                .align_y(Alignment::Center),
+        );
+        if let Some(Status::Failed(e)) = self.status.get(&d.package) {
+            col = col.push(widget::text::caption(format!("Could not build it: {e}")));
+        }
+        widget::container(col.spacing(spacing.space_xxs))
+            .padding(spacing.space_s)
+            .class(cosmic::theme::Container::Card)
+            .width(Length::Fill)
+            .into()
+    }
+
     /// What the search box finds anywhere in the Store: apps, then software
     /// and services.
     fn search_results(&self) -> Element<'_, Message> {
@@ -158,6 +207,20 @@ impl App {
         if let Some(Ok(s)) = &self.system {
             for item in iliada_system::software::search(&needle) {
                 list = list.push(self.system_row(item, s));
+                found = true;
+            }
+        }
+        // Not in the Store yet: Debian has it, and Iliada can build it.
+        let in_store = |name: &str| matches!(&self.catalog, Some(Ok(c)) if c.apps.iter().any(|a| a.name.eq_ignore_ascii_case(name)));
+        let more: Vec<_> =
+            translate::search(&self.debian, &needle).into_iter().filter(|d| !in_store(&d.name)).take(20).collect();
+        if !more.is_empty() {
+            list = list.push(widget::text::title4("Not in the Store yet")).push(widget::text::caption(
+                "Iliada can build these from Debian's packages on this computer. They become ordinary \
+                     sandboxed apps, but a few don't work this way.",
+            ));
+            for d in more {
+                list = list.push(self.debian_row(d));
                 found = true;
             }
         }
@@ -292,6 +355,7 @@ impl cosmic::Application for App {
             core,
             nav,
             installed: store.installed(),
+            debian: translate::debian_apps(),
             store,
             catalog: None,
             icons: BTreeMap::new(),
@@ -367,6 +431,31 @@ impl cosmic::Application for App {
                 }
                 self.installed = self.store.installed();
             }
+            Message::Build(package) => {
+                let list = StoreConfig::from_env()
+                    .ok()
+                    .and_then(|c| c.app_list)
+                    .unwrap_or_else(|| "/etc/iliada/apps.toml".into());
+                if let Err(e) = translate::request(&list, &package) {
+                    self.status.insert(package, Status::Failed(format!("{e:#}")));
+                    return Task::none();
+                }
+                self.status.insert(package.clone(), Status::Working("Building…"));
+                return cosmic::task::future(async move {
+                    let r = translate::wait(&package, std::time::Duration::from_secs(30 * 60), &|_| {}).await;
+                    Message::Built(package, r.map_err(|e| format!("{e:#}")))
+                });
+            }
+            Message::Built(package, r) => {
+                self.status.insert(
+                    package,
+                    match r {
+                        Ok(()) => Status::Idle,
+                        Err(e) => Status::Failed(e),
+                    },
+                );
+                self.installed = self.store.installed();
+            }
             Message::Open(id) => {
                 if let Some(app) = self.installed.get(&id) {
                     let _ = std::process::Command::new("iliada-run").arg(&app.path).spawn();
@@ -374,6 +463,7 @@ impl cosmic::Application for App {
             }
             Message::Refresh => {
                 self.installed = self.store.installed();
+                self.debian = translate::debian_apps();
                 return Task::batch([self.load_catalog(), load_system()]);
             }
             Message::System(s) => self.system = Some(s),

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Apps that aren't in the Store**: search for them anyway. Debian's ~2,000
+  desktop apps are listed under "Not in the Store yet" with a **Build**
+  button; Iliada builds the app from Debian's package on this computer into
+  an ordinary sandboxed `.app`, and says plainly when one can't be built. The
+  same with `iliada install krita` (asks first) and the assistant ("install
+  Krita").
 - **The Assistant is an app**: your conversations in the sidebar, each saved
   and continued where you left it (even after switching models), and
   **Activity**: everything the assistant did, with **Undo** for what can be

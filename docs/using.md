@@ -28,6 +28,18 @@ iliada install libreoffice-writer      # names with spaces: use dashes
 To remove an app, drag it from Applications to the Trash (or
 `iliada remove firefox`).
 
+**An app that isn't in the Store?** Search for it anyway. Debian packages
+about 2,000 desktop apps, and the Store lists the ones it doesn't have under
+**Not in the Store yet** with a **Build** button. Iliada builds the app
+from Debian's package on this computer (a minute or two) into an ordinary
+sandboxed `.app`. Most apps work this way; a few don't, and the Store says
+why. The same from the terminal, or ask the assistant ("install Krita"):
+
+```sh
+iliada search krita
+iliada install krita          # asks first; --build to skip the question
+```
+
 ## Install Python (or Node.js, Go, ffmpeg…)
 
 Store → **Software** → Python → **Get**. Or type "python" in the Store's
