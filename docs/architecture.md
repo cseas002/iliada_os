@@ -230,8 +230,9 @@ justification, runtime base), validated by the same Rust types.
 | System service (`iliada-systemd`): tools, services, apply, no sudo | done; validated in the VM (GUI and CLI) |
 | Iliada Settings (updates, backup, tools, services, privacy) | done; validated in the VM |
 | Setup Assistant (first login) | done; shown on first login in the VM |
+| Frosted glass (COSMIC theme defaults `frosted_windows`, `frosted_panel`, `frosted_applets`, `frosted_system_interface`) | built; with the setting on, windows and the Alt+Space panel are blurred in the x86 VM (2026-11-12, after the compositor restarted); the default on a fresh install not yet checked |
 | GitHub backup and restore | built; needs a GitHub OAuth app to test |
-| Assistant (Ask / Auto, Settings → Assistant, `iliada ask`, the Assistant app) | live-tested in the x86 VM with DeepSeek V4 Flash (OpenRouter): app install, dark/light, volume, commands, email (local mail server; approval and decline), a prompt-injected file not obeyed; Settings → Assistant and the app clicked through |
+| Assistant (Ask / Auto, Settings → Assistant, `iliada ask`, the Assistant app) | live-tested in the x86 VM with DeepSeek V4 Flash (OpenRouter): app install, dark/light, volume, commands, email (local mail server; approval and decline), a prompt-injected file not obeyed; Settings → Assistant and the app clicked through; answers stream in as they are written (2026-11-12, both providers covered by tests, DeepSeek live in the panel) |
 | Store: Software and Services (not apps) | built |
 | Iliada updates (signed release manifest) | validated privately: an installed test VM found a locally served, signed 0.2.0, installed it from Settings → Updates, reported 0.2.0 after the restart and then "up to date"; 0.2.0 is published: a fresh 0.2.0 install checks GitHub from Settings → Updates and reports "up to date". The service restarts itself after an apply that changes its own settings (verified on the installed 0.2.0: restarted 5 s after the apply, with the new update address) |
 | Graphical installer, `iliada-install`, config template | built; the script's end-to-end install test passes (0.2.0 ISO, 2026-11-11: installed system boots, Setup Assistant, Settings, SSH from Settings, Store install of Audacity with its permission prompt, Alt+Space all checked by hand) |
@@ -274,7 +275,7 @@ then continues the backup's.
    repository.
 3. LibreOffice Writer on ARM (its ARM build stops at start-up with a UNO
    exception; the x86-64 build works).
-4. The Assistant panel: frosted glass, answers that appear as they are written.
+4. Check frosted glass on a fresh install (the shipped default) and on real hardware.
 
 **Later**
 

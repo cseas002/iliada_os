@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- The assistant's answers appear as they are written instead of all at once
+  (both Claude and OpenRouter models).
+- The Alt+Space panel is frosted glass: see-through, with the desktop blurred
+  behind it.
+- Models are shown by name ("Claude Opus 5.5", "DeepSeek V4 Flash") in the panel
+  and in Settings → Assistant; the panel no longer shows a model while the
+  assistant is off.
+- Settings: a message such as "Iliada is up to date" no longer stays on screen
+  after switching to another page.
+
 - Permission prompts say "The app is able to use this but didn't say why" when the app
   gave no reason (they showed a technical note about libraries).
 
