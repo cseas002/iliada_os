@@ -13,6 +13,16 @@ in
       default = true;
       description = "The Iliada system service.";
     };
+    systemctlBridge = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        `systemctl enable`/`disable` typed at a terminal turn Iliada's services
+        (sshd, cups, nginx, postgresql, mysql, redis, docker) on or off in
+        settings.toml, like `iliada install ssh`; `start`/`stop` say they last
+        until the next restart. Scripts get the real systemctl unchanged.
+      '';
+    };
     githubClientId = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -56,7 +66,14 @@ in
       message = "iliada.system.firstBoot needs the Iliada flake (build the system with iliada.lib.iliadaSystem)";
     }];
 
-    environment.systemPackages = [ pkg ];
+    environment.systemPackages = [ pkg ] ++ lib.optional cfg.systemctlBridge (lib.hiPrio (pkgs.writeShellScriptBin "systemctl" ''
+      # Typed by a person: through Iliada (see iliada-systemctl). Scripts:
+      # the real systemctl, untouched.
+      if [ -t 0 ] && [ -t 2 ]; then
+        exec ${pkg}/bin/iliada-systemctl ${config.systemd.package}/bin/systemctl "$@"
+      fi
+      exec ${config.systemd.package}/bin/systemctl "$@"
+    ''));
 
     systemd.services.iliada-system = {
       description = "Iliada system service";

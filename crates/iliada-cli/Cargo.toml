@@ -11,6 +11,11 @@ rust-version.workspace = true
 name = "iliada"
 path = "src/main.rs"
 
+# `systemctl` as people type it (see the file); the system links it in.
+[[bin]]
+name = "iliada-systemctl"
+path = "src/bin/iliada-systemctl.rs"
+
 [dependencies]
 iliada-store.workspace = true
 iliada-system.workspace = true

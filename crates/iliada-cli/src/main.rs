@@ -77,6 +77,12 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ServiceCmd,
     },
+    /// What changed on this computer, and when (every change is recorded).
+    History {
+        /// How many changes to show.
+        #[arg(short = 'n', long, default_value_t = 20)]
+        count: usize,
+    },
     /// Iliada itself.
     System {
         #[command(subcommand)]
@@ -311,8 +317,26 @@ async fn main() -> Result<()> {
             eprintln!("{}", if changed(&r) { "Removed." } else { "None of those are installed." });
         }
         Cmd::Service { cmd: ServiceCmd::List } => {
+            // "Setting" is what the computer keeps after a restart; "now" is
+            // what is running (`systemctl stop` changes only that).
+            println!("{:<12} {:<9} {:<9} ", "SERVICE", "SETTING", "NOW");
             for s in client::status().await?.services {
-                println!("{:<10} {:<4} {}", s.name, if s.on { "on" } else { "off" }, s.description);
+                let now = iliada_system::settings::unit_of_service(&s.name)
+                    .map(|u| {
+                        let active = std::process::Command::new("systemctl")
+                            .args(["is-active", "--quiet", u])
+                            .stdin(std::process::Stdio::null())
+                            .status()
+                            .is_ok_and(|st| st.success());
+                        if active { "running" } else { "stopped" }
+                    })
+                    .unwrap_or("");
+                println!("{:<12} {:<9} {:<9} {}", s.name, if s.on { "on" } else { "off" }, now, s.description);
+            }
+        }
+        Cmd::History { count } => {
+            for c in iliada_system::changes(count)? {
+                println!("{:<16} {}", ago(c.time), c.what);
             }
         }
         Cmd::Service { cmd } => {

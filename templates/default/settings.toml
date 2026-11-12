@@ -1,7 +1,9 @@
 # System settings for this computer.
 #
-# Change them with the `iliada` command (`iliada tool add htop`,
-# `iliada service enable ssh`), or edit this file and run `iliada apply`.
+# Change them in the Store and Settings, with the `iliada` command
+# (`iliada install python`, `iliada install ssh`; `systemctl enable sshd` works
+# too), or edit this file and run `iliada system apply`. Every change is
+# recorded (`iliada history`) and backed up.
 # Apps are not here: they are .app bundles (see apps.toml and the Store).
 
 [tools]

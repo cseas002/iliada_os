@@ -26,6 +26,32 @@ pub const SERVICES: &[(&str, &str)] = &[
     ("docker", "Docker"),
 ];
 
+/// The systemd unit behind each service (what `systemctl` calls it).
+pub const UNITS: &[(&str, &str)] = &[
+    ("ssh", "sshd"),
+    ("printing", "cups"),
+    ("nginx", "nginx"),
+    ("postgresql", "postgresql"),
+    ("mariadb", "mysql"),
+    ("redis", "redis"),
+    ("docker", "docker"),
+];
+
+/// The service a systemd unit name belongs to: "sshd", "sshd.service",
+/// "mysql" or an everyday name ("ssh", "postgres").
+pub fn service_of_unit(unit: &str) -> Option<&'static str> {
+    let u = unit.strip_suffix(".service").or_else(|| unit.strip_suffix(".socket")).unwrap_or(unit);
+    UNITS
+        .iter()
+        .find(|(_, x)| *x == u)
+        .map(|(s, _)| *s)
+        .or_else(|| crate::software::lookup(u).filter(|i| i.kind == crate::software::Kind::Service).map(|i| i.id))
+}
+
+pub fn unit_of_service(service: &str) -> Option<&'static str> {
+    UNITS.iter().find(|(s, _)| *s == service).map(|(_, u)| *u)
+}
+
 fn tools_array(doc: &mut DocumentMut) -> &mut Array {
     if !doc.contains_key("tools") {
         doc["tools"] = Item::Table(Table::new());
@@ -148,6 +174,21 @@ pub fn set_service(doc: &mut DocumentMut, name: &str, on: bool) -> Result<bool> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn units_map_to_services() {
+        for (s, _) in SERVICES {
+            assert!(unit_of_service(s).is_some(), "{s} has no unit");
+        }
+        assert_eq!(service_of_unit("sshd"), Some("ssh"));
+        assert_eq!(service_of_unit("sshd.service"), Some("ssh"));
+        assert_eq!(service_of_unit("ssh"), Some("ssh"));
+        assert_eq!(service_of_unit("mysql"), Some("mariadb"));
+        assert_eq!(service_of_unit("docker.socket"), Some("docker"));
+        assert_eq!(service_of_unit("postgres"), Some("postgresql"));
+        assert_eq!(service_of_unit("NetworkManager"), None);
+        assert_eq!(service_of_unit("python"), None);
+    }
 
     #[test]
     fn edits_keep_comments_and_are_idempotent() {
