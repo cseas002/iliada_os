@@ -233,6 +233,9 @@ justification, runtime base), validated by the same Rust types.
 | Frosted glass (COSMIC theme defaults `frosted_windows`, `frosted_panel`, `frosted_applets`, `frosted_system_interface`) | done; a fresh dev VM disk comes up frosted at first login (2026-11-12); the Alt+Space panel, Settings and the Welcome window are blurred. COSMIC apps read their built-in fallback theme first, so a user service writes the four keys into each user's theme at login unless already set |
 | GitHub backup and restore | built; needs a GitHub OAuth app to test |
 | Assistant (Ask / Auto, Settings → Assistant, `iliada ask`, the Assistant app) | live-tested in the x86 VM with DeepSeek V4 Flash (OpenRouter): app install, dark/light, volume, commands, email (local mail server; approval and decline), a prompt-injected file not obeyed; Settings → Assistant and the app clicked through; answers stream in as they are written (2026-11-12, both providers covered by tests, DeepSeek live in the panel) |
+| Assistant app: saved conversations, Activity with Undo, quick panel (Alt+Space, `iliada-ask`) | done, live in the dev VM with DeepSeek (2026-11-12): conversations saved and listed, continued after an app restart ("switch it back" understood), panel → "Open in Assistant", Undo from Activity (appearance), only the latest change undoable, the undo noted in its conversation and known to the model, "what changed this week?" answered from the new `recent_changes` tool |
+| Settings → Assistant API key (saved state, free check with the provider, Replace/Remove, Add key only for a fitting key) | done; in the dev VM it showed the saved OpenRouter key masked and "$3.99 of $4.00 left", and explained a wrong-provider key |
+| `systemctl` bridge (`iliada-systemctl`, interactive only) | done on the installed VM (2026-11-12): `enable redis` turned it on in settings.toml and started it, `stop redis` said "until the next restart", `disable redis` turned it off, another unit got the configuration.nix hint, a script got the plain systemctl |
 | Store: Software and Services (not apps); `iliada install`/`remove`/`search` for all three | done: on an installed 0.2.0 VM, `iliada install python` gave Python 3.14, `iliada remove python` removed it, `iliada install ssh` and a typo checked (2026-11-12); the Store's search box finds Python from Discover (dev VM) |
 | Text field right-click menu (libcosmic patch, `nix/patches/libcosmic-context-menu-position.patch`) | done: opens at the pointer on a scrolled Settings page (it opened at the bottom of the screen); patched in the Nix build, upstream unchanged as of 2026-11-12 |
 | Iliada updates (signed release manifest) | validated privately: an installed test VM found a locally served, signed 0.2.0, installed it from Settings → Updates, reported 0.2.0 after the restart and then "up to date"; 0.2.0 is published: a fresh 0.2.0 install checks GitHub from Settings → Updates and reports "up to date". The service restarts itself after an apply that changes its own settings (verified on the installed 0.2.0: restarted 5 s after the apply, with the new update address). 2026-11-12: an installed 0.2.0 updated to the published 0.2.1 from GitHub (`iliada system update`), came back as 0.2.1 with frosted glass on |
@@ -288,6 +291,9 @@ then continues the backup's.
 6. The immutable appliance image booted and updated (A/B, dm-verity).
 7. Secure Boot key management.
 8. The on-device assistant (§10).
+9. Your own Iliada server: encrypted backups of the computer and of each
+   person's settings, conversations and app data, on a server you run
+   ([self-hosted-sync.md](self-hosted-sync.md), a proposal).
 
 ## 10. The assistant
 

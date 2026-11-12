@@ -68,6 +68,34 @@ iliada install postgres
 iliada remove ssh            # turns it off
 ```
 
+### How it works: settings, and what is running now
+
+A service has two states:
+
+* **The setting**: whether the computer runs it. It lives in
+  `/etc/iliada/settings.toml` (`ssh = true`), so it is kept after a restart,
+  every change is recorded (`iliada history`), and a backup restores it on a
+  new computer. The Store, Settings, `iliada install ssh` and
+  `systemctl enable sshd` all change this.
+* **Now**: whether it is running at this moment. `systemctl stop sshd`,
+  `start` and `restart` change only this, for quick tests. At the next restart
+  the setting wins again, and `systemctl` tells you so.
+
+```sh
+iliada service list          # SERVICE  SETTING  NOW
+                             # ssh      on       running
+sudo systemctl stop sshd     # stopped until the next restart
+systemctl enable nginx       # same as iliada install nginx: saved, applied, backed up
+iliada history               # 2026-11-12 16:04  Enable ssh …
+```
+
+`systemctl enable` and `disable` work this way for the services Iliada
+knows (sshd, cups, nginx, postgresql, mysql, redis, docker), and only when
+you type them in a terminal; scripts get the ordinary `systemctl`. Other
+system services are added in `/etc/iliada/configuration.nix` (any NixOS
+option, then `iliada system apply`). Your own background programs work as
+anywhere else: `systemctl --user enable …`.
+
 ## Find something
 
 Type in the Store's search box: it searches apps, software and services
@@ -95,9 +123,11 @@ or Settings → Backup → **Restore** brings them back. Your own files
 ## Ask the assistant
 
 Press **Alt+Space** anywhere and type, for example "install VLC and turn on
-dark mode". First turn it on in Settings → **Assistant** and add an API key:
-Anthropic (Claude) or OpenRouter (many models, some very cheap). In **Ask me
-first** mode, you approve every action.
+dark mode". First set it up in Settings → **Assistant**: turn it on, pick a
+model, paste your API key and press **Add key** (Anthropic for Claude,
+OpenRouter for many other models, some very cheap). Settings then shows the
+key as saved and checks it with the provider, free, including how much
+credit is left. In **Ask me first** mode, you approve every action.
 
 From the terminal: `iliada ask "turn on ssh"`, or set the key with
 `iliada assistant key` (it reads the key from the keyboard, or from a file:
