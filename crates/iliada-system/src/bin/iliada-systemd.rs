@@ -177,6 +177,12 @@ impl Service {
         let log = logger(tx);
         match req {
             Request::AddTools { packages } => {
+                if !self.dir.join("flake.nix").exists() {
+                    bail!(
+                        "this computer has no Iliada configuration in {} (a test VM?), so software can't be added to it",
+                        self.dir.display()
+                    );
+                }
                 for p in &packages {
                     if !settings::valid_tool_name(p) {
                         bail!("{p:?} is not a valid package name");

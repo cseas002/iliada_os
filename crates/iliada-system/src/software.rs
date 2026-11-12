@@ -67,6 +67,47 @@ pub fn find(id: &str) -> Option<&'static Item> {
     CATALOG.iter().find(|i| i.id == id)
 }
 
+/// Everyday names for catalog items ("python" is `python3`).
+const ALIASES: &[(&str, &str)] = &[
+    ("python", "python3"),
+    ("pip", "python3"),
+    ("node", "nodejs"),
+    ("npm", "nodejs"),
+    ("golang", "go"),
+    ("rust", "rustup"),
+    ("cargo", "rustup"),
+    ("make", "gnumake"),
+    ("nvim", "neovim"),
+    ("hx", "helix"),
+    ("rg", "ripgrep"),
+    ("youtube-dl", "yt-dlp"),
+    ("sshd", "ssh"),
+    ("openssh", "ssh"),
+    ("cups", "printing"),
+    ("postgres", "postgresql"),
+    ("mysql", "mariadb"),
+];
+
+/// The catalog item a person means by `name`: its id, its shown name or an
+/// everyday name, in any case.
+pub fn lookup(name: &str) -> Option<&'static Item> {
+    let n = name.trim().to_lowercase();
+    let id = ALIASES.iter().find(|(a, _)| *a == n).map(|(_, id)| *id).unwrap_or(&n);
+    find(id).or_else(|| CATALOG.iter().find(|i| i.name.to_lowercase() == n))
+}
+
+/// Catalog items whose id, name, summary or category mention `word`.
+pub fn search(word: &str) -> Vec<&'static Item> {
+    let w = word.trim().to_lowercase();
+    let exact = lookup(&w);
+    CATALOG
+        .iter()
+        .filter(|i| {
+            Some(*i) == exact || [i.id, i.name, i.summary, i.category].iter().any(|f| f.to_lowercase().contains(&w))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +125,20 @@ mod tests {
         for i in CATALOG.iter().filter(|i| i.kind == Kind::Service) {
             assert!(services.contains(&i.id), "{} is not a known service", i.id);
         }
+        for (alias, id) in ALIASES {
+            assert!(find(id).is_some(), "{alias} points at {id}, which is not in the catalog");
+        }
+    }
+
+    #[test]
+    fn everyday_names_find_the_software() {
+        assert_eq!(lookup("python").unwrap().id, "python3");
+        assert_eq!(lookup("Python").unwrap().id, "python3");
+        assert_eq!(lookup("python3").unwrap().id, "python3");
+        assert_eq!(lookup("Node.js").unwrap().id, "nodejs");
+        assert_eq!(lookup("postgres").unwrap().id, "postgresql");
+        assert!(lookup("firefox").is_none());
+        assert!(search("database").iter().any(|i| i.id == "postgresql"));
+        assert!(search("python").iter().any(|i| i.id == "python3"));
     }
 }

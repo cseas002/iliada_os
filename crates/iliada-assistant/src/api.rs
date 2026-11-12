@@ -68,6 +68,13 @@ pub fn provider_of_key(key: &str) -> Option<Provider> {
 }
 
 /// Saves a key where its provider's keys go; returns the provider.
+/// The first API key in `text`: a pasted key, or a file such as a `.env`
+/// with `OPENROUTER_API_KEY="sk-or-…"` in it.
+pub fn find_key(text: &str) -> Option<&str> {
+    text.split(|c: char| c.is_whitespace() || matches!(c, '=' | '"' | '\'' | ':' | ','))
+        .find(|t| t.starts_with("sk-ant-") || t.starts_with("sk-or-"))
+}
+
 pub fn save_key(key: &str) -> Result<Provider> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -503,6 +510,14 @@ fn from_chat(v: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keys_are_found_in_pasted_text_and_env_files() {
+        assert_eq!(find_key("sk-or-v1-abc\n"), Some("sk-or-v1-abc"));
+        assert_eq!(find_key("# mine\nOPENROUTER_API_KEY=\"sk-or-v1-abc\"\n"), Some("sk-or-v1-abc"));
+        assert_eq!(find_key("ANTHROPIC_API_KEY='sk-ant-xyz'"), Some("sk-ant-xyz"));
+        assert_eq!(find_key("hello"), None);
+    }
 
     #[test]
     fn providers_follow_model_and_key_names() {

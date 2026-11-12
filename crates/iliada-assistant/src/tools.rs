@@ -376,7 +376,17 @@ pub async fn run(store: &Store, name: &str, input: &Value) -> Result<String> {
             json!({ "installed": r.installed, "updated": r.updated,
                     "failed": r.failed.iter().map(|(a, e)| format!("{a}: {e}")).collect::<Vec<_>>() })
         }
-        "add_tools" => system(Request::AddTools { packages: list(input, "packages") }).await?,
+        "add_tools" => {
+            // Everyday names ("python") become the package's ("python3").
+            let packages = list(input, "packages")
+                .into_iter()
+                .map(|p| match iliada_system::software::lookup(&p) {
+                    Some(i) if i.kind == iliada_system::software::Kind::Software => i.id.to_owned(),
+                    _ => p,
+                })
+                .collect();
+            system(Request::AddTools { packages }).await?
+        }
         "remove_tools" => system(Request::RemoveTools { packages: list(input, "packages") }).await?,
         "set_service" => {
             let on = input["on"].as_bool().context("\"on\" must be true or false")?;

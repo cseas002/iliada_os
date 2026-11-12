@@ -1,6 +1,6 @@
 //! `iliada`: one command for apps, tools, services, updates and backups.
 //!
-//!   iliada list | install <app> | remove <app> | update
+//!   iliada list | search <word> | install <name>… | remove <name>… | update
 //!   iliada tool list | tool add <pkg>… | tool remove <pkg>…
 //!   iliada service list | service enable <name> | service disable <name>
 //!   iliada system update | system apply | system status
@@ -15,14 +15,32 @@
 
 use std::io::IsTerminal;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use iliada_store::{Store, StoreConfig};
 use iliada_system::client;
 use iliada_system::protocol::{Backup, Event, Request};
 
+const EXAMPLES: &str = "\
+Examples:
+  iliada install firefox          an app (it goes into Applications)
+  iliada install python git       software for the terminal
+  iliada install ssh              turn on a service (here: log in from other computers)
+  iliada search database          find something
+  iliada remove python            remove it again
+  iliada system update            update Iliada itself
+  iliada ask \"turn on dark mode\"  ask the assistant
+
+Everything here is also in the Store and in Iliada Settings.";
+
 #[derive(Parser)]
-#[command(name = "iliada", version, about = "Apps, tools, services, updates and backups")]
+#[command(
+    name = "iliada",
+    version,
+    about = "Apps, software, services, updates and backups",
+    after_help = EXAMPLES,
+    arg_required_else_help = true
+)]
 struct Cli {
     /// Show the full build output.
     #[arg(short, long, global = true)]
@@ -33,15 +51,23 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Apps in the Store.
+    /// Everything in the Store: apps, software and services.
     List,
-    /// Install an app from the Store.
-    Install { app: String },
-    /// Remove an app.
-    Remove { app: String },
+    /// Find something in the Store ("iliada search database").
+    Search { word: String },
+    /// Install apps, software (python, node, ffmpeg…) or turn on services (ssh, nginx…).
+    Install {
+        #[arg(required = true)]
+        names: Vec<String>,
+    },
+    /// Remove apps or software, or turn services off.
+    Remove {
+        #[arg(required = true)]
+        names: Vec<String>,
+    },
     /// Update apps (and install any on your app list that are missing).
     Update,
-    /// Command-line tools (vim, git, …), installed system-wide.
+    /// Any command-line program from nixpkgs, by its package name.
     Tool {
         #[command(subcommand)]
         cmd: ToolCmd,
@@ -238,8 +264,8 @@ async fn main() -> Result<()> {
             let st = client::status().await.ok();
             use iliada_system::software::{CATALOG, Kind};
             for (kind, title) in [
-                (Kind::Software, "Software for the Terminal (iliada tool add <id>)"),
-                (Kind::Service, "Services (iliada service enable <id>)"),
+                (Kind::Software, "Software for the terminal (iliada install <id>)"),
+                (Kind::Service, "Services (iliada install <id> turns one on)"),
             ] {
                 println!("\n{title}");
                 for i in CATALOG.iter().filter(|i| i.kind == kind) {
@@ -256,40 +282,9 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Cmd::Install { app } => {
-            let s = store().await?;
-            let catalog = s.catalog().await?;
-            let needle = app.to_lowercase();
-            let entry = catalog
-                .apps
-                .iter()
-                .find(|a| a.id == app || a.name.to_lowercase() == needle)
-                .with_context(|| format!("there is no app called {app:?} in the Store (see `iliada list`)"))?;
-            if entry.network {
-                eprintln!("{} uses the internet.", entry.name);
-            }
-            let last = std::sync::atomic::AtomicU64::new(u64::MAX);
-            s.install(entry, &|d, t| {
-                let pct = d * 100 / t.max(1);
-                if last.swap(pct, std::sync::atomic::Ordering::Relaxed) != pct {
-                    eprint!("\rDownloading {}… {pct:>3}%", entry.name);
-                }
-            })
-            .await?;
-            eprintln!("\n{} is in Applications.", entry.name);
-        }
-        Cmd::Remove { app } => {
-            let s = store().await?;
-            let needle = app.to_lowercase();
-            let id = s
-                .installed()
-                .into_values()
-                .find(|i| i.id == app || i.name.to_lowercase() == needle)
-                .map(|i| i.id)
-                .with_context(|| format!("{app:?} is not installed"))?;
-            s.remove(&id)?;
-            eprintln!("Removed {app}.");
-        }
+        Cmd::Search { word } => search(&word).await?,
+        Cmd::Install { names } => install(names, v).await?,
+        Cmd::Remove { names } => remove(names, v).await?,
         Cmd::Update => {
             let r = store().await?.sync().await?;
             for a in r.installed.iter().chain(&r.updated) {
@@ -366,6 +361,161 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// The name people type for an app: "LibreOffice Writer" is `libreoffice-writer`.
+fn short_name(name: &str) -> String {
+    name.to_lowercase().replace(' ', "-")
+}
+
+fn is_app(id: &str, name: &str, typed: &str) -> bool {
+    let t = typed.to_lowercase();
+    id == typed || name.to_lowercase() == t || short_name(name) == t
+}
+
+fn not_in_store(name: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "there is nothing called \"{name}\" in the Store. Look for it with `iliada search {name}`. \
+         Any other command-line program from nixpkgs can be installed with `iliada tool add {name}`."
+    )
+}
+
+fn names(items: &[&iliada_system::software::Item]) -> String {
+    items.iter().map(|i| i.name).collect::<Vec<_>>().join(", ")
+}
+
+/// Install apps and software, turn on services: whatever each name is.
+async fn install(names_typed: Vec<String>, v: bool) -> Result<()> {
+    use iliada_system::software::{Kind, lookup};
+    let (mut software, mut services, mut apps) = (Vec::new(), Vec::new(), Vec::new());
+    for n in &names_typed {
+        match lookup(n) {
+            Some(i) if i.kind == Kind::Software => software.push(i),
+            Some(i) => services.push(i),
+            None => apps.push(n.as_str()),
+        }
+    }
+    // Every name is checked before anything is installed.
+    let mut entries = Vec::new();
+    let s = if apps.is_empty() { None } else { Some(store().await?) };
+    if let Some(s) = &s {
+        let catalog = s.catalog().await?;
+        for n in apps {
+            let e = catalog.apps.iter().find(|a| is_app(&a.id, &a.name, n)).ok_or_else(|| not_in_store(n))?;
+            entries.push(e.clone());
+        }
+    }
+    if !software.is_empty() {
+        let packages = software.iter().map(|i| i.id.to_owned()).collect();
+        let r = system(Request::AddTools { packages }, v).await?;
+        if changed(&r) {
+            eprintln!("{} installed. Open a new terminal to use it.", names(&software));
+        } else {
+            eprintln!("{} already installed.", names(&software));
+        }
+    }
+    for i in services {
+        let r = system(Request::SetService { name: i.id.into(), on: true }, v).await?;
+        eprintln!("{} {}.", i.name, if changed(&r) { "is on" } else { "was already on" });
+    }
+    if let Some(s) = &s {
+        for entry in &entries {
+            if entry.network {
+                eprintln!("{} uses the internet.", entry.name);
+            }
+            let last = std::sync::atomic::AtomicU64::new(u64::MAX);
+            s.install(entry, &|d, t| {
+                let pct = d * 100 / t.max(1);
+                if last.swap(pct, std::sync::atomic::Ordering::Relaxed) != pct {
+                    eprint!("\rDownloading {}… {pct:>3}%", entry.name);
+                }
+            })
+            .await?;
+            eprintln!("\n{} is in Applications.", entry.name);
+        }
+    }
+    Ok(())
+}
+
+/// Remove apps and software, turn services off.
+async fn remove(names_typed: Vec<String>, v: bool) -> Result<()> {
+    use iliada_system::software::{Kind, lookup};
+    let s = store().await?;
+    let installed = s.installed();
+    let tools = client::status().await.map(|st| st.tools).unwrap_or_default();
+    let (mut packages, mut shown, mut services, mut apps) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for n in &names_typed {
+        if let Some(app) = installed.values().find(|i| is_app(&i.id, &i.name, n)) {
+            apps.push(app.clone());
+            continue;
+        }
+        match lookup(n) {
+            Some(i) if i.kind == Kind::Software => {
+                packages.push(i.id.to_owned());
+                shown.push(i.name.to_owned());
+            }
+            Some(i) => services.push(i),
+            None if tools.contains(n) => {
+                packages.push(n.clone());
+                shown.push(n.clone());
+            }
+            None => anyhow::bail!("\"{n}\" is not installed (`iliada list` shows what is)"),
+        }
+    }
+    if !packages.is_empty() {
+        let r = system(Request::RemoveTools { packages }, v).await?;
+        let what = shown.join(", ");
+        eprintln!("{}", if changed(&r) { format!("Removed {what}.") } else { format!("{what}: not installed.") });
+    }
+    for i in services {
+        let r = system(Request::SetService { name: i.id.into(), on: false }, v).await?;
+        eprintln!("{} {}.", i.name, if changed(&r) { "is off" } else { "was already off" });
+    }
+    for app in apps {
+        s.remove(&app.id)?;
+        eprintln!("Removed {}.", app.name);
+    }
+    Ok(())
+}
+
+/// Apps, software and services that mention `word`.
+async fn search(word: &str) -> Result<()> {
+    use iliada_system::software::Kind;
+    let w = word.to_lowercase();
+    let mut found = false;
+    match async { store().await?.catalog().await }.await {
+        Ok(catalog) => {
+            let apps: Vec<_> = catalog
+                .apps
+                .iter()
+                .filter(|a| [&a.id, &a.name, &a.summary, &a.category].iter().any(|f| f.to_lowercase().contains(&w)))
+                .collect();
+            if !apps.is_empty() {
+                found = true;
+                println!("Apps");
+                for a in apps {
+                    println!("  {:<22} {:<36} iliada install {}", a.name, a.summary, short_name(&a.name));
+                }
+            }
+        }
+        Err(e) => eprintln!("(The Store's app list could not be reached: {e:#})"),
+    }
+    let items = iliada_system::software::search(word);
+    for (kind, title) in [(Kind::Software, "Software for the terminal"), (Kind::Service, "Services")] {
+        let list: Vec<_> = items.iter().filter(|i| i.kind == kind).collect();
+        if !list.is_empty() {
+            found = true;
+            println!("{title}");
+            for i in list {
+                println!("  {:<22} {:<36} iliada install {}", i.name, i.summary, i.id);
+            }
+        }
+    }
+    if !found {
+        println!("Nothing in the Store matches \"{word}\".");
+        println!("Command-line programs from nixpkgs (search.nixos.org/packages): iliada tool add <name>");
+    }
+    Ok(())
+}
+
 struct Terminal;
 
 #[async_trait::async_trait]
@@ -429,10 +579,17 @@ async fn assistant(cmd: AssistantCmd, v: bool) -> Result<()> {
             return Ok(());
         }
         AssistantCmd::Key => {
-            eprint!("API key (Anthropic sk-ant-… or OpenRouter sk-or-…): ");
-            let mut k = String::new();
-            std::io::stdin().read_line(&mut k)?;
-            let p = iliada_assistant::api::save_key(&k)?;
+            // Typed or pasted at the keyboard, or read from a file
+            // (`iliada assistant key < key.txt`, a .env file works too).
+            let mut text = String::new();
+            if std::io::stdin().is_terminal() {
+                eprint!("API key (Anthropic sk-ant-… or OpenRouter sk-or-…): ");
+                std::io::stdin().read_line(&mut text)?;
+            } else {
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)?;
+            }
+            let key = iliada_assistant::api::find_key(&text).unwrap_or(text.trim());
+            let p = iliada_assistant::api::save_key(key)?;
             eprintln!("{} key saved (only you can read it).", p.name());
             return Ok(());
         }
