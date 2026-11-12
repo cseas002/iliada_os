@@ -230,7 +230,7 @@ justification, runtime base), validated by the same Rust types.
 | System service (`iliada-systemd`): tools, services, apply, no sudo | done; validated in the VM (GUI and CLI) |
 | Iliada Settings (updates, backup, tools, services, privacy) | done; validated in the VM |
 | Setup Assistant (first login) | done; shown on first login in the VM |
-| Frosted glass (COSMIC theme defaults `frosted_windows`, `frosted_panel`, `frosted_applets`, `frosted_system_interface`) | built; with the setting on, windows and the Alt+Space panel are blurred in the x86 VM (2026-11-12, after the compositor restarted); the default on a fresh install not yet checked |
+| Frosted glass (COSMIC theme defaults `frosted_windows`, `frosted_panel`, `frosted_applets`, `frosted_system_interface`) | done; a fresh dev VM disk comes up frosted at first login (2026-11-12); the Alt+Space panel, Settings and the Welcome window are blurred. COSMIC apps read their built-in fallback theme first, so a user service writes the four keys into each user's theme at login unless already set |
 | GitHub backup and restore | built; needs a GitHub OAuth app to test |
 | Assistant (Ask / Auto, Settings → Assistant, `iliada ask`, the Assistant app) | live-tested in the x86 VM with DeepSeek V4 Flash (OpenRouter): app install, dark/light, volume, commands, email (local mail server; approval and decline), a prompt-injected file not obeyed; Settings → Assistant and the app clicked through; answers stream in as they are written (2026-11-12, both providers covered by tests, DeepSeek live in the panel) |
 | Store: Software and Services (not apps) | built |
@@ -275,7 +275,7 @@ then continues the backup's.
    repository.
 3. LibreOffice Writer on ARM (its ARM build stops at start-up with a UNO
    exception; the x86-64 build works).
-4. Check frosted glass on a fresh install (the shipped default) and on real hardware.
+4. Check frosted glass on real hardware (GPU drivers).
 
 **Later**
 

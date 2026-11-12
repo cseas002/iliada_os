@@ -94,6 +94,25 @@ in
         done
       ''))
     ];
+    # COSMIC's apps read the built-in fallback theme before the system
+    # defaults above, so they would not know about frosted glass. Each user
+    # gets the frosted settings in their own theme at login, except the ones
+    # they already have (turning it off in COSMIC Settings stays off).
+    systemd.user.services.iliada-frosted-glass = {
+      description = "Iliada's frosted glass default";
+      wantedBy = [ "default.target" ];
+      serviceConfig.Type = "oneshot";
+      script = ''
+        base=''${XDG_CONFIG_HOME:-$HOME/.config}/cosmic
+        for theme in Dark Light Dark.Builder Light.Builder; do
+          d=$base/com.system76.CosmicTheme.$theme/v1
+          mkdir -p "$d"
+          for key in frosted_windows frosted_panel frosted_applets frosted_system_interface; do
+            [ -e "$d/$key" ] || echo true > "$d/$key"
+          done
+        done
+      '';
+    };
     services.displayManager.cosmic-greeter.enable = true;
     services.displayManager.autoLogin = lib.mkIf (cfg.autoLoginUser != null) {
       enable = true;
