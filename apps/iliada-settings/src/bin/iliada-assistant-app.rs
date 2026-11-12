@@ -16,7 +16,7 @@ use cosmic::iced::{Alignment, Length, Size, Subscription};
 use cosmic::widget;
 use cosmic::{ApplicationExt, Core, Element, executor};
 use iliada_system::client;
-use iliada_system::protocol::{AssistantMode, AssistantSettings};
+use iliada_system::protocol::{AssistantMode, AssistantSettings, model_name};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 /// Things people commonly ask, shown before the first question.
@@ -87,6 +87,10 @@ enum Message {
     Send,
     Suggest(&'static str),
     Note(String),
+    /// A piece of the answer as it is written.
+    Piece(String),
+    /// The model stopped writing (it may act, then write again).
+    PieceEnd,
     Approve(String, Pending),
     Answer(bool),
     /// The answer, and what the conversation has cost so far.
@@ -106,6 +110,10 @@ struct App {
     input: String,
     busy: bool,
     approval: Option<(String, Pending)>,
+    /// The answer being written right now (its line).
+    writing: Option<usize>,
+    /// The line the latest answer was written into.
+    written: Option<usize>,
     /// What this conversation has cost (US dollars).
     spent: f64,
     scroll: widget::Id,
@@ -126,6 +134,12 @@ impl iliada_assistant::Frontend for Window {
     }
     fn progress(&self, text: &str) {
         let _ = self.tx.send(Message::Note(text.to_owned()));
+    }
+    fn text(&self, piece: &str) {
+        let _ = self.tx.send(Message::Piece(piece.to_owned()));
+    }
+    fn text_end(&self) {
+        let _ = self.tx.send(Message::PieceEnd);
     }
 }
 
@@ -149,6 +163,7 @@ impl App {
     fn ask(&mut self, text: String) -> Task<Message> {
         let Some(assistant) = self.assistant.clone() else { return Task::none() };
         self.busy = true;
+        self.written = None;
         self.lines.push(Line::You(text.clone()));
         let (tx, rx) = mpsc::unbounded_channel::<Message>();
         enum S {
@@ -186,9 +201,9 @@ impl App {
 
     fn bubble<'a>(&'a self, line: &'a Line) -> Element<'a, Message> {
         let spacing = cosmic::theme::spacing();
-        let (text, mine, class): (&str, bool, cosmic::theme::Container) = match line {
-            Line::You(t) => (t, true, cosmic::theme::Container::Primary),
-            Line::Assistant(t) => (t, false, cosmic::theme::Container::Card),
+        let (text, mine, class): (String, bool, cosmic::theme::Container) = match line {
+            Line::You(t) => (t.clone(), true, cosmic::theme::Container::custom(yours)),
+            Line::Assistant(t) => (plain(t), false, cosmic::theme::Container::Primary),
             Line::Note(t) => {
                 return widget::row::with_capacity(2)
                     .push(widget::icon::from_name("emblem-system-symbolic").size(14).icon())
@@ -197,7 +212,7 @@ impl App {
                     .align_y(Alignment::Center)
                     .into();
             }
-            Line::Error(t) => (t, false, cosmic::theme::Container::Card),
+            Line::Error(t) => (t.clone(), false, cosmic::theme::Container::Primary),
         };
         let b = widget::container(widget::text::body(text)).padding(spacing.space_s).class(class).max_width(560);
         let row = widget::row::with_capacity(2);
@@ -210,6 +225,8 @@ impl App {
 
     fn status_line(&self) -> String {
         match self.settings.as_ref().and_then(|s| s.as_ref().ok()) {
+            // Off or not set up: the message above says so.
+            Some(_) if self.assistant.is_none() => String::new(),
             Some(s) => {
                 let mode = match s.effective_mode() {
                     AssistantMode::Ask => "asks first",
@@ -217,8 +234,7 @@ impl App {
                 };
                 let full = if s.full_access { " · full access" } else { "" };
                 let cost = if self.spent > 0.0 { format!(" · ${:.4}", self.spent) } else { String::new() };
-                let model = s.model.rsplit('/').next().unwrap_or(&s.model);
-                format!("{model} · {mode}{full}{cost}")
+                format!("{} · {mode}{full}{cost}", model_name(&s.model))
             }
             None => String::new(),
         }
@@ -247,12 +263,17 @@ impl cosmic::Application for App {
             input: String::new(),
             busy: false,
             approval: None,
+            writing: None,
+            written: None,
             spent: 0.0,
             scroll: widget::Id::unique(),
             field: widget::Id::unique(),
         };
         // A panel, not a document window: no title bar.
         app.core.window.show_headerbar = false;
+        // The panel draws its own background, see-through when the desktop
+        // blurs what is behind windows (frosted glass, on by default).
+        app.core.window.content_container = false;
         let title = match app.core.main_window_id() {
             Some(id) => app.set_window_title("Assistant".into(), id),
             None => Task::none(),
@@ -313,6 +334,30 @@ impl cosmic::Application for App {
                 self.lines.push(Line::Note(n));
                 return self.to_end();
             }
+            Message::Piece(piece) => {
+                let i = match self.writing {
+                    Some(i) => i,
+                    None => {
+                        self.lines.push(Line::Assistant(String::new()));
+                        self.writing = Some(self.lines.len() - 1);
+                        self.lines.len() - 1
+                    }
+                };
+                if let Some(Line::Assistant(t)) = self.lines.get_mut(i) {
+                    t.push_str(if t.is_empty() { piece.trim_start() } else { &piece });
+                }
+                return self.to_end();
+            }
+            Message::PieceEnd => {
+                if let Some(i) = self.writing.take() {
+                    if i + 1 == self.lines.len() && matches!(&self.lines[i], Line::Assistant(t) if t.trim().is_empty())
+                    {
+                        self.lines.pop();
+                    } else {
+                        self.written = Some(i);
+                    }
+                }
+            }
             Message::Approve(action, pending) => {
                 self.approval = Some((action, pending));
                 return self.to_end();
@@ -330,10 +375,18 @@ impl cosmic::Application for App {
             }
             Message::Reply(r, spent) => {
                 self.busy = false;
-                self.lines.push(match r {
-                    Ok(t) => Line::Assistant(t),
-                    Err(e) => Line::Error(e),
-                });
+                self.writing = None;
+                match r {
+                    // Already written out as it came: the whole answer replaces it.
+                    Ok(t) if self.written.is_some_and(|i| i + 1 == self.lines.len()) => {
+                        if let Some(last) = self.lines.last_mut() {
+                            *last = Line::Assistant(t);
+                        }
+                    }
+                    Ok(t) if t.is_empty() => {}
+                    Ok(t) => self.lines.push(Line::Assistant(t)),
+                    Err(e) => self.lines.push(Line::Error(e)),
+                }
                 self.spent = spent;
                 return Task::batch([self.to_end(), widget::text_input::focus(self.field.clone())]);
             }
@@ -418,7 +471,7 @@ impl cosmic::Application for App {
                 .class(cosmic::theme::Container::Card)
                 .width(Length::Fill),
             );
-        } else if self.busy {
+        } else if self.busy && self.writing.is_none() {
             col = col.push(
                 widget::row::with_capacity(2)
                     .push(widget::progress_bar::circular::Circular::new().size(18.0))
@@ -439,6 +492,58 @@ impl cosmic::Application for App {
             .push(footer)
             .spacing(spacing.space_m)
             .padding(spacing.space_l);
-        widget::container(body).class(cosmic::theme::Container::Background).into()
+        widget::container(body).class(cosmic::theme::Container::custom(frosted)).into()
+    }
+}
+
+/// The panel's background: the window color, see-through over the blurred
+/// desktop when frosted glass is on, solid when it is off.
+fn frosted(theme: &cosmic::Theme) -> widget::container::Style {
+    let c = theme.cosmic();
+    let bg: cosmic::iced::Color = c.background(theme.transparent).base.into();
+    widget::container::Style {
+        background: Some(cosmic::iced::Background::Color(bg)),
+        border: cosmic::iced::Border { radius: c.radius_m().into(), width: 1.0, color: c.bg_divider().into() },
+        text_color: Some(c.on_bg_color().into()),
+        icon_color: Some(c.on_bg_color().into()),
+        ..Default::default()
+    }
+}
+
+/// What you asked: tinted with the accent color.
+fn yours(theme: &cosmic::Theme) -> widget::container::Style {
+    let c = theme.cosmic();
+    let mut bg: cosmic::iced::Color = c.accent_color().into();
+    bg.a = 0.3;
+    widget::container::Style {
+        background: Some(cosmic::iced::Background::Color(bg)),
+        border: cosmic::iced::Border { radius: c.radius_m().into(), ..Default::default() },
+        text_color: Some(c.on_bg_color().into()),
+        ..Default::default()
+    }
+}
+
+/// Models sometimes format answers anyway: "**Install apps**" shows as
+/// "Install apps", "## Steps" as "Steps".
+fn plain(text: &str) -> String {
+    text.lines()
+        .map(|l| {
+            let trimmed = l.trim_start();
+            let l = if trimmed.starts_with('#') { trimmed.trim_start_matches('#').trim_start() } else { l };
+            l.replace("**", "").replace("__", "")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn formatting_marks_are_dropped() {
+        assert_eq!(
+            super::plain("## Steps\n1. **Install apps** from the Store\n__done__"),
+            "Steps\n1. Install apps from the Store\ndone"
+        );
+        assert_eq!(super::plain("2 * 3 = 6"), "2 * 3 = 6");
     }
 }

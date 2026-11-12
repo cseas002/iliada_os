@@ -81,6 +81,17 @@ in
             (modifiers: [Alt], key: "space"): Spawn("iliada-assistant-app"),
         }
         EOF
+        # Frosted glass: windows, the panel and dock, their menus and the
+        # launcher are see-through with the desktop blurred behind them
+        # (COSMIC Settings → Appearance turns it off). Set for the theme and
+        # for the builder COSMIC regenerates the theme from, light and dark.
+        for theme in Dark Light Dark.Builder Light.Builder; do
+          d=$out/share/cosmic/com.system76.CosmicTheme.$theme/v1
+          mkdir -p $d
+          for key in frosted_windows frosted_panel frosted_applets frosted_system_interface; do
+            echo true > $d/$key
+          done
+        done
       ''))
     ];
     services.displayManager.cosmic-greeter.enable = true;
