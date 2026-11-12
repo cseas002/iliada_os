@@ -59,6 +59,13 @@ from a GitHub backup. Afterwards everything is changed in **Iliada
 Settings** (or with the `iliada` command), never with `sudo`. See
 **[docs/install.md](docs/install.md)**.
 
+## Using it
+
+**[docs/using.md](docs/using.md)**: how to install an app, Python or a
+service, update, back up, and use the assistant. In short: apps, software
+and services are all in the **Store**; in a terminal, `iliada install
+firefox`, `iliada install python` and `iliada install ssh` do the same.
+
 ## Repository layout
 
 ```
@@ -97,10 +104,10 @@ cargo test --workspace
 cargo xtask ci                       # fmt + clippy -D warnings + tests
 
 # On an installed Iliada
-iliada list                     # apps in the Store
+iliada list                     # everything in the Store
 iliada install firefox          # install an app (.app, sandboxed)
-iliada tool add htop            # a command-line tool (system setting)
-iliada service enable ssh       # a service
+iliada install python           # software for the terminal (system-wide)
+iliada install ssh              # turn on a service
 
 # Ingest a real Debian package into a bundle
 cargo run -p iliada-ingest -- run debian:jq --out out

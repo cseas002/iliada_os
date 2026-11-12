@@ -3,6 +3,8 @@
 Iliada is a **developer preview**. Try it in a virtual machine (Option 0),
 or install it from a USB stick. Either way the whole system is described by
 one configuration folder, `/etc/iliada`, and changed from Iliada Settings.
+For everyday use (installing apps, Python, services; updates; backups), see
+**[using.md](using.md)**.
 
 ## Option 0: a ready-to-run virtual machine (no installation)
 
@@ -92,10 +94,11 @@ sudo nixos-rebuild switch --flake /etc/iliada#iliada
 
 | | |
 |---|---|
-| `iliada list` | apps in the Store |
+| `iliada list` · `iliada search <word>` | everything in the Store: apps, software, services |
 | `iliada install firefox` · `iliada remove firefox` | install / remove an app (no password, no rebuild) |
+| `iliada install python` · `iliada install ssh` | software for the terminal, or turn on a service (`remove` undoes) |
 | `iliada update` | update apps, and install any on your list that are missing |
-| `iliada tool add htop` · `iliada tool remove htop` · `iliada tool list` | command-line tools |
+| `iliada tool add httpie` · `tool remove` · `tool list` | any nixpkgs package as a command-line tool |
 | `iliada service enable ssh` · `disable` · `list` | services (SSH server, printing) |
 | `iliada system status` · `iliada system update` | Iliada version and updates |
 | `iliada system apply` | apply `/etc/iliada` after editing it by hand |
@@ -131,8 +134,8 @@ Apps are `.app`s. Command-line software (Python, Node.js, ffmpeg…) and
 background services (nginx, PostgreSQL, MariaDB, Redis, Docker, SSH,
 printing) are not: they are part of the system. Find them in the Store
 under **Software** and **Services** (labeled as such), or use
-`iliada tool add python3` / `iliada service enable nginx`. Any nixpkgs
-package works with `iliada tool add`. They are recorded in `settings.toml`
+`iliada install python` / `iliada install nginx`. Any other nixpkgs
+package works with `iliada tool add <name>`. They are recorded in `settings.toml`
 and backed up.
 
 ### The assistant

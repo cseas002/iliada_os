@@ -11,6 +11,19 @@
   assistant is off.
 - Settings: a message such as "Iliada is up to date" no longer stays on screen
   after switching to another page.
+- `iliada install` installs anything in the Store: an app (`iliada install
+  firefox`), software (`iliada install python`, also by everyday names such as
+  node, rust, postgres) or a service (`iliada install ssh` turns it on).
+  `iliada remove` undoes it; `iliada search <word>` finds things.
+- The Store's search box searches apps, software and services together, from
+  any page.
+- The assistant understands everyday names when installing software ("python").
+- `iliada assistant key < key.txt` reads an API key from a file (a `.env` file
+  works too), for computers where pasting is not possible.
+- The right-click menu (Cut, Copy, Paste) of a text field on a scrolled page
+  opens where you clicked, not at the bottom of the screen (a libcosmic fix).
+- New guide: [docs/using.md](docs/using.md), how to install apps, Python and
+  services, update, back up and use the assistant.
 
 - Permission prompts say "The app is able to use this but didn't say why" when the app
   gave no reason (they showed a technical note about libraries).
