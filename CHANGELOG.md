@@ -1,11 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 (2026-11-12)
 
 - The assistant's answers appear as they are written instead of all at once
   (both Claude and OpenRouter models).
-- The Alt+Space panel is frosted glass: see-through, with the desktop blurred
-  behind it.
+- Frosted glass by default: windows, the Alt+Space panel, the top panel and
+  the dock are see-through with the desktop blurred behind them (COSMIC
+  Settings → Appearance turns it off, and it stays off).
 - Models are shown by name ("Claude Opus 5.5", "DeepSeek V4 Flash") in the panel
   and in Settings → Assistant; the panel no longer shows a model while the
   assistant is off.
@@ -24,7 +25,6 @@
   opens where you clicked, not at the bottom of the screen (a libcosmic fix).
 - New guide: [docs/using.md](docs/using.md), how to install apps, Python and
   services, update, back up and use the assistant.
-
 - Permission prompts say "The app is able to use this but didn't say why" when the app
   gave no reason (they showed a technical note about libraries).
 
