@@ -24,6 +24,14 @@ rustPlatform.buildRustPackage {
     allowBuiltinFetchGit = true;
   };
 
+  # libcosmic: a text field's right-click menu (Cut, Copy, Paste) opened off
+  # by the page's scroll offset, often at the bottom of the screen. The patch
+  # anchors it where the pointer is in the window.
+  postPatch = ''
+    lc=$(dirname "$(dirname "$(dirname "$(echo "$cargoDepsCopy"/*/src/widget/text_context_menu.rs)")")")
+    patch -d "$lc" -p1 < ${./patches/libcosmic-context-menu-position.patch}
+  '';
+
   nativeBuildInputs = [ libcosmicAppHook ];
   doCheck = false;
 

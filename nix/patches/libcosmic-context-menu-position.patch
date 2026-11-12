@@ -1,0 +1,57 @@
+--- a/src/app/cosmic.rs
++++ b/src/app/cosmic.rs
+@@ -716,6 +716,10 @@
+         subscriptions.push(crate::widget::text_context_menu::wake_subscription::<
+             T::Message,
+         >());
++        #[cfg(all(wayland_platform, target_os = "linux"))]
++        subscriptions.push(crate::widget::text_context_menu::pointer_subscription::<
++            T::Message,
++        >());
+ 
+         Subscription::batch(subscriptions)
+     }
+--- a/src/widget/text_context_menu.rs
++++ b/src/widget/text_context_menu.rs
+@@ -162,6 +162,27 @@
+     }
+ }
+ 
++
++/// Where the pointer last was in each window, in window coordinates. A text
++/// widget inside a scrolled area sees the pointer in the scrolled content's
++/// coordinates, which put its popup off by the scroll offset (often at the
++/// bottom of the screen); the popup is anchored here instead.
++#[cfg(wayland_platform)]
++static POINTER: Mutex<Option<(window::Id, Point)>> = Mutex::new(None);
++
++/// Records [`POINTER`] from the windows' own pointer events.
++#[cfg(all(wayland_platform, target_os = "linux"))]
++pub(crate) fn pointer_subscription<Message: Send + 'static>()
++-> iced_futures::Subscription<crate::Action<Message>> {
++    iced::event::listen_with(|event, _status, id| {
++        if let iced_core::Event::Mouse(mouse::Event::CursorMoved { position }) = event {
++            if let Ok(mut pointer) = POINTER.lock() {
++                *pointer = Some((id, position));
++            }
++        }
++        None
++    })
++}
+ /// Subscription that backs [`wake_runtime`]: it owns the receiving end of the
+ /// wake channel and re-emits each ping as [`crate::Action::None`]. Add it to
+ /// the app's subscriptions (done by `Cosmic::subscription`) so popup creation
+@@ -573,7 +594,12 @@
+ 
+     let anchor_rect = menu_bar_state.inner.with_data_mut(|state| {
+         state.popup_id.insert(window_id, id);
+-        let pos = cursor.position().unwrap_or_default();
++        let pos = POINTER
++            .lock()
++            .ok()
++            .and_then(|p| *p)
++            .filter(|(w, _)| *w == window_id)
++            .map_or_else(|| cursor.position().unwrap_or_default(), |(_, p)| p);
+         iced::Rectangle {
+             x: pos.x as i32,
+             y: pos.y as i32,
