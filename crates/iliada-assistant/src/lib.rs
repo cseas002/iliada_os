@@ -53,7 +53,9 @@ person may want, ask first in your reply instead of acting.
 - Changing tools or services rebuilds the system and takes minutes; say so.
 - Some actions may be declined by the person; respect that and do not retry them.
 - When done, say plainly what you did and what (if anything) failed, in a sentence or two. \
-Iliada's users are not technical: no jargon, no commands.";
+Iliada's users are not technical: no jargon, no commands.
+- Answers are shown as plain text: no Markdown (no **bold**, no # headings, no tables). \
+A short numbered list is fine.";
 
 /// How the assistant shows itself while it works.
 #[async_trait]
@@ -62,6 +64,10 @@ pub trait Frontend: Send + Sync {
     async fn approve(&self, action: &str) -> bool;
     /// An action is running / finished.
     fn progress(&self, text: &str);
+    /// A piece of the answer, as the model writes it.
+    fn text(&self, _piece: &str) {}
+    /// The model finished writing (it may go on to act, then write again).
+    fn text_end(&self) {}
 }
 
 fn system_prompt(full_access: bool) -> String {
@@ -154,7 +160,9 @@ impl Assistant {
     pub async fn send(&mut self, text: &str, ui: &dyn Frontend) -> Result<String> {
         self.messages.push(json!({ "role": "user", "content": text }));
         for _ in 0..MAX_STEPS {
-            let resp = self.api.create(&self.system, &self.tools, &self.messages).await?;
+            let resp = self.api.create_streaming(&self.system, &self.tools, &self.messages, &|t| ui.text(t)).await;
+            ui.text_end();
+            let resp = resp?;
             self.add_cost(&resp["usage"]);
             let content = resp["content"].clone();
             // Kept exactly as returned (thinking blocks included).
@@ -308,9 +316,13 @@ mod tests {
                     }
                 };
                 s.lock().unwrap().push(serde_json::from_slice::<Value>(&body).unwrap());
-                let out = reply.to_string();
+                // A string is served as a stream of events.
+                let (kind, out) = match reply {
+                    Value::String(s) => ("text/event-stream", s),
+                    v => ("application/json", v.to_string()),
+                };
                 let resp = format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{out}",
+                    "HTTP/1.1 200 OK\r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{out}",
                     out.len()
                 );
                 c.write_all(resp.as_bytes()).await.unwrap();
@@ -476,5 +488,155 @@ mod tests {
         assert!(asked[0].contains("bob@example.org") && asked[0].contains("Hello Bob"), "{}", asked[0]);
         let reqs = seen.lock().unwrap();
         assert!(reqs[1]["messages"][2]["content"][0]["content"].as_str().unwrap().contains("declined"));
+    }
+
+    /// Records the pieces of text as they arrive ("|" where the model stopped
+    /// writing) and declines every action.
+    struct Watch(Mutex<Vec<String>>);
+    #[async_trait]
+    impl Frontend for Watch {
+        async fn approve(&self, _: &str) -> bool {
+            false
+        }
+        fn progress(&self, _: &str) {}
+        fn text(&self, piece: &str) {
+            self.0.lock().unwrap().push(piece.to_owned());
+        }
+        fn text_end(&self) {
+            self.0.lock().unwrap().push("|".into());
+        }
+    }
+
+    fn sse(events: &[Value]) -> Value {
+        Value::String(events.iter().map(|e| format!("event: x\ndata: {e}\n\n")).collect())
+    }
+
+    fn test_store() -> Store {
+        let mut cfg = StoreConfig::from_env().unwrap();
+        cfg.catalog = "/nonexistent/catalog.json".into();
+        cfg.apps_dir = std::env::temp_dir().join("iliada-assistant-test-apps");
+        cfg.app_list = None;
+        Store::new(cfg).unwrap()
+    }
+
+    #[tokio::test]
+    async fn streamed_claude_answers_show_as_they_come_and_are_kept_whole() {
+        let first = sse(&[
+            json!({ "type": "message_start", "message": { "usage": { "input_tokens": 10, "output_tokens": 1 } } }),
+            json!({ "type": "content_block_start", "index": 0, "content_block": { "type": "thinking", "thinking": "" } }),
+            json!({ "type": "content_block_delta", "index": 0, "delta": { "type": "thinking_delta", "thinking": "Wants " } }),
+            json!({ "type": "content_block_delta", "index": 0, "delta": { "type": "thinking_delta", "thinking": "Firefox." } }),
+            json!({ "type": "content_block_delta", "index": 0, "delta": { "type": "signature_delta", "signature": "sig-abc" } }),
+            json!({ "type": "content_block_stop", "index": 0 }),
+            json!({ "type": "ping" }),
+            json!({ "type": "content_block_start", "index": 1, "content_block": { "type": "text", "text": "" } }),
+            json!({ "type": "content_block_delta", "index": 1, "delta": { "type": "text_delta", "text": "I'll " } }),
+            json!({ "type": "content_block_delta", "index": 1, "delta": { "type": "text_delta", "text": "install it." } }),
+            json!({ "type": "content_block_stop", "index": 1 }),
+            json!({ "type": "content_block_start", "index": 2, "content_block":
+                { "type": "tool_use", "id": "toolu_1", "name": "install_app", "input": {} } }),
+            json!({ "type": "content_block_delta", "index": 2, "delta": { "type": "input_json_delta", "partial_json": "{\"app\": \"Fire" } }),
+            json!({ "type": "content_block_delta", "index": 2, "delta": { "type": "input_json_delta", "partial_json": "fox\"}" } }),
+            json!({ "type": "content_block_stop", "index": 2 }),
+            json!({ "type": "message_delta", "delta": { "stop_reason": "tool_use" }, "usage": { "output_tokens": 30 } }),
+            json!({ "type": "message_stop" }),
+        ]);
+        let second = sse(&[
+            json!({ "type": "message_start", "message": { "usage": { "input_tokens": 50 } } }),
+            json!({ "type": "content_block_start", "index": 0, "content_block": { "type": "text", "text": "" } }),
+            json!({ "type": "content_block_delta", "index": 0, "delta": { "type": "text_delta", "text": "Okay, " } }),
+            json!({ "type": "content_block_delta", "index": 0, "delta": { "type": "text_delta", "text": "I left it." } }),
+            json!({ "type": "content_block_stop", "index": 0 }),
+            json!({ "type": "message_delta", "delta": { "stop_reason": "end_turn" }, "usage": { "output_tokens": 5 } }),
+        ]);
+        let (url, seen) = fake_api(vec![first, second]).await;
+        let claude = api::Api::with_url("sk-test".into(), "claude-opus-5-5".into(), url);
+        let mut a = Assistant::with_parts(claude, AssistantMode::Ask, false, test_store());
+        let ui = Watch(Mutex::new(Vec::new()));
+        assert_eq!(a.send("install firefox", &ui).await.unwrap(), "Okay, I left it.");
+        assert_eq!(*ui.0.lock().unwrap(), ["I'll ", "install it.", "|", "Okay, ", "I left it.", "|"]);
+        let reqs = seen.lock().unwrap();
+        assert_eq!(reqs[0]["stream"], true);
+        assert_eq!(
+            reqs[1]["messages"][1]["content"],
+            json!([
+                { "type": "thinking", "thinking": "Wants Firefox.", "signature": "sig-abc" },
+                { "type": "text", "text": "I'll install it." },
+                { "type": "tool_use", "id": "toolu_1", "name": "install_app", "input": { "app": "Firefox" } }
+            ]),
+            "the streamed turn is sent back whole"
+        );
+        assert!(reqs[1]["messages"][2]["content"][0]["content"].as_str().unwrap().contains("declined"));
+    }
+
+    #[tokio::test]
+    async fn streamed_openrouter_answers_are_put_back_together() {
+        let chunk = |delta: Value| json!({ "choices": [{ "delta": delta }] });
+        let mut first = String::from(": OPENROUTER PROCESSING\n\n");
+        for c in [
+            chunk(json!({ "role": "assistant", "content": "",
+                "reasoning_details": [{ "type": "reasoning.text", "text": "Run ", "index": 0 }] })),
+            chunk(
+                json!({ "reasoning_details": [{ "type": "reasoning.text", "text": "echo.", "index": 0, "signature": null }] }),
+            ),
+            chunk(json!({ "tool_calls": [{ "index": 0, "id": "c1", "type": "function",
+                "function": { "name": "run_command", "arguments": "" } }] })),
+            chunk(json!({ "tool_calls": [{ "index": 0, "function": { "arguments": "{\"command\":" } }] })),
+            chunk(json!({ "tool_calls": [{ "index": 0, "function": { "arguments": "\"echo hi\"}" } }] })),
+            json!({ "choices": [{ "delta": {}, "finish_reason": "tool_calls" }] }),
+            json!({ "choices": [], "usage": { "prompt_tokens": 100, "completion_tokens": 10, "cost": 0.0001 } }),
+        ] {
+            first.push_str(&format!("data: {c}\n\n"));
+        }
+        first.push_str("data: [DONE]\n\n");
+        let second = sse(&[
+            chunk(json!({ "content": "It said " })),
+            chunk(json!({ "content": "hi." })),
+            json!({ "choices": [{ "delta": {}, "finish_reason": "stop" }],
+                "usage": { "prompt_tokens": 120, "completion_tokens": 5, "cost": 0.00015 } }),
+        ]);
+        let (url, seen) = fake_api(vec![Value::String(first), second]).await;
+        let api = api::Api::with_url("sk-or-test".into(), "deepseek/deepseek-v4-flash".into(), url);
+        let mut a = Assistant::with_parts(api, AssistantMode::Auto, true, test_store());
+        let ui = Watch(Mutex::new(Vec::new()));
+        assert_eq!(a.send("say hi", &ui).await.unwrap(), "It said hi.");
+        assert_eq!(*ui.0.lock().unwrap(), ["|", "It said ", "hi.", "|"]);
+        assert!((a.spent() - 0.00025).abs() < 1e-12);
+        let reqs = seen.lock().unwrap();
+        assert_eq!(reqs[0]["stream"], true);
+        let m = reqs[1]["messages"].as_array().unwrap();
+        assert_eq!(m[2]["reasoning_details"], json!([{ "type": "reasoning.text", "text": "Run echo.", "index": 0 }]));
+        assert_eq!(
+            m[2]["tool_calls"][0]["function"],
+            json!({ "name": "run_command", "arguments": "{\"command\":\"echo hi\"}" })
+        );
+        assert!(m[3]["content"].as_str().unwrap().contains("hi"), "{}", m[3]);
+    }
+
+    #[tokio::test]
+    async fn an_answer_cut_off_midway_is_an_error() {
+        let cut = sse(&[
+            json!({ "type": "message_start", "message": { "usage": {} } }),
+            json!({ "type": "content_block_start", "index": 0, "content_block": { "type": "text", "text": "" } }),
+            json!({ "type": "content_block_delta", "index": 0, "delta": { "type": "text_delta", "text": "Sure, I" } }),
+        ]);
+        let (url, _) = fake_api(vec![cut]).await;
+        let claude = api::Api::with_url("sk-test".into(), "claude-opus-5-5".into(), url);
+        let mut a = Assistant::with_parts(claude, AssistantMode::Ask, false, test_store());
+        let e = a.send("hi", &Watch(Mutex::new(Vec::new()))).await.unwrap_err();
+        assert!(format!("{e:#}").contains("cut off"), "{e:#}");
+    }
+
+    #[tokio::test]
+    async fn an_error_inside_the_stream_is_reported() {
+        let overloaded = sse(&[
+            json!({ "type": "message_start", "message": { "usage": {} } }),
+            json!({ "type": "error", "error": { "type": "overloaded_error", "message": "Overloaded" } }),
+        ]);
+        let (url, _) = fake_api(vec![overloaded]).await;
+        let claude = api::Api::with_url("sk-test".into(), "claude-opus-5-5".into(), url);
+        let mut a = Assistant::with_parts(claude, AssistantMode::Ask, false, test_store());
+        let e = a.send("hi", &Watch(Mutex::new(Vec::new()))).await.unwrap_err();
+        assert!(format!("{e:#}").contains("Overloaded"), "{e:#}");
     }
 }

@@ -125,10 +125,22 @@ impl Api {
     /// `usage`), translated if the model is on OpenRouter; `usage.cost` is
     /// what the call cost in US dollars when the provider says.
     pub async fn create(&self, system: &str, tools: &Value, messages: &[Value]) -> Result<Value> {
+        self.create_streaming(system, tools, messages, &|_| {}).await
+    }
+
+    /// Like [`Api::create`], with the answer's text handed to `on_text` piece
+    /// by piece as the model writes it. The result is the same.
+    pub async fn create_streaming(
+        &self,
+        system: &str,
+        tools: &Value,
+        messages: &[Value],
+        on_text: &(dyn Fn(&str) + Send + Sync),
+    ) -> Result<Value> {
         let (body, req) = match self.provider {
             Provider::Anthropic => {
                 let body = json!({
-                    "model": self.model, "max_tokens": MAX_TOKENS,
+                    "model": self.model, "max_tokens": MAX_TOKENS, "stream": true,
                     "system": system, "tools": tools, "messages": messages,
                 });
                 (body, self.http.post(&self.url).header("x-api-key", &self.key).header("anthropic-version", VERSION))
@@ -138,6 +150,7 @@ impl Api {
                 body["model"] = json!(self.model);
                 body["max_tokens"] = json!(MAX_TOKENS);
                 body["usage"] = json!({ "include": true });
+                body["stream"] = json!(true);
                 let req = self
                     .http
                     .post(&self.url)
@@ -154,6 +167,14 @@ impl Api {
             .await
             .with_context(|| format!("the assistant can't reach {who}; check the internet connection"))?;
         let status = r.status();
+        let streamed = r
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|t| t.to_str().ok())
+            .is_some_and(|t| t.starts_with("text/event-stream"));
+        if status.is_success() && streamed {
+            return self.read_stream(r, on_text).await;
+        }
         let v: Value = r.json().await.unwrap_or(Value::Null);
         if !status.is_success() {
             let msg = v["error"]["message"].as_str().unwrap_or("unknown error").to_owned();
@@ -174,6 +195,209 @@ impl Api {
                 from_chat(&v)
             }
         }
+    }
+
+    /// A streamed answer (server-sent events), put back together.
+    async fn read_stream(&self, mut r: reqwest::Response, on_text: &(dyn Fn(&str) + Send + Sync)) -> Result<Value> {
+        let who = self.provider.name();
+        let mut acc = match self.provider {
+            Provider::Anthropic => Stream::Messages(MessagesStream::default()),
+            Provider::OpenRouter => Stream::Chat(ChatStream::default()),
+        };
+        let mut buf = Vec::new();
+        loop {
+            let chunk = r.chunk().await.with_context(|| format!("the connection to {who} was cut off"))?;
+            let done = chunk.is_none();
+            buf.extend_from_slice(chunk.as_deref().unwrap_or(b"\n"));
+            while let Some(i) = buf.iter().position(|&b| b == b'\n') {
+                let line: Vec<u8> = buf.drain(..=i).collect();
+                let line = String::from_utf8_lossy(&line);
+                let Some(data) = line.trim_end().strip_prefix("data:") else { continue };
+                let data = data.trim_start();
+                if data == "[DONE]" {
+                    continue;
+                }
+                let Ok(v) = serde_json::from_str::<Value>(data) else { continue };
+                if let Some(msg) = v["error"]["message"].as_str() {
+                    bail!("{who} returned an error: {msg}");
+                }
+                match &mut acc {
+                    Stream::Messages(m) => m.event(&v, on_text),
+                    Stream::Chat(c) => c.chunk(&v, on_text),
+                }
+            }
+            if done {
+                break;
+            }
+        }
+        match acc {
+            Stream::Messages(m) => m.finish(),
+            Stream::Chat(c) => from_chat(&c.finish()),
+        }
+    }
+}
+
+enum Stream {
+    Messages(MessagesStream),
+    Chat(ChatStream),
+}
+
+/// A Messages API answer as it streams in.
+#[derive(Default)]
+struct MessagesStream {
+    content: Vec<Value>,
+    /// A tool call's input arrives as pieces of JSON.
+    input: Vec<String>,
+    stop_reason: Option<String>,
+    usage: serde_json::Map<String, Value>,
+}
+
+impl MessagesStream {
+    fn event(&mut self, v: &Value, on_text: &(dyn Fn(&str) + Send + Sync)) {
+        let i = v["index"].as_u64().unwrap_or(0) as usize;
+        match v["type"].as_str().unwrap_or("") {
+            "message_start" => self.add_usage(&v["message"]["usage"]),
+            "content_block_start" => {
+                if self.content.len() <= i {
+                    self.content.resize(i + 1, Value::Null);
+                    self.input.resize(i + 1, String::new());
+                }
+                self.content[i] = v["content_block"].clone();
+            }
+            "content_block_delta" => {
+                let (Some(block), d) = (self.content.get_mut(i), &v["delta"]) else { return };
+                let append = |block: &mut Value, field: &str, piece: &str| {
+                    let mut s = block[field].as_str().unwrap_or("").to_owned();
+                    s.push_str(piece);
+                    block[field] = json!(s);
+                };
+                match (d["type"].as_str().unwrap_or(""), d["text"].as_str()) {
+                    ("text_delta", Some(t)) => {
+                        append(block, "text", t);
+                        on_text(t);
+                    }
+                    ("input_json_delta", _) => self.input[i].push_str(d["partial_json"].as_str().unwrap_or("")),
+                    ("thinking_delta", _) => append(block, "thinking", d["thinking"].as_str().unwrap_or("")),
+                    ("signature_delta", _) => block["signature"] = d["signature"].clone(),
+                    _ => {}
+                }
+            }
+            "content_block_stop" => {
+                if let Some(block) = self.content.get_mut(i)
+                    && block["type"] == "tool_use"
+                {
+                    let raw = self.input[i].trim();
+                    if !raw.is_empty() {
+                        block["input"] = serde_json::from_str::<Value>(raw)
+                            .ok()
+                            .filter(Value::is_object)
+                            .unwrap_or_else(|| json!({}));
+                    }
+                }
+            }
+            "message_delta" => {
+                if let Some(s) = v["delta"]["stop_reason"].as_str() {
+                    self.stop_reason = Some(s.to_owned());
+                }
+                self.add_usage(&v["usage"]);
+            }
+            _ => {}
+        }
+    }
+
+    fn add_usage(&mut self, u: &Value) {
+        for (k, v) in u.as_object().into_iter().flatten() {
+            if !v.is_null() {
+                self.usage.insert(k.clone(), v.clone());
+            }
+        }
+    }
+
+    fn finish(self) -> Result<Value> {
+        let content: Vec<Value> = self.content.into_iter().filter(|b| !b.is_null()).collect();
+        let stop = self.stop_reason.context("the answer was cut off before it finished")?;
+        Ok(json!({ "content": content, "stop_reason": stop, "usage": self.usage }))
+    }
+}
+
+/// An OpenRouter chat completion as it streams in.
+#[derive(Default)]
+struct ChatStream {
+    text: String,
+    /// (id, name, arguments) by position.
+    calls: Vec<(Value, String, String)>,
+    reasoning: Vec<Value>,
+    finish_reason: Value,
+    usage: Value,
+}
+
+impl ChatStream {
+    fn chunk(&mut self, v: &Value, on_text: &(dyn Fn(&str) + Send + Sync)) {
+        if v["usage"].is_object() {
+            self.usage = v["usage"].clone();
+        }
+        let Some(choice) = v["choices"].get(0) else { return };
+        if !choice["finish_reason"].is_null() {
+            self.finish_reason = choice["finish_reason"].clone();
+        }
+        let d = &choice["delta"];
+        if let Some(t) = d["content"].as_str().filter(|t| !t.is_empty()) {
+            self.text.push_str(t);
+            on_text(t);
+        }
+        for c in d["tool_calls"].as_array().into_iter().flatten() {
+            let i = c["index"].as_u64().map(|i| i as usize).unwrap_or(self.calls.len());
+            if self.calls.len() <= i {
+                self.calls.resize(i + 1, (Value::Null, String::new(), String::new()));
+            }
+            let call = &mut self.calls[i];
+            if !c["id"].is_null() {
+                call.0 = c["id"].clone();
+            }
+            call.1.push_str(c["function"]["name"].as_str().unwrap_or(""));
+            call.2.push_str(c["function"]["arguments"].as_str().unwrap_or(""));
+        }
+        for r in d["reasoning_details"].as_array().into_iter().flatten() {
+            self.add_reasoning(r);
+        }
+    }
+
+    /// Reasoning arrives in pieces with the same `index`: their text joins up.
+    fn add_reasoning(&mut self, piece: &Value) {
+        let existing = self
+            .reasoning
+            .iter_mut()
+            .find(|r| !piece["index"].is_null() && r["index"] == piece["index"] && r["type"] == piece["type"]);
+        let Some(r) = existing else {
+            self.reasoning.push(piece.clone());
+            return;
+        };
+        for (k, v) in piece.as_object().into_iter().flatten() {
+            match (k.as_str(), v.as_str(), r[k.as_str()].as_str()) {
+                ("text" | "summary" | "data", Some(more), Some(so_far)) => {
+                    r[k.as_str()] = json!(format!("{so_far}{more}"))
+                }
+                _ if !v.is_null() => r[k.as_str()] = v.clone(),
+                _ => {}
+            }
+        }
+    }
+
+    /// The whole completion, as a non-streamed answer would have been.
+    fn finish(self) -> Value {
+        let calls: Vec<Value> = self
+            .calls
+            .into_iter()
+            .map(|(id, name, args)| json!({ "id": id, "type": "function", "function": { "name": name, "arguments": args } }))
+            .collect();
+        let mut message = json!({ "content": self.text });
+        if !calls.is_empty() {
+            message["tool_calls"] = json!(calls);
+        }
+        if !self.reasoning.is_empty() {
+            message["reasoning_details"] = json!(self.reasoning);
+        }
+        json!({ "choices": [{ "finish_reason": self.finish_reason, "message": message }], "usage": self.usage })
     }
 }
 
