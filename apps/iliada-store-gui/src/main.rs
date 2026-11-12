@@ -138,6 +138,40 @@ fn load_system() -> Task<Message> {
 }
 
 impl App {
+    /// What the search box finds anywhere in the Store: apps, then software
+    /// and services.
+    fn search_results(&self) -> Element<'_, Message> {
+        let spacing = cosmic::theme::spacing();
+        let needle = self.search.trim().to_lowercase();
+        let mut list = widget::column::with_capacity(8).spacing(spacing.space_s);
+        let mut found = false;
+        if let Some(Ok(catalog)) = &self.catalog {
+            for app in catalog
+                .apps
+                .iter()
+                .filter(|a| [&a.name, &a.summary, &a.category].iter().any(|f| f.to_lowercase().contains(&needle)))
+            {
+                list = list.push(self.row(app));
+                found = true;
+            }
+        }
+        if let Some(Ok(s)) = &self.system {
+            for item in iliada_system::software::search(&needle) {
+                list = list.push(self.system_row(item, s));
+                found = true;
+            }
+        }
+        if !found {
+            return widget::container(widget::text::body(format!(
+                "Nothing in the Store matches \"{}\".",
+                self.search.trim()
+            )))
+            .center(Length::Fill)
+            .into();
+        }
+        widget::scrollable(list).height(Length::Fill).into()
+    }
+
     fn system_page(&self, kind: Kind) -> Element<'_, Message> {
         let spacing = cosmic::theme::spacing();
         let intro = match kind {
@@ -372,7 +406,7 @@ impl cosmic::Application for App {
         let page = self.page();
         let header = widget::row::with_capacity(2)
             .push(
-                widget::text_input::search_input("Search apps", &self.search)
+                widget::text_input::search_input("Search apps and software", &self.search)
                     .on_input(Message::Search)
                     .on_clear(Message::Search(String::new()))
                     .width(Length::Fill),
@@ -381,6 +415,14 @@ impl cosmic::Application for App {
             .spacing(spacing.space_s)
             .align_y(Alignment::Center);
 
+        if !self.search.trim().is_empty() {
+            return widget::column::with_capacity(2)
+                .push(header)
+                .push(self.search_results())
+                .spacing(spacing.space_m)
+                .padding(spacing.space_m)
+                .into();
+        }
         if let Page::System(kind) = &page {
             return widget::column::with_capacity(2)
                 .push(header)
