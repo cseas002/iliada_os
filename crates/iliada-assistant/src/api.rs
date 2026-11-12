@@ -68,6 +68,56 @@ pub fn provider_of_key(key: &str) -> Option<Provider> {
 }
 
 /// Saves a key where its provider's keys go; returns the provider.
+/// A key shown without giving it away: "sk-or-v1…ab12".
+pub fn masked(key: &str) -> String {
+    let k = key.trim();
+    let n = k.chars().count();
+    if n <= 14 {
+        return "…".into();
+    }
+    let head: String = k.chars().take(8).collect();
+    let tail: String = k.chars().skip(n - 4).collect();
+    format!("{head}…{tail}")
+}
+
+/// Removes the saved key for `p`.
+pub fn remove_key(p: Provider) -> Result<()> {
+    let path = key_path(p).context("HOME is not set")?;
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+        _ => Ok(()),
+    }
+}
+
+/// Asks the provider whether `key` works, without asking the model anything
+/// (free). For OpenRouter, also says how much credit is left.
+pub async fn check_key(p: Provider, key: &str) -> Result<String> {
+    let http = reqwest::Client::builder().timeout(std::time::Duration::from_secs(20)).build()?;
+    let req = match p {
+        Provider::OpenRouter => http.get("https://openrouter.ai/api/v1/key").bearer_auth(key.trim()),
+        Provider::Anthropic => http
+            .get("https://api.anthropic.com/v1/models")
+            .header("x-api-key", key.trim())
+            .header("anthropic-version", "2023-06-01"),
+    };
+    let r = req.send().await.with_context(|| format!("could not reach {}", p.name()))?;
+    match r.status().as_u16() {
+        200..=299 => {}
+        401 | 403 => bail!("{} did not accept this key", p.name()),
+        s => bail!("{} answered with an error ({s})", p.name()),
+    }
+    if p != Provider::OpenRouter {
+        return Ok("The key works.".into());
+    }
+    let v: Value = r.json().await.unwrap_or_default();
+    let d = &v["data"];
+    Ok(match (d["limit"].as_f64(), d["limit_remaining"].as_f64(), d["usage"].as_f64()) {
+        (Some(limit), Some(left), _) => format!("The key works: ${left:.2} of ${limit:.2} left."),
+        (None, _, Some(used)) => format!("The key works (${used:.2} used so far)."),
+        _ => "The key works.".into(),
+    })
+}
+
 /// The first API key in `text`: a pasted key, or a file such as a `.env`
 /// with `OPENROUTER_API_KEY="sk-or-…"` in it.
 pub fn find_key(text: &str) -> Option<&str> {
@@ -510,6 +560,12 @@ fn from_chat(v: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keys_are_shown_masked() {
+        assert_eq!(masked("sk-or-v1-0123456789abcdef"), "sk-or-v1…cdef");
+        assert_eq!(masked("short"), "…");
+    }
 
     #[test]
     fn keys_are_found_in_pasted_text_and_env_files() {

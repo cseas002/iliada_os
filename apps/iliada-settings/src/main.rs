@@ -125,10 +125,19 @@ fn capability_label(c: &Capability) -> String {
     }
 }
 
+/// What the provider said about the saved API key.
+#[derive(Debug, Clone)]
+enum KeyCheck {
+    Checking,
+    Works(String),
+    Failed(String),
+}
+
 #[derive(Debug, Clone)]
 enum Confirm {
     Restore(String),
     SignOut,
+    RemoveKey(Provider),
 }
 
 // Messages are moved around once each; boxing the large one buys nothing.
@@ -151,6 +160,10 @@ enum Message {
     AssistantSet(AssistantSettings),
     AssistantKey(String),
     SaveKey,
+    ReplaceKey,
+    CancelReplaceKey,
+    RemoveKey,
+    KeyChecked(Result<String, String>),
     EmailAddress(String),
     EmailServer(String),
     EmailSecurity(usize),
@@ -183,6 +196,8 @@ struct App {
     decisions: Decisions,
     extra_isolation: Vec<String>,
     key_input: String,
+    replacing_key: bool,
+    key_check: Option<KeyCheck>,
     email: EmailForm,
 }
 
@@ -596,44 +611,99 @@ impl App {
                     })),
             );
             items.push(model.into());
-            let key_row = widget::row::with_capacity(2)
-                .push(
-                    widget::secure_input("sk-ant-… or sk-or-…", self.key_input.as_str(), None, true)
-                        .on_input(Message::AssistantKey)
-                        .on_submit(|_| Message::SaveKey)
-                        .width(Length::Fill),
-                )
-                .push(widget::button::suggested("Save key").on_press(Message::SaveKey))
-                .spacing(cosmic::theme::spacing().space_xs)
-                .align_y(Alignment::Center);
-            let provider = Provider::of(&a.model);
-            let have_key = iliada_assistant::api::load_key(provider).is_some();
-            let spent = iliada_assistant::total_spent();
-            let mut key = settings::section()
-                .title("API key")
-                .add(info(
-                    if have_key {
-                        format!("Your {} API key is saved", provider.name())
-                    } else {
-                        format!("Add your {} API key", provider.name())
-                    },
-                    Some(
-                        match provider {
-                            Provider::Anthropic => "From console.anthropic.com.",
-                            Provider::OpenRouter => "From openrouter.ai/keys.",
-                        }
-                        .to_owned()
-                            + " Kept only for you on this computer; never backed up.",
-                    ),
-                ))
-                .add(settings::item_row(vec![key_row.into()]));
-            if spent > 0.0 {
-                key = key.add(info(format!("Spent so far: ${spent:.4}"), None));
-            }
-            items.push(key.into());
+            items.push(self.key_section(&a.model));
             items.push(self.email_section());
         }
         settings::view_column(items).into()
+    }
+
+    /// The API key for the chosen model's provider: whether one is saved,
+    /// whether it works, and adding, replacing or removing it.
+    fn key_section(&self, model: &str) -> Element<'_, Message> {
+        let space = cosmic::theme::spacing();
+        let provider = Provider::of(model);
+        let name = provider.name();
+        let (prefix, site) = match provider {
+            Provider::Anthropic => ("sk-ant-", "console.anthropic.com"),
+            Provider::OpenRouter => ("sk-or-", "openrouter.ai/keys"),
+        };
+        let saved = iliada_assistant::api::load_key(provider);
+        let mut section = settings::section().title("API key");
+        match (&saved, self.replacing_key) {
+            (Some(k), false) => {
+                let status = match &self.key_check {
+                    Some(KeyCheck::Checking) => "Checking the key…".to_owned(),
+                    Some(KeyCheck::Works(s)) => s.clone(),
+                    Some(KeyCheck::Failed(e)) => format!("This key does not work: {e}."),
+                    None => "Only you can read it; it is never backed up.".to_owned(),
+                };
+                let buttons = widget::row::with_capacity(2)
+                    .push(widget::button::standard("Replace").on_press(Message::ReplaceKey))
+                    .push(widget::button::destructive("Remove").on_press(Message::RemoveKey))
+                    .spacing(space.space_xs);
+                section = section.add(
+                    settings::item::builder(format!("{name} key saved ({})", iliada_assistant::api::masked(k)))
+                        .description(status)
+                        .control(buttons),
+                );
+            }
+            _ => {
+                let typed = self.key_input.trim();
+                let hint = if typed.is_empty() {
+                    format!("Create one at {site}, then paste it here. Only you can read it; it is never backed up.")
+                } else if !typed.starts_with(prefix) {
+                    match iliada_assistant::api::provider_of_key(typed) {
+                        Some(other) => format!(
+                            "That is an {} key, but the model above needs an {name} key ({prefix}…). Choose another model, or paste an {name} key.",
+                            other.name()
+                        ),
+                        None => format!("{name} keys start with {prefix}"),
+                    }
+                } else {
+                    "Looks right. Press Add key.".to_owned()
+                };
+                let valid = typed.starts_with(prefix) && typed.len() > prefix.len() + 8;
+                let mut row = widget::row::with_capacity(3)
+                    .push(
+                        widget::secure_input(format!("{prefix}…"), self.key_input.as_str(), None, true)
+                            .on_input(Message::AssistantKey)
+                            .on_submit(move |_| if valid { Message::SaveKey } else { Message::Refresh })
+                            .width(Length::Fill),
+                    )
+                    .push(widget::button::suggested("Add key").on_press_maybe(valid.then_some(Message::SaveKey)));
+                if saved.is_some() {
+                    row = row.push(widget::button::standard("Cancel").on_press(Message::CancelReplaceKey));
+                }
+                section = section
+                    .add(info(
+                        if saved.is_some() {
+                            format!("Replace your {name} key")
+                        } else {
+                            format!("Add your {name} API key")
+                        },
+                        Some(hint),
+                    ))
+                    .add(settings::item_row(vec![row.spacing(space.space_xs).align_y(Alignment::Center).into()]));
+            }
+        }
+        let spent = iliada_assistant::total_spent();
+        if spent > 0.0 {
+            section = section.add(info(format!("Spent so far: ${spent:.4}"), None));
+        }
+        section.into()
+    }
+
+    /// Checks the saved key for `model`'s provider (free: no model is asked).
+    fn check_key(&mut self, model: &str) -> Task<Message> {
+        let provider = Provider::of(model);
+        let Some(key) = iliada_assistant::api::load_key(provider) else {
+            self.key_check = None;
+            return Task::none();
+        };
+        self.key_check = Some(KeyCheck::Checking);
+        cosmic::task::future(async move {
+            Message::KeyChecked(iliada_assistant::api::check_key(provider, &key).await.map_err(|e| format!("{e:#}")))
+        })
     }
 
     /// The account the assistant sends email from (per user, like the key).
@@ -779,6 +849,8 @@ impl cosmic::Application for App {
             decisions: Decisions::default(),
             extra_isolation: Vec::new(),
             key_input: String::new(),
+            replacing_key: false,
+            key_check: None,
             email: EmailForm::load(),
         };
         app.set_header_title("Iliada Settings".into());
@@ -799,6 +871,11 @@ impl cosmic::Application for App {
         // still running keeps showing.
         self.error = None;
         self.notice = None;
+        if self.page() == Page::Assistant {
+            self.replacing_key = false;
+            let model = self.status().map(|s| s.assistant.model.clone()).unwrap_or_default();
+            return Task::batch([load_status(), self.check_key(&model)]);
+        }
         if self.page() == Page::Privacy {
             self.privacy = installed_permissions();
             self.decisions = Decisions::default_path().map(|p| Decisions::load(&p)).unwrap_or_default();
@@ -816,6 +893,11 @@ impl cosmic::Application for App {
                      From now on, this computer backs up there."
                 ),
                 widget::button::destructive("Restore"),
+            ),
+            Confirm::RemoveKey(p) => (
+                "Remove the API key?",
+                format!("The assistant stops working until you add a {} key again.", p.name()),
+                widget::button::destructive("Remove"),
             ),
             Confirm::SignOut => (
                 "Sign out of GitHub?",
@@ -901,7 +983,17 @@ impl cosmic::Application for App {
             }
             Message::Backups(b) => self.backups = Some(b),
             Message::Ask(c) => self.confirm = Some(c),
-            Message::AssistantSet(a) => return self.start(Request::SetAssistant { settings: a }),
+            Message::AssistantSet(a) => {
+                // Another provider's model: check that provider's key.
+                let before = self.status().map(|s| Provider::of(&s.assistant.model));
+                let check = if before != Some(Provider::of(&a.model)) {
+                    self.replacing_key = false;
+                    self.check_key(&a.model)
+                } else {
+                    Task::none()
+                };
+                return Task::batch([self.start(Request::SetAssistant { settings: a }), check]);
+            }
             Message::AssistantKey(k) => self.key_input = k,
             Message::EmailAddress(a) => {
                 // Known providers: fill in their server (until it's edited).
@@ -965,10 +1057,30 @@ impl cosmic::Application for App {
                     Err(e) => self.error = Some(format!("Could not save the key: {e:#}")),
                     Ok(p) => {
                         self.key_input.clear();
-                        self.notice =
-                            Some(format!("{} key saved. Only you can read it; it is never backed up.", p.name()));
+                        self.replacing_key = false;
+                        self.notice = Some(format!("{} key added.", p.name()));
+                        let model = self.status().map(|s| s.assistant.model.clone()).unwrap_or_default();
+                        return self.check_key(&model);
                     }
                 }
+            }
+            Message::ReplaceKey => {
+                self.replacing_key = true;
+                self.key_input.clear();
+            }
+            Message::CancelReplaceKey => {
+                self.replacing_key = false;
+                self.key_input.clear();
+            }
+            Message::RemoveKey => {
+                let model = self.status().map(|s| s.assistant.model.clone()).unwrap_or_default();
+                self.confirm = Some(Confirm::RemoveKey(Provider::of(&model)));
+            }
+            Message::KeyChecked(r) => {
+                self.key_check = Some(match r {
+                    Ok(s) => KeyCheck::Works(s),
+                    Err(e) => KeyCheck::Failed(e),
+                });
             }
             Message::ExtraIsolation(app, on) => {
                 self.extra_isolation.retain(|a| *a != app);
@@ -992,6 +1104,16 @@ impl cosmic::Application for App {
                 return match self.confirm.take() {
                     Some(Confirm::Restore(repo)) => self.start(Request::Restore { repo }),
                     Some(Confirm::SignOut) => self.start(Request::BackupSignOut),
+                    Some(Confirm::RemoveKey(p)) => {
+                        match iliada_assistant::api::remove_key(p) {
+                            Err(e) => self.error = Some(format!("Could not remove the key: {e:#}")),
+                            Ok(()) => {
+                                self.key_check = None;
+                                self.notice = Some(format!("{} key removed.", p.name()));
+                            }
+                        }
+                        Task::none()
+                    }
                     None => Task::none(),
                 };
             }
