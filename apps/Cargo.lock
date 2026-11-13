@@ -2833,7 +2833,7 @@ dependencies = [
 
 [[package]]
 name = "iliada-applist"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "iliada-types",
@@ -2842,7 +2842,7 @@ dependencies = [
 
 [[package]]
 name = "iliada-assistant"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2861,7 +2861,7 @@ dependencies = [
 
 [[package]]
 name = "iliada-bundle"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "iliada-types",
  "serde",
@@ -2871,7 +2871,7 @@ dependencies = [
 
 [[package]]
 name = "iliada-catalog"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2883,7 +2883,7 @@ dependencies = [
 
 [[package]]
 name = "iliada-ingest"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "ar",
@@ -2914,7 +2914,7 @@ dependencies = [
 
 [[package]]
 name = "iliada-installer"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "futures-util",
  "iliada-system",
@@ -2925,7 +2925,7 @@ dependencies = [
 
 [[package]]
 name = "iliada-settings"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -2940,7 +2940,7 @@ dependencies = [
 
 [[package]]
 name = "iliada-store"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2963,7 +2963,7 @@ dependencies = [
 
 [[package]]
 name = "iliada-store-gui"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "futures-util",
  "iliada-catalog",
@@ -2977,7 +2977,7 @@ dependencies = [
 
 [[package]]
 name = "iliada-system"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2997,7 +2997,7 @@ dependencies = [
 
 [[package]]
 name = "iliada-types"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "serde",
  "thiserror 2.0.21",

@@ -1,7 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 (2026-11-13)
 
+- New in the Store: LibreOffice Calc, Impress and Math, added by the catalog
+  builder, which now finds popular Debian apps, builds them, launch-tests
+  them and publishes the ones that start (`iliada_apps/scripts/grow.sh`).
+- Apps built from Debian bring what a desktop has anyway: GTK apps get the
+  SVG image loader (game tiles and icons were blank), Qt apps Qt's Wayland
+  plugin.
 - **Apps that aren't in the Store**: search for them anyway. Debian's ~2,000
   desktop apps are listed under "Not in the Store yet" with a **Build**
   button; Iliada builds the app from Debian's package on this computer into
