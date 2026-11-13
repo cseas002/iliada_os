@@ -139,6 +139,7 @@ impl Service {
                     name: (*n).into(),
                     description: (*d).into(),
                     on: settings::service(&doc, n),
+                    boot: settings::service_state(&doc, n) == settings::ServiceState::On,
                 })
                 .collect(),
             backup: BackupInfo {
@@ -212,7 +213,15 @@ impl Service {
                 if !settings::set_service(&mut doc, &name, on)? {
                     return Ok(json!({ "changed": false }));
                 }
-                self.change_settings(&doc, &format!("{} {name}", if on { "Enable" } else { "Disable" }), &log).await
+                self.change_settings(&doc, &format!("{} {name}", if on { "Install" } else { "Remove" }), &log).await
+            }
+            Request::SetServiceBoot { name, boot } => {
+                let mut doc = self.read_settings()?;
+                if !settings::set_service_boot(&mut doc, &name, boot)? {
+                    return Ok(json!({ "changed": false }));
+                }
+                let what = if boot { "Start at boot" } else { "Don't start at boot" };
+                self.change_settings(&doc, &format!("{what}: {name}"), &log).await
             }
             Request::SetAssistant { settings: a } => {
                 // Not a system change: written and recorded, no rebuild.

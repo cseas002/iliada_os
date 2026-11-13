@@ -3,12 +3,18 @@
 //! System services are part of the computer's configuration (/etc/iliada),
 //! so the real `systemctl enable`/`disable` can't change them (the unit
 //! links are read-only). For the services Iliada knows (SSH, printing,
-//! nginx, PostgreSQL, MariaDB, Redis, Docker), this turns
-//! `systemctl enable sshd` into the same settings change as
-//! `iliada install ssh`: written to settings.toml, recorded in its history,
-//! backed up, applied now and after every restart. `start`/`stop` stay quick
-//! and temporary, and say so. Everything else, and anything run by a script
-//! (not at a terminal), goes to the real systemctl unchanged.
+//! nginx, PostgreSQL, MariaDB, Redis, Docker) the three levels work as on
+//! Debian or Fedora:
+//!
+//! * `iliada install ssh` / `iliada remove ssh`: on the computer or not;
+//! * `systemctl enable sshd` / `disable sshd`: started at every boot or not
+//!   (saved in settings.toml, recorded, backed up; enabling a service that
+//!   isn't installed installs it; `--now` also starts or stops it);
+//! * `systemctl start sshd` / `stop sshd`: running now or not, until the
+//!   next restart.
+//!
+//! Everything else, and anything run by a script (not at a terminal), goes
+//! to the real systemctl unchanged.
 //!
 //! Usage: iliada-systemctl <path of the real systemctl> [systemctl arguments…]
 
@@ -17,15 +23,16 @@ use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitCode};
 
 use iliada_system::client;
-use iliada_system::protocol::{Event, Request};
-use iliada_system::settings::{SERVICES, service_of_unit};
+use iliada_system::protocol::{Event, Request, ServiceInfo};
+use iliada_system::settings::{SERVICES, service_of_unit, unit_of_service};
 
 #[derive(Debug, PartialEq)]
 enum Plan {
     /// Hand everything to the real systemctl.
     PassThrough,
-    /// `enable`/`disable` of Iliada services: a settings change.
-    Setting { services: Vec<&'static str>, on: bool },
+    /// `enable`/`disable` of Iliada services: started at boot or not (a
+    /// setting); `now`: also start or stop them.
+    Boot { services: Vec<&'static str>, boot: bool, now: bool },
     /// `start`/`stop`/`restart` of Iliada services: run it, then explain.
     Runtime { verb: String, services: Vec<&'static str> },
     /// `enable`/`disable` of other system units: run it, explain if it fails.
@@ -39,7 +46,7 @@ const ELSEWHERE: &[&str] = &["--user", "--global", "-H", "--host", "-M", "--mach
 
 fn plan(args: &[String]) -> Plan {
     let mut words = Vec::new();
-    let mut skip = false;
+    let (mut skip, mut now) = (false, false);
     for a in args {
         if skip {
             skip = false;
@@ -49,7 +56,9 @@ fn plan(args: &[String]) -> Plan {
         if ELSEWHERE.contains(&name) {
             return Plan::PassThrough;
         }
-        if WITH_VALUE.contains(&a.as_str()) {
+        if a == "--now" {
+            now = true;
+        } else if WITH_VALUE.contains(&a.as_str()) {
             skip = true;
         } else if !a.starts_with('-') {
             words.push(a.as_str());
@@ -63,7 +72,7 @@ fn plan(args: &[String]) -> Plan {
     match (*verb, services) {
         ("enable" | "disable", Some(mut s)) => {
             s.dedup();
-            Plan::Setting { services: s, on: *verb == "enable" }
+            Plan::Boot { services: s, boot: *verb == "enable", now }
         }
         ("enable" | "disable" | "mask" | "unmask", None) => Plan::OtherUnits,
         ("start" | "stop" | "restart" | "try-restart" | "reload-or-restart", Some(s)) => {
@@ -77,18 +86,30 @@ fn describe(service: &str) -> &'static str {
     SERVICES.iter().find(|(n, _)| *n == service).map(|(_, d)| *d).unwrap_or("this service")
 }
 
+fn unit(service: &str) -> &str {
+    unit_of_service(service).unwrap_or(service)
+}
+
 fn run(real: &str, args: &[String]) -> i32 {
     Command::new(real).args(args).status().map(|s| s.code().unwrap_or(1)).unwrap_or(1)
 }
 
-async fn set(services: &[&'static str], on: bool) -> anyhow::Result<()> {
+async fn state(service: &str) -> Option<ServiceInfo> {
+    client::status().await.ok()?.services.into_iter().find(|s| s.name == service)
+}
+
+async fn set_boot(real: &str, services: &[&'static str], boot: bool, now: bool) -> anyhow::Result<()> {
     for s in services {
         let what = describe(s);
+        let before = state(s).await;
+        let installing = boot && !before.as_ref().is_some_and(|b| b.on);
         eprintln!(
-            "{} is one of this computer's settings: turning it {} in /etc/iliada/settings.toml \
-             (kept after restarts, recorded and backed up)…",
-            what,
-            if on { "on" } else { "off" }
+            "{what}: {} in /etc/iliada/settings.toml (kept, recorded and backed up)…",
+            match (boot, installing) {
+                (true, true) => "installing it and starting it at every boot",
+                (true, false) => "starting it at every boot",
+                (false, _) => "not starting it at boot",
+            }
         );
         let mut on_event = |e: &Event| {
             if let Event::Log { line } = e {
@@ -96,19 +117,25 @@ async fn set(services: &[&'static str], on: bool) -> anyhow::Result<()> {
                 eprint!("\r\x1b[2K  {short}");
             }
         };
-        let r = client::call(&Request::SetService { name: (*s).to_owned(), on }, &mut on_event).await;
+        let r = client::call(&Request::SetServiceBoot { name: (*s).to_owned(), boot }, &mut on_event).await;
         eprint!("\r\x1b[2K");
-        let r = r?;
-        let changed = r.get("changed").and_then(|c| c.as_bool()).unwrap_or(true);
-        let state = if on { "on" } else { "off" };
-        eprintln!("{what} {} {state}.", if changed { "is" } else { "was already" });
+        r?;
+        match (boot, before.map(|b| b.on)) {
+            (true, _) => eprintln!("{what} starts at every boot."),
+            (false, Some(true)) if !now => eprintln!(
+                "{what} won't start at boot any more. It keeps running until you stop it \
+                 (systemctl stop {}) or restart; to remove it: iliada remove {s}",
+                unit(s)
+            ),
+            (false, Some(true)) => eprintln!("{what} won't start at boot any more."),
+            (false, _) => eprintln!("{what} isn't installed (iliada install {s})."),
+        }
+        if now {
+            let verb = if boot { "start" } else { "stop" };
+            run(real, &[verb.into(), unit(s).into()]);
+        }
     }
     Ok(())
-}
-
-async fn configured_on(service: &str) -> Option<bool> {
-    let st = client::status().await.ok()?;
-    Some(st.services.iter().any(|x| x.name == service && x.on))
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -128,7 +155,7 @@ async fn main() -> ExitCode {
             eprintln!("systemctl: {e}");
             ExitCode::from(1)
         }
-        Plan::Setting { services, on } => match set(&services, on).await {
+        Plan::Boot { services, boot, now } => match set_boot(&real, &services, boot, now).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("{e:#}");
@@ -138,19 +165,17 @@ async fn main() -> ExitCode {
         Plan::Runtime { verb, services } => {
             let code = run(&real, &args);
             for s in services {
-                let id = s;
-                match (verb.as_str(), code == 0, configured_on(s).await) {
-                    ("stop", true, Some(true)) => eprintln!(
-                        "Stopped until the next restart: {} is on in this computer's settings. \
-                         To turn it off for good: systemctl disable {} (or iliada remove {id})",
+                let info = state(s).await;
+                match (verb.as_str(), code == 0, info) {
+                    ("stop", true, Some(i)) if i.boot => eprintln!(
+                        "Stopped until the next restart: {} starts at every boot. To change that: \
+                         systemctl disable {} (or remove it: iliada remove {s})",
                         describe(s),
-                        iliada_system::settings::unit_of_service(s).unwrap_or(s),
+                        unit(s),
                     ),
-                    (_, false, Some(false)) => eprintln!(
-                        "{} is off in this computer's settings. To turn it on (kept after restarts): \
-                         systemctl enable {} (or iliada install {id})",
+                    (_, false, Some(i)) if !i.on => eprintln!(
+                        "{} isn't installed. Install it (it then starts at every boot): iliada install {s}",
                         describe(s),
-                        iliada_system::settings::unit_of_service(s).unwrap_or(s),
                     ),
                     _ => {}
                 }
@@ -180,11 +205,17 @@ mod tests {
     }
 
     #[test]
-    fn enabling_iliada_services_is_a_setting() {
-        assert_eq!(p("enable sshd"), Plan::Setting { services: vec!["ssh"], on: true });
-        assert_eq!(p("enable --now sshd.service"), Plan::Setting { services: vec!["ssh"], on: true });
-        assert_eq!(p("disable nginx mysql"), Plan::Setting { services: vec!["nginx", "mariadb"], on: false });
-        assert_eq!(p("-q disable docker.service docker.socket"), Plan::Setting { services: vec!["docker"], on: false });
+    fn enable_and_disable_are_start_at_boot() {
+        assert_eq!(p("enable sshd"), Plan::Boot { services: vec!["ssh"], boot: true, now: false });
+        assert_eq!(p("enable --now sshd.service"), Plan::Boot { services: vec!["ssh"], boot: true, now: true });
+        assert_eq!(
+            p("disable nginx mysql"),
+            Plan::Boot { services: vec!["nginx", "mariadb"], boot: false, now: false }
+        );
+        assert_eq!(
+            p("-q disable --now docker.service docker.socket"),
+            Plan::Boot { services: vec!["docker"], boot: false, now: true }
+        );
     }
 
     #[test]

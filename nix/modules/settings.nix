@@ -4,7 +4,8 @@
 #   [tools]                     command-line tools (nixpkgs attribute names)
 #   packages = ["vim", "git"]
 #   [services]
-#   ssh = false                 SSH server
+#   ssh = true                  SSH server: installed and started at boot
+#                               ("manual": installed, started only by hand; false: not installed)
 #   printing = false            CUPS
 #   nginx, postgresql, mariadb, redis, docker   (the Store's Services)
 { config, lib, pkgs, ... }:
@@ -12,6 +13,24 @@ let
   cfg = config.iliada;
   s = if cfg.settingsFile == null then { } else builtins.fromTOML (builtins.readFile cfg.settingsFile);
   services = s.services or { };
+  # Three levels, as on Debian or Fedora: on (true or "on"), "manual", off.
+  state = name: let v = services.${name} or false; in
+    if v == true || v == "on" then "on" else if v == "manual" then "manual" else "off";
+  installed = name: state name != "off";
+  manual = name: state name == "manual";
+  # The units (and sockets) that would start a service at boot.
+  bootUnits = {
+    ssh = { services = [ "sshd" ]; sockets = [ ]; };
+    printing = { services = [ "cups" ]; sockets = [ "cups" ]; };
+    nginx = { services = [ "nginx" ]; sockets = [ ]; };
+    postgresql = { services = [ "postgresql" ]; sockets = [ ]; };
+    mariadb = { services = [ "mysql" ]; sockets = [ ]; };
+    redis = { services = [ "redis" ]; sockets = [ ]; };
+    # Its socket stays: docker starts the moment it is used.
+    docker = { services = [ "docker" ]; sockets = [ ]; };
+  };
+  manualServices = lib.filter manual (lib.attrNames bootUnits);
+  noBoot = kind: lib.listToAttrs (lib.concatMap (n: map (u: lib.nameValuePair u { wantedBy = lib.mkForce [ ]; }) bootUnits.${n}.${kind}) manualServices);
   toPkg = name:
     lib.attrByPath (lib.splitString "." name) (throw "iliada settings: there is no package called ${name}") pkgs;
 in
@@ -33,24 +52,27 @@ in
 
   config = {
     environment.systemPackages = map toPkg (cfg.tools ++ (s.tools.packages or [ ]));
-    services.openssh.enable = lib.mkIf (services.ssh or false) true;
-    services.printing.enable = lib.mkIf (services.printing or false) true;
+    services.openssh.enable = lib.mkIf (installed "ssh") true;
+    services.printing.enable = lib.mkIf (installed "printing") true;
     # Background services from the Store. They listen on this computer; the
     # firewall stays closed to them unless configured otherwise.
-    services.nginx = lib.mkIf (services.nginx or false) {
+    services.nginx = lib.mkIf (installed "nginx") {
       enable = true;
       virtualHosts.localhost = {
         default = true;
         root = "/srv/www";
       };
     };
-    systemd.tmpfiles.rules = lib.mkIf (services.nginx or false) [ "d /srv/www 0755 root wheel -" ];
-    services.postgresql.enable = lib.mkIf (services.postgresql or false) true;
-    services.mysql = lib.mkIf (services.mariadb or false) {
+    systemd.tmpfiles.rules = lib.mkIf (installed "nginx") [ "d /srv/www 0755 root wheel -" ];
+    services.postgresql.enable = lib.mkIf (installed "postgresql") true;
+    services.mysql = lib.mkIf (installed "mariadb") {
       enable = true;
       package = pkgs.mariadb;
     };
-    services.redis.servers."".enable = lib.mkIf (services.redis or false) true;
-    virtualisation.docker.enable = lib.mkIf (services.docker or false) true;
+    services.redis.servers."".enable = lib.mkIf (installed "redis") true;
+    virtualisation.docker.enable = lib.mkIf (installed "docker") true;
+    # "manual": installed, but nothing starts it at boot (systemctl start does).
+    systemd.services = noBoot "services";
+    systemd.sockets = noBoot "sockets";
   };
 }

@@ -75,7 +75,7 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ToolCmd,
     },
-    /// System services (SSH server, printing).
+    /// Services: list them; enable/disable starting them at boot.
     Service {
         #[command(subcommand)]
         cmd: ServiceCmd,
@@ -320,11 +320,12 @@ async fn main() -> Result<()> {
             eprintln!("{}", if changed(&r) { "Removed." } else { "None of those are installed." });
         }
         Cmd::Service { cmd: ServiceCmd::List } => {
-            // "Setting" is what the computer keeps after a restart; "now" is
-            // what is running (`systemctl stop` changes only that).
-            println!("{:<12} {:<9} {:<9} ", "SERVICE", "SETTING", "NOW");
+            // Installed and started at boot are settings (kept after a
+            // restart); "now" is what is running (`systemctl start/stop`).
+            println!("{:<12} {:<10} {:<9} {:<9} ", "SERVICE", "INSTALLED", "AT BOOT", "NOW");
             for s in client::status().await?.services {
                 let now = iliada_system::settings::unit_of_service(&s.name)
+                    .filter(|_| s.on)
                     .map(|u| {
                         let active = std::process::Command::new("systemctl")
                             .args(["is-active", "--quiet", u])
@@ -334,7 +335,12 @@ async fn main() -> Result<()> {
                         if active { "running" } else { "stopped" }
                     })
                     .unwrap_or("");
-                println!("{:<12} {:<9} {:<9} {}", s.name, if s.on { "on" } else { "off" }, now, s.description);
+                let (installed, boot) = match (s.on, s.boot) {
+                    (false, _) => ("no", ""),
+                    (true, true) => ("yes", "yes"),
+                    (true, false) => ("yes", "no"),
+                };
+                println!("{:<12} {:<10} {:<9} {:<9} {}", s.name, installed, boot, now, s.description);
             }
         }
         Cmd::History { count } => {
@@ -343,17 +349,14 @@ async fn main() -> Result<()> {
             }
         }
         Cmd::Service { cmd } => {
-            let (name, on) = match cmd {
+            let (name, boot) = match cmd {
                 ServiceCmd::Enable { name } => (name, true),
                 ServiceCmd::Disable { name } => (name, false),
                 ServiceCmd::List => unreachable!(),
             };
-            let r = system(Request::SetService { name: name.clone(), on }, v).await?;
-            let state = if on { "on" } else { "off" };
-            eprintln!(
-                "{}",
-                if changed(&r) { format!("{name} is {state}.") } else { format!("{name} is already {state}.") }
-            );
+            let r = system(Request::SetServiceBoot { name: name.clone(), boot }, v).await?;
+            let what = if boot { "starts at every boot" } else { "doesn't start at boot (systemctl start starts it)" };
+            eprintln!("{name} {}{what}.", if changed(&r) { "now " } else { "already " });
         }
         Cmd::System { cmd: SystemCmd::Status } => {
             let s = client::status().await?;
@@ -446,7 +449,11 @@ async fn install(names_typed: Vec<String>, build: bool, v: bool) -> Result<()> {
     }
     for i in services {
         let r = system(Request::SetService { name: i.id.into(), on: true }, v).await?;
-        eprintln!("{} {}.", i.name, if changed(&r) { "is on" } else { "was already on" });
+        eprintln!(
+            "{} {}.",
+            i.name,
+            if changed(&r) { "is installed and running; it starts at every boot" } else { "was already installed" }
+        );
     }
     if let Some(s) = &s {
         for entry in &entries {
@@ -538,7 +545,7 @@ async fn remove(names_typed: Vec<String>, v: bool) -> Result<()> {
     }
     for i in services {
         let r = system(Request::SetService { name: i.id.into(), on: false }, v).await?;
-        eprintln!("{} {}.", i.name, if changed(&r) { "is off" } else { "was already off" });
+        eprintln!("{} {}.", i.name, if changed(&r) { "is removed" } else { "wasn't installed" });
     }
     for app in apps {
         s.remove(&app.id)?;
@@ -552,8 +559,11 @@ async fn search(word: &str) -> Result<()> {
     use iliada_system::software::Kind;
     let w = word.to_lowercase();
     let mut found = false;
+    // Apps the Store has aren't offered again from Debian.
+    let mut in_store: Vec<String> = Vec::new();
     match async { store().await?.catalog().await }.await {
         Ok(catalog) => {
+            in_store = catalog.apps.iter().map(|a| a.name.to_lowercase()).collect();
             let apps: Vec<_> = catalog
                 .apps
                 .iter()
@@ -582,7 +592,11 @@ async fn search(word: &str) -> Result<()> {
     }
     // Not in the Store, but Debian has it (Iliada builds it on this computer).
     let debian = translate::debian_apps();
-    let more: Vec<_> = translate::search(&debian, word).into_iter().take(12).collect();
+    let more: Vec<_> = translate::search(&debian, word)
+        .into_iter()
+        .filter(|a| !in_store.contains(&a.name.to_lowercase()))
+        .take(12)
+        .collect();
     if !more.is_empty() {
         found = true;
         println!("Not in the Store yet: Iliada can build these from Debian's package");

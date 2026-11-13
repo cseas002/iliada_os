@@ -153,22 +153,69 @@ pub fn set_assistant(doc: &mut DocumentMut, a: &crate::protocol::AssistantSettin
     Ok(true)
 }
 
-pub fn service(doc: &DocumentMut, name: &str) -> bool {
-    doc.get("services").and_then(|s| s.get(name)).and_then(Item::as_bool).unwrap_or(false)
+/// How a service is set up: three levels, as on Debian or Fedora.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceState {
+    /// Not on this computer.
+    Off,
+    /// Installed; starts only when asked (`systemctl start`).
+    Manual,
+    /// Installed and started at every boot.
+    On,
 }
 
-pub fn set_service(doc: &mut DocumentMut, name: &str, on: bool) -> Result<bool> {
+/// `ssh = true` (or `"on"`), `ssh = "manual"`, or `false` / absent.
+pub fn service_state(doc: &DocumentMut, name: &str) -> ServiceState {
+    match doc.get("services").and_then(|s| s.get(name)) {
+        Some(i) if i.as_bool() == Some(true) || i.as_str() == Some("on") => ServiceState::On,
+        Some(i) if i.as_str() == Some("manual") => ServiceState::Manual,
+        _ => ServiceState::Off,
+    }
+}
+
+/// The service is installed (on, or manual).
+pub fn service(doc: &DocumentMut, name: &str) -> bool {
+    service_state(doc, name) != ServiceState::Off
+}
+
+pub fn set_service_state(doc: &mut DocumentMut, name: &str, state: ServiceState) -> Result<bool> {
     if !SERVICES.iter().any(|(n, _)| *n == name) {
         bail!("unknown service {name:?} (known: {})", SERVICES.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", "));
     }
-    if service(doc, name) == on {
+    if service_state(doc, name) == state {
         return Ok(false);
     }
     if !doc.contains_key("services") {
         doc["services"] = Item::Table(Table::new());
     }
-    doc["services"][name] = value(on);
+    doc["services"][name] = match state {
+        ServiceState::On => value(true),
+        ServiceState::Manual => value("manual"),
+        ServiceState::Off => value(false),
+    };
     Ok(true)
+}
+
+/// Install (`on`: installed and started at boot, unless it is installed
+/// already) or remove a service.
+pub fn set_service(doc: &mut DocumentMut, name: &str, on: bool) -> Result<bool> {
+    match (on, service_state(doc, name)) {
+        (true, ServiceState::Off) => set_service_state(doc, name, ServiceState::On),
+        (true, _) => set_service_state(doc, name, service_state(doc, name)),
+        (false, _) => set_service_state(doc, name, ServiceState::Off),
+    }
+}
+
+/// Start at boot or not (`systemctl enable` / `disable`). Enabling a
+/// service that isn't installed installs it.
+pub fn set_service_boot(doc: &mut DocumentMut, name: &str, boot: bool) -> Result<bool> {
+    let next = match (boot, service_state(doc, name)) {
+        (true, _) => ServiceState::On,
+        (false, ServiceState::On) => ServiceState::Manual,
+        (false, s) => s,
+    };
+    set_service_state(doc, name, next)
 }
 
 #[cfg(test)]
@@ -199,9 +246,20 @@ mod tests {
         assert!(set_service(&mut doc, "ssh", true).unwrap());
         assert!(!set_service(&mut doc, "ssh", true).unwrap());
         assert!(set_service(&mut doc, "telnet", true).is_err());
+        // The three levels: on, manual (installed, not at boot), off.
+        assert_eq!(service_state(&doc, "ssh"), ServiceState::On);
+        assert!(set_service_boot(&mut doc, "ssh", false).unwrap());
+        assert_eq!(service_state(&doc, "ssh"), ServiceState::Manual);
+        assert!(doc.to_string().contains("ssh = \"manual\""));
+        assert!(!set_service(&mut doc, "ssh", true).unwrap(), "installing an installed service changes nothing");
+        assert!(!set_service_boot(&mut doc, "nginx", false).unwrap(), "not installed: nothing to disable");
+        assert!(set_service_boot(&mut doc, "nginx", true).unwrap());
+        assert_eq!(service_state(&doc, "nginx"), ServiceState::On);
+        assert!(set_service(&mut doc, "ssh", false).unwrap());
+        assert_eq!(service_state(&doc, "ssh"), ServiceState::Off);
         let s = doc.to_string();
         assert!(s.starts_with("# my settings"));
-        assert!(s.contains("ssh = true"));
+        assert!(s.contains("nginx = true") && s.contains("ssh = false"));
         assert!(add_tools(&mut doc, &["rm -rf /".into()]).is_err());
 
         use crate::protocol::{AssistantMode, AssistantSettings};

@@ -17,8 +17,11 @@ pub enum Request {
     AddTools { packages: Vec<String> },
     /// Uninstall command-line tools and apply.
     RemoveTools { packages: Vec<String> },
-    /// Turn a system service on or off and apply.
+    /// Install (on, starting at boot) or remove a system service and apply.
     SetService { name: String, on: bool },
+    /// Start an installed service at boot, or not (`systemctl enable` /
+    /// `disable`; enabling installs it). Apply.
+    SetServiceBoot { name: String, boot: bool },
     /// Change the AI assistant's settings (no rebuild).
     SetAssistant { settings: AssistantSettings },
     /// Apply /etc/iliada as it is.
@@ -58,7 +61,7 @@ impl Request {
             Request::Status | Request::BackupList | Request::CheckSystemUpdate => "",
             Request::AddTools { .. } => "Installing tools",
             Request::RemoveTools { .. } => "Removing tools",
-            Request::SetService { .. } | Request::Apply => "Applying settings",
+            Request::SetService { .. } | Request::SetServiceBoot { .. } | Request::Apply => "Applying settings",
             Request::SetAssistant { .. } => "Saving assistant settings",
             Request::UpdateApps => "Updating apps",
             Request::UpdateSystem => "Updating Iliada",
@@ -199,12 +202,20 @@ impl AssistantSettings {
         AUTO_MODELS.contains(&self.model.as_str())
     }
 }
+/// Older system services reported only on/off: an installed service started at boot.
+fn starts_at_boot() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceInfo {
     pub name: String,
     pub description: String,
+    /// Installed (on, or manual).
     pub on: bool,
+    /// Started at every boot (an installed service that isn't is "manual").
+    #[serde(default = "starts_at_boot")]
+    pub boot: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

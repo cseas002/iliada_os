@@ -510,6 +510,22 @@ impl App {
             let name = svc.name.clone();
             let toggle = ok.then_some(move |on| Message::Run(Request::SetService { name: name.clone(), on }));
             section = section.add(settings::item::builder(svc.description.clone()).toggler_maybe(svc.on, toggle));
+            // Installed: whether it starts by itself at boot (developers
+            // sometimes want a database only while they work).
+            if svc.on {
+                let name = svc.name.clone();
+                let boot = ok.then_some(move |boot| Message::Run(Request::SetServiceBoot { name: name.clone(), boot }));
+                let unit = iliada_system::settings::unit_of_service(&svc.name).unwrap_or(&svc.name);
+                section = section.add(
+                    settings::item::builder("    Start automatically")
+                        .description(if svc.boot {
+                            "Starts every time the computer starts.".to_owned()
+                        } else {
+                            format!("Installed, but starts only when asked (systemctl start {unit}).")
+                        })
+                        .toggler_maybe(svc.boot, boot),
+                );
+            }
         }
         settings::view_column(vec![section.into()]).into()
     }
