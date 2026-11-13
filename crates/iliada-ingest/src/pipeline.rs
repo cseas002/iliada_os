@@ -259,6 +259,14 @@ impl Ingestor {
         if uses_gtk && !includes.iter().any(|(n, _)| n == "librsvg2-common") {
             includes.push(("librsvg2-common".into(), false));
         }
+        // Qt apps likewise need Qt's Wayland plugin (a separate package in
+        // Debian, which installs it on every Wayland desktop).
+        for (lib, plugin) in [("libqt5gui5", "qtwayland5"), ("libqt6gui6", "qt6-wayland")] {
+            let uses = dep_roots.iter().flatten().any(|d| d.starts_with(lib));
+            if uses && !includes.iter().any(|(n, _)| n == plugin) {
+                includes.push((plugin.into(), false));
+            }
+        }
         if !includes.is_empty() {
             let idx = self.index(&arch).await?;
             for (name, asked) in &includes {

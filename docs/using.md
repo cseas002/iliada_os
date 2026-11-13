@@ -75,38 +75,44 @@ Store → **Services** → **Turn on**, or Settings → Services. From the
 terminal:
 
 ```sh
-iliada install ssh           # same as: iliada service enable ssh
+iliada install ssh           # installs it, starts it, and starts it at every boot
 iliada install postgres
-iliada remove ssh            # turns it off
+iliada remove ssh            # removes it
 ```
 
-### How it works: settings, and what is running now
+### How it works: three levels, as on Debian or Fedora
 
-A service has two states:
+| | Command | Kept after a restart? |
+|---|---|---|
+| **Installed** or not | `iliada install ssh` · `iliada remove ssh` (the Store's Turn on / Turn off) | yes |
+| **Starts at boot** or not | `systemctl enable sshd` · `systemctl disable sshd` | yes |
+| **Running now** or not | `systemctl start sshd` · `systemctl stop sshd` | no: until the next restart |
 
-* **The setting**: whether the computer runs it. It lives in
-  `/etc/iliada/settings.toml` (`ssh = true`), so it is kept after a restart,
-  every change is recorded (`iliada history`), and a backup restores it on a
-  new computer. The Store, Settings, `iliada install ssh` and
-  `systemctl enable sshd` all change this.
-* **Now**: whether it is running at this moment. `systemctl stop sshd`,
-  `start` and `restart` change only this, for quick tests. At the next restart
-  the setting wins again, and `systemctl` tells you so.
+* Installing a service also starts it and starts it at every boot, as on
+  Ubuntu: almost everyone who installs SSH wants it running.
+* `systemctl disable` keeps it installed but stops it starting by itself:
+  `systemctl start` runs it when you want (handy for a database you only
+  use while working). Settings → Services has the same switch, **Start
+  automatically**. `systemctl enable` on a service that isn't installed
+  installs it; `--now` also starts or stops it, as everywhere.
+* The first two levels live in `/etc/iliada/settings.toml` (`ssh = true`,
+  `ssh = "manual"` or `ssh = false`), so every change is recorded
+  (`iliada history`) and a backup restores it on a new computer.
 
 ```sh
-iliada service list          # SERVICE  SETTING  NOW
-                             # ssh      on       running
-sudo systemctl stop sshd     # stopped until the next restart
-systemctl enable nginx       # same as iliada install nginx: saved, applied, backed up
-iliada history               # 2026-11-12 16:04  Enable ssh …
+iliada service list          # SERVICE  INSTALLED  AT BOOT  NOW
+                             # ssh      yes        yes      running
+sudo systemctl stop sshd     # stopped until the next restart (it says so)
+systemctl disable postgresql # installed, starts only when you start it
+iliada history               # 2 hours ago   Install ssh …
 ```
 
-`systemctl enable` and `disable` work this way for the services Iliada
-knows (sshd, cups, nginx, postgresql, mysql, redis, docker), and only when
-you type them in a terminal; scripts get the ordinary `systemctl`. Other
-system services are added in `/etc/iliada/configuration.nix` (any NixOS
-option, then `iliada system apply`). Your own background programs work as
-anywhere else: `systemctl --user enable …`.
+This works for the services Iliada knows (sshd, cups, nginx, postgresql,
+mysql, redis, docker), and only when you type `systemctl` in a terminal;
+scripts get the ordinary `systemctl`. Other system services are added in
+`/etc/iliada/configuration.nix` (any NixOS option, then
+`iliada system apply`). Your own background programs work as anywhere
+else: `systemctl --user enable …`.
 
 ## Find something
 

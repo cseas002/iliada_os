@@ -22,12 +22,15 @@
   OpenRouter also says how much credit is left), and has Replace and Remove.
   **Add key** is enabled only for a key that fits the chosen model, with a
   line saying what is wrong otherwise.
-- `systemctl enable sshd` (typed in a terminal) turns the SSH server on in
-  this computer's settings, like `iliada install ssh`: kept after restarts,
-  recorded and backed up. The same for cups, nginx, postgresql, mysql, redis
-  and docker. `systemctl stop` says it lasts until the next restart. Scripts
-  get the ordinary systemctl.
-- `iliada service list` shows each service's setting and whether it is running
+- Services have three levels, as on Debian or Fedora: **installed**
+  (`iliada install ssh`, the Store's Turn on), **starts at boot**
+  (`systemctl enable sshd` / `disable`, Settings → Services → Start
+  automatically) and **running now** (`systemctl start` / `stop`, until the
+  next restart, and it says so). The first two are kept in settings.toml
+  (`ssh = "manual"`: installed, started only when asked), recorded and backed
+  up. Typed in a terminal, `systemctl` works this way for sshd, cups, nginx,
+  postgresql, mysql, redis and docker; scripts get the ordinary systemctl.
+- `iliada service list` shows whether each service is installed, starts at boot and is running
   now; `iliada history` lists every change to this computer.
 - Proposal: your own Iliada server for encrypted backups of the computer and
   of each person's settings ([docs/self-hosted-sync.md](docs/self-hosted-sync.md)).

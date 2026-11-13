@@ -99,7 +99,7 @@ sudo nixos-rebuild switch --flake /etc/iliada#iliada
 | `iliada install python` · `iliada install ssh` | software for the terminal, or turn on a service (`remove` undoes) |
 | `iliada update` | update apps, and install any on your list that are missing |
 | `iliada tool add httpie` · `tool remove` · `tool list` | any nixpkgs package as a command-line tool |
-| `iliada service enable ssh` · `disable` · `list` | services (SSH server, printing) |
+| `iliada service list` · `iliada service enable ssh` · `disable` | services: installed / starts at boot / running; enable and disable change only starting at boot (like `systemctl enable`) |
 | `iliada system status` · `iliada system update` | Iliada version and updates |
 | `iliada system apply` | apply `/etc/iliada` after editing it by hand |
 | `iliada backup sign-in` · `enable <name>` · `now` · `list` · `restore <owner/iliada_name>` | GitHub backup |

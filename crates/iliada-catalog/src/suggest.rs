@@ -80,7 +80,52 @@ pub fn stem(name: &str) -> String {
 }
 
 /// The recipe for an app (see iliada_apps/README.md).
+/// LibreOffice's apps share one program in /usr/lib/libreoffice, made of
+/// packages that aren't ordinary libraries: the same recipe as Writer's.
+fn libreoffice(app: &DebianApp) -> Option<String> {
+    let part = app.package.strip_prefix("libreoffice-")?;
+    let ui: &[&str] = match part {
+        "calc" => &["calc"],
+        "draw" => &["draw"],
+        "impress" => &["impress", "draw"],
+        "math" => &["math"],
+        "base" => &["base"],
+        _ => return None,
+    };
+    let mut include = vec![
+        "libreoffice-core",
+        "libreoffice-common",
+        "ure",
+        "uno-libs-private",
+        "libreoffice-base-core",
+        "libreoffice-style-colibre",
+        "libreoffice-gtk3",
+        "libreoffice-uiconfig-common",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    include.extend(ui.iter().map(|u| format!("libreoffice-uiconfig-{u}")));
+    if part == "impress" {
+        include.push("libreoffice-draw".into());
+    }
+    Some(format!(
+        "# Added by the catalog builder (iliada-catalog suggest), like LibreOffice Writer's recipe.\n\
+         name = \"{}\"\nsummary = \"{}\"\ncategory = \"Office\"\nsource = {{ debian = \"{}\" }}\n\
+         include = [{}]\nexec = \"usr/lib/libreoffice/program/soffice\"\nargs = [\"--{part}\"]\n\
+         env = {{ SAL_USE_VCLPLUGIN = \"gtk3\" }}\nfolders = [\"documents\"]\n\
+         copy = {{ \"etc/libreoffice/registry/main.xcd\" = \"usr/lib/libreoffice/share/.registry/main.xcd\" }}\n",
+        app.name.replace('"', "'"),
+        app.summary.trim_end_matches('.').replace('"', "'"),
+        app.package,
+        include.iter().map(|i| format!("\"{i}\"")).collect::<Vec<_>>().join(", ")
+    ))
+}
+
 pub fn recipe(app: &DebianApp) -> String {
+    if let Some(r) = libreoffice(app) {
+        return r;
+    }
     let cat = category(&app.categories);
     let has = |c: &str| app.categories.iter().any(|x| x == c);
     let network = has("Network") || has("WebBrowser") || has("Email") || has("Chat") || has("InstantMessaging");
@@ -180,6 +225,14 @@ mod tests {
         assert!(s[1].1.contains("summary = \"Does 'things'\""));
         let parsed: toml::Value = toml::from_str(&s[0].1).unwrap();
         assert_eq!(parsed["source"]["debian"].as_str(), Some("pidgin"));
+    }
+
+    #[test]
+    fn libreoffice_apps_get_writers_recipe() {
+        let r = recipe(&app("libreoffice-calc", "LibreOffice Calc", &["Office", "Spreadsheet"]));
+        let v: toml::Value = toml::from_str(&r).unwrap();
+        assert_eq!(v["args"][0].as_str(), Some("--calc"));
+        assert!(r.contains("libreoffice-uiconfig-calc") && r.contains("\"ure\""));
     }
 
     #[test]
