@@ -25,6 +25,15 @@ in
     security.rtkit.enable = lib.mkDefault true;
     hardware.bluetooth.enable = lib.mkDefault true;
     services.fwupd.enable = lib.mkDefault true;
+    # Laptops: power modes (Balanced, Power saver, Performance) in the
+    # battery menu, and battery levels.
+    services.power-profiles-daemon.enable = lib.mkDefault true;
+    services.upower.enable = lib.mkDefault true;
+    # Processor fixes from Intel and AMD, loaded at start-up (only the
+    # matching one is used). The installer also detects the processor, but
+    # the live system and a moved disk need both.
+    hardware.cpu.intel.updateMicrocode = lib.mkDefault config.hardware.enableRedistributableFirmware;
+    hardware.cpu.amd.updateMicrocode = lib.mkDefault config.hardware.enableRedistributableFirmware;
     zramSwap.enable = lib.mkDefault true;
     nix.settings.experimental-features = [ "nix-command" "flakes" ];
   };
