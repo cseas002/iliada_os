@@ -20,6 +20,17 @@ anyone can run their own, and a computer can point at either.
 * **Later**: keeping two computers in step; Documents and other folders
   ("cloud"); family sharing.
 
+## How a computer signs in
+
+Passkeys, Google and Apple all happen in a web browser: Linux has no
+system-wide passkey support for ordinary apps yet. So the account server
+has a small website (sign up, sign in, your computers), and a computer signs
+in the way GitHub backups already do: Settings shows a short code and opens
+the account page; the person signs in there (passkey, Google, Apple or an
+email code) and approves the code. The computer then gets its own token,
+which the person can remove from the website at any time (OAuth 2.0 device
+authorization, RFC 8628). Phones and other computers use the same page.
+
 ## The one rule: the server can't read it
 
 Everything a person keeps is encrypted on their computer before it is sent.
@@ -53,9 +64,10 @@ about the person).
 ## Building it
 
 1. **Server, first version** (on this build server, reachable from the dev
-   VM): sign-up and sign-in with a passkey and with an email code; a
-   computer is approved and gets a token; encrypted settings upload and
-   restore. Tests for each step, and an end-to-end test from the dev VM.
+   VM): sign-up and sign-in with a passkey and with an email code, on its
+   website; a computer is approved with a code and gets a token; encrypted
+   blobs stored per account with a size limit. Tests for each step (passkeys
+   with a software authenticator), and an end-to-end test from the dev VM.
 2. **On the computer**: Settings → Account and the Setup Assistant step;
    backing up desktop settings, Privacy answers and the assistant's
    conversations; restore on a fresh install (verified in the installed VM).

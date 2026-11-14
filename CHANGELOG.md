@@ -7,6 +7,14 @@
 - Okular, GIMP, Thunderbird and VLC no longer ask for the microphone when
   they first open; they never record. Installed copies update to the fixed
   version automatically.
+- **Passwords: Bitwarden comes with Firefox and Chromium**, pinned to the
+  toolbar, ready to log in or create a free account. The browsers' own
+  password saving is off, so passwords are kept in one place (and Bitwarden
+  also keeps passkeys). Turn it off in the browser's extensions page.
+- Backups sign in through Iliada's own GitHub app, so they work without
+  any setup. Only Iliada's backup repositories are listed for restore
+  (other repositories whose names start with `iliada_` were listed too), and
+  a backup is never written into a repository that isn't one.
 
 ## 0.2.2 (2026-11-14)
 
