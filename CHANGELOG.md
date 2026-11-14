@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.2 (2026-11-13)
+## 0.2.2 (2026-11-14)
 
 - New in the Store: LibreOffice Calc, Impress and Math, added by the catalog
   builder, which now finds popular Debian apps, builds them, launch-tests
@@ -38,6 +38,12 @@
   postgresql, mysql, redis and docker; scripts get the ordinary systemctl.
 - `iliada service list` shows whether each service is installed, starts at boot and is running
   now; `iliada history` lists every change to this computer.
+- **Hardware report**: Settings → About → **Save report** (or `iliada report`)
+  saves a text file on the Desktop describing this computer: graphics driver,
+  screens and how sharp they are, Wi-Fi, sound, sleep, battery, missing
+  firmware and errors. Share it with whoever helps when something doesn't work.
+- Laptops: power modes (Balanced, Power saver, Performance) and battery
+  levels; processor fixes from Intel and AMD are loaded at start-up.
 - Proposal: your own Iliada server for encrypted backups of the computer and
   of each person's settings ([docs/self-hosted-sync.md](docs/self-hosted-sync.md)).
 

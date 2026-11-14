@@ -245,6 +245,8 @@ justification, runtime base), validated by the same Rust types.
 | Ready-to-run VM image (UTM on Apple Silicon, QEMU) | x86 validated; ARM image boots (emulated here) and runs the ARM apps once the sandbox group fix is in |
 | Rust userland (uutils, sudo-rs, ntpd-rs, fish) | done |
 | Everyday command-line tools (`iliada.baseTools`: lspci, lsusb, dig, traceroute, ifconfig, lsof, killall, jq, vim, git, tmux, ripgrep, …) | done: every tool runs in the dev VM |
+| Hardware report (`iliada report`, Settings → About → Save report): graphics driver, screens with size and dpi, COSMIC scale, Wi-Fi, sound, sleep kinds and sleep log, battery health, input devices, PCI/USB, missing firmware, failed services, errors | done in the dev VM (2026-11-14): the button saved the report to the Desktop and Open showed it in the text editor; from a terminal outside the desktop it still finds COSMIC for the screen scale. Not yet run on a physical PC |
+| Physical PCs (laptop power modes via power-profiles-daemon, upower, Intel and AMD microcode) | built; power-profiles-daemon and upower run in the dev VM ("balanced"). **Nothing has run on real hardware yet** |
 | Immutable appliance image | evaluates; build and boot not yet tested |
 
 ## 8b. The user layer: no terminal, configuration that follows you
@@ -281,7 +283,7 @@ then continues the backup's.
    repository.
 3. LibreOffice Writer on ARM (its ARM build stops at start-up with a UNO
    exception; the x86-64 build works).
-4. Check frosted glass on real hardware (GPU drivers).
+4. Boot the ISO on a physical PC and read its hardware report (`iliada report` or Settings → About → Save report): Wi-Fi, graphics drivers and frosted glass, sleep, high-resolution screens.
 
 **Later**
 
