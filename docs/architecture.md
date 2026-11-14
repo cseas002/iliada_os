@@ -231,7 +231,7 @@ justification, runtime base), validated by the same Rust types.
 | Iliada Settings (updates, backup, tools, services, privacy) | done; validated in the VM |
 | Setup Assistant (first login) | done; shown on first login in the VM |
 | Frosted glass (COSMIC theme defaults `frosted_windows`, `frosted_panel`, `frosted_applets`, `frosted_system_interface`) | done; a fresh dev VM disk comes up frosted at first login (2026-11-12); the Alt+Space panel, Settings and the Welcome window are blurred. COSMIC apps read their built-in fallback theme first, so a user service writes the four keys into each user's theme at login unless already set |
-| GitHub backup and restore | built; needs a GitHub OAuth app to test |
+| GitHub backup and restore | works with Iliada's GitHub app (2026-11-15, on the installed VM and a real account): sign-in with a code, backup to a new private `iliada_iliada-test`, list (only backups since the fix: `iliada_os`/`iliada_apps` were listed too), a backup name that would reuse a non-backup repository refused, restore onto the same computer. Not yet: restore onto a freshly installed computer |
 | Assistant (Ask / Auto, Settings → Assistant, `iliada ask`, the Assistant app) | live-tested in the x86 VM with DeepSeek V4 Flash (OpenRouter): app install, dark/light, volume, commands, email (local mail server; approval and decline), a prompt-injected file not obeyed; Settings → Assistant and the app clicked through; answers stream in as they are written (2026-11-12, both providers covered by tests, DeepSeek live in the panel) |
 | Assistant app: saved conversations, Activity with Undo, quick panel (Alt+Space, `iliada-ask`) | done, live in the dev VM with DeepSeek (2026-11-12): conversations saved and listed, continued after an app restart ("switch it back" understood), panel → "Open in Assistant", Undo from Activity (appearance), only the latest change undoable, the undo noted in its conversation and known to the model, "what changed this week?" answered from the new `recent_changes` tool |
 | Settings → Assistant API key (saved state, free check with the provider, Replace/Remove, Add key only for a fitting key) | done; in the dev VM it showed the saved OpenRouter key masked and "$3.99 of $4.00 left", and explained a wrong-provider key |
@@ -275,7 +275,8 @@ then continues the backup's.
 
 **Next**
 
-1. Test GitHub backup and restore end to end (needs the GitHub OAuth app).
+1. Restore a GitHub backup onto a freshly installed computer (backup, list
+   and restore on the same computer work).
 2. Each release: set `VERSION` and the two Cargo workspace versions, commit, tag
    `v<version>`, `iliada-catalog release` (it checks all three),
    upload `release.json`, its `.sig` and the source archive to the GitHub release
