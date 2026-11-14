@@ -132,6 +132,10 @@ struct Recipe {
     /// Debian maintainer script would have done.
     #[serde(default)]
     copy: BTreeMap<String, String>,
+    /// Files written into the app (path inside it = contents), e.g. a
+    /// browser's policies.
+    #[serde(default)]
+    write: BTreeMap<String, String>,
     summary: String,
     category: String,
     source: RecipeSource,
@@ -234,6 +238,7 @@ async fn build(
             args: recipe.args.clone(),
             env: recipe.env.clone(),
             copies: recipe.copy.clone(),
+            writes: recipe.write.clone(),
             permissions: recipe
                 .folders
                 .iter()

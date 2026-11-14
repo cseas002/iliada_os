@@ -74,6 +74,9 @@ pub struct IngestConfig {
     /// maintainer script would have copied at install time, which Iliada
     /// never runs.
     pub copies: std::collections::BTreeMap<String, String>,
+    /// Files written into the app's tree (path relative to it → contents):
+    /// settings a distribution would ship, such as a browser's policies.
+    pub writes: std::collections::BTreeMap<String, String>,
     /// Permissions the recipe declares (in addition to the inferred ones);
     /// a declared permission is still asked for when the app first runs.
     pub permissions: Vec<iliada_bundle::PermissionRequest>,
@@ -112,6 +115,7 @@ impl Default for IngestConfig {
             args: vec![],
             env: Default::default(),
             copies: Default::default(),
+            writes: Default::default(),
             permissions: vec![],
             not_needed: vec![],
             build: 0,
@@ -483,6 +487,9 @@ impl Ingestor {
         for (dst, src) in &self.cfg.copies {
             copy_within(&layout.fhs_root(), src, dst).with_context(|| format!("recipe copy {src} -> {dst}"))?;
         }
+        for (dst, contents) in &self.cfg.writes {
+            write_within(&layout.fhs_root(), dst, contents).with_context(|| format!("recipe write {dst}"))?;
+        }
         let mut permissions = infer_permissions(closure.records.iter().map(|r| r.soname.as_str()));
         permissions.requests.retain(|r| !self.cfg.not_needed.contains(&r.capability));
         for req in &self.cfg.permissions {
@@ -736,12 +743,33 @@ fn is_plugin_path(rel: &Path) -> bool {
 /// Copy `src` to `dst` inside `root` (both relative; no `..`), replacing a
 /// symlink at `dst` (Debian often ships one pointing at the file a
 /// maintainer script generates).
+/// A path relative to the app that cannot leave it (no `..`, not absolute).
+fn inside_app(p: &str) -> bool {
+    let p = Path::new(p);
+    !p.as_os_str().is_empty()
+        && !p.is_absolute()
+        && p.components().all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+/// Writes a file the recipe provides into the app's tree.
+fn write_within(root: &Path, dst: &str, contents: &str) -> Result<()> {
+    ensure!(inside_app(dst), "paths must be relative and stay inside the app");
+    let to = root.join(dst);
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    // A directory in the package could be a link that points out of the app.
+    let parent = to.parent().context("no parent directory")?.canonicalize()?;
+    ensure!(parent.starts_with(root.canonicalize()?), "{dst} would be written outside the app");
+    if fs::symlink_metadata(&to).is_ok() {
+        fs::remove_file(&to)?;
+    }
+    fs::write(&to, contents)?;
+    Ok(())
+}
+
 fn copy_within(root: &Path, src: &str, dst: &str) -> Result<()> {
-    let safe = |p: &str| {
-        let p = Path::new(p);
-        !p.is_absolute() && p.components().all(|c| matches!(c, std::path::Component::Normal(_)))
-    };
-    ensure!(safe(src) && safe(dst), "paths must be relative and stay inside the app");
+    ensure!(inside_app(src) && inside_app(dst), "paths must be relative and stay inside the app");
     let (from, to) = (root.join(src), root.join(dst));
     let meta = fs::symlink_metadata(&from).with_context(|| format!("{src} is not in the app"))?;
     ensure!(meta.is_file(), "{src} is not a regular file");
@@ -1076,5 +1104,31 @@ mod tests {
         assert_eq!(b.info.categories, ["Utility"]);
         let out = std::process::Command::new(b.layout.executables().join("hello-iliada")).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hello from iliada");
+    }
+}
+
+#[cfg(test)]
+mod write_tests {
+    use super::*;
+
+    #[test]
+    fn recipe_files_stay_inside_the_app() {
+        let root = tempfile::tempdir().unwrap();
+        write_within(root.path(), "etc/chromium/policies/managed/iliada.json", "{}").unwrap();
+        assert_eq!(fs::read_to_string(root.path().join("etc/chromium/policies/managed/iliada.json")).unwrap(), "{}");
+        // Replaces what the package had.
+        write_within(root.path(), "etc/chromium/policies/managed/iliada.json", "{\"a\":1}").unwrap();
+        assert_eq!(
+            fs::read_to_string(root.path().join("etc/chromium/policies/managed/iliada.json")).unwrap(),
+            "{\"a\":1}"
+        );
+        for bad in ["/etc/passwd", "../x", "etc/../../x", ""] {
+            assert!(write_within(root.path(), bad, "x").is_err(), "{bad}");
+        }
+        // Not through a link that leads out of the app.
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("out")).unwrap();
+        assert!(write_within(root.path(), "out/x", "x").is_err());
+        assert!(!outside.path().join("x").exists());
     }
 }
