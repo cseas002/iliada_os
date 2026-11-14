@@ -15,6 +15,15 @@ const AGENT: &str = concat!("iliada-system/", env!("CARGO_PKG_VERSION"));
 /// Backups are private repositories: creating and pushing them needs `repo`.
 const SCOPE: &str = "repo";
 pub const PREFIX: &str = "iliada_";
+/// The description Iliada gives a backup repository when it creates it: how a
+/// backup is told apart from other `iliada_*` repositories (such as Iliada's own
+/// source, `iliada_os`).
+pub const DESCRIPTION: &str = "Iliada backup: apps and settings (restore it from Iliada's Setup Assistant)";
+
+/// Whether a repository is one of Iliada's backups.
+pub fn is_backup(name: &str, description: Option<&str>) -> bool {
+    name.strip_prefix(PREFIX).is_some_and(valid_name) && description.is_some_and(|d| d.starts_with("Iliada backup"))
+}
 
 fn http() -> reqwest::Client {
     reqwest::Client::builder().user_agent(AGENT).timeout(Duration::from_secs(30)).build().expect("http client")
@@ -116,6 +125,7 @@ impl GitHub {
         struct Repo {
             name: String,
             full_name: String,
+            description: Option<String>,
             pushed_at: Option<String>,
         }
         let mut out = Vec::new();
@@ -130,6 +140,9 @@ impl GitHub {
                 .await?;
             let last = repos.len() < 100;
             out.extend(repos.into_iter().filter_map(|r| {
+                if !is_backup(&r.name, r.description.as_deref()) {
+                    return None;
+                }
                 let name = r.name.strip_prefix(PREFIX)?.to_owned();
                 Some(Backup { repo: r.full_name, name, updated: r.pushed_at.unwrap_or_default() })
             }));
@@ -145,6 +158,16 @@ impl GitHub {
         let repo = format!("{PREFIX}{name}");
         let r = self.get(&format!("/repos/{owner}/{repo}")).send().await.context("contacting GitHub")?;
         if r.status().is_success() {
+            #[derive(Deserialize)]
+            struct Existing {
+                description: Option<String>,
+            }
+            let existing: Existing = r.json().await?;
+            if !is_backup(&repo, existing.description.as_deref()) {
+                bail!(
+                    "your GitHub account already has a repository named {repo} that is not an Iliada backup; choose another name"
+                );
+            }
             return Ok(format!("{owner}/{repo}"));
         }
         if r.status() != reqwest::StatusCode::NOT_FOUND {
@@ -157,7 +180,7 @@ impl GitHub {
             .json(&json!({
                 "name": repo,
                 "private": true,
-                "description": "Iliada backup: apps and settings (restore it from Iliada's Setup Assistant)",
+                "description": DESCRIPTION,
                 "has_issues": false,
                 "has_wiki": false,
                 "has_projects": false,
@@ -196,5 +219,15 @@ mod tests {
         assert!(!super::valid_name("") && !super::valid_name("a b") && !super::valid_name("../x"));
         assert!(super::valid_repo("cseas002/iliada_laptop"));
         assert!(!super::valid_repo("cseas002/laptop") && !super::valid_repo("a/b/iliada_x") && !super::valid_repo("x"));
+    }
+
+    #[test]
+    fn only_backups_are_backups() {
+        use super::{DESCRIPTION, is_backup};
+        assert!(is_backup("iliada_laptop", Some(DESCRIPTION)));
+        // Iliada's own source and catalog are not backups.
+        assert!(!is_backup("iliada_os", Some("Iliada: an immutable, micro-isolated Linux OS")));
+        assert!(!is_backup("iliada_apps", None));
+        assert!(!is_backup("laptop", Some(DESCRIPTION)));
     }
 }
