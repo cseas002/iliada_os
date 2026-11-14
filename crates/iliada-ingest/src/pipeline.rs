@@ -80,6 +80,8 @@ pub struct IngestConfig {
     /// Inferred permissions the app does not need (a PDF viewer that links
     /// an audio library for sound clips does not need the microphone).
     pub not_needed: Vec<iliada_types::Capability>,
+    /// Iliada's build number for this package version (0: the first build).
+    pub build: u32,
     pub max_download_bytes: u64,
     pub max_unpacked_bytes: u64,
     /// Follow dependency edges into non-`lib*` packages too.
@@ -112,6 +114,7 @@ impl Default for IngestConfig {
             copies: Default::default(),
             permissions: vec![],
             not_needed: vec![],
+            build: 0,
             max_download_bytes: 1 << 30,
             max_unpacked_bytes: 4 << 30,
             full_closure: false,
@@ -243,6 +246,12 @@ impl Ingestor {
         }
         let package = control.package().context("control file has no Package field")?.to_owned();
         let version = control.version().context("control file has no Version field")?.to_owned();
+        // The app's own version: Debian's, plus Iliada's build number when the
+        // same package was rebuilt (a changed recipe), so systems update to it.
+        let app_version = match self.cfg.build {
+            0 => version.clone(),
+            n => format!("{version}+iliada{n}"),
+        };
         let deb_arch = control.architecture().unwrap_or("all").to_owned();
         let arch = if deb_arch == "all" { self.target_arch() } else { deb_arch };
         let triplet = multiarch_triplet(&arch);
@@ -459,7 +468,7 @@ impl Ingestor {
                 .clone()
                 .or_else(|| desktop.as_ref().and_then(|d| d.name.clone()))
                 .unwrap_or_else(|| package.clone()),
-            version: version.clone(),
+            version: app_version.clone(),
             executable: exe_name,
             entry: Some(exe_rel.to_string_lossy().into_owned()),
             args: self.cfg.args.clone(),
@@ -510,7 +519,7 @@ impl Ingestor {
         Ok(IngestReport {
             bundle: dest.root().to_owned(),
             app_id,
-            version,
+            version: app_version,
             executable: exe_rel,
             libraries: closure.records,
             packages,

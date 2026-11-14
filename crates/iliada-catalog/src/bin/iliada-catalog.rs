@@ -123,6 +123,11 @@ struct Recipe {
     /// (`not_needed = ["microphone"]`): it is never asked for them.
     #[serde(default)]
     not_needed: Vec<iliada_types::Capability>,
+    /// Raised when a recipe change needs the same Debian version rebuilt
+    /// (`build = 1` makes 48.1-3 into 48.1-3+iliada1): a published version is
+    /// never replaced, and systems update to the new one.
+    #[serde(default)]
+    build: u32,
     /// Files to put in place in the app (destination = source), what a
     /// Debian maintainer script would have done.
     #[serde(default)]
@@ -239,6 +244,7 @@ async fn build(
                 .chain(recipe.permissions.iter().cloned())
                 .collect(),
             not_needed: recipe.not_needed.clone(),
+            build: recipe.build,
             force: true,
             ..Default::default()
         };
@@ -506,10 +512,12 @@ mod tests {
 summary = "View and annotate documents"
 category = "Office"
 source = { debian = "okular" }
-not_needed = ["microphone", "camera"]"#,
+not_needed = ["microphone", "camera"]
+build = 1"#,
         )
         .unwrap();
         assert_eq!(r.not_needed, vec![iliada_types::Capability::Microphone, iliada_types::Capability::Camera]);
+        assert_eq!(r.build, 1);
         let plain: Recipe = toml::from_str(
             r#"name = "Mines"
 summary = "Clear the minefield"
@@ -518,5 +526,6 @@ source = { debian = "gnome-mines" }"#,
         )
         .unwrap();
         assert!(plain.not_needed.is_empty());
+        assert_eq!(plain.build, 0);
     }
 }
