@@ -125,8 +125,9 @@ browser), name the backup, done: `/etc/iliada` (your apps, tools, services
 and configuration) is pushed to the private repository `iliada_<name>`
 after every change and every hour. On a new computer the Setup Assistant (or
 Settings → Backup → Restore) brings back its apps and settings; the new
-computer keeps its own hardware configuration. Backups need a GitHub OAuth
-app (`iliada.system.githubClientId`).
+computer keeps its own hardware configuration. Backups sign in through
+Iliada's GitHub app (`iliada.system.githubClientId`; set it to your own app's
+client ID, or `null` to turn backups off).
 
 ### Software and services
 
@@ -179,7 +180,7 @@ virtual machine.
 | `iliada.rustUserland.enable` | `true` | uutils, sudo-rs, ntpd-rs, fish |
 | `iliada.ux.hideFhs` | `true` | hide Unix folders in the file manager |
 | `iliada.ux.noSudo` | `false` | remove sudo entirely |
-| `iliada.system.githubClientId` | `null` | GitHub OAuth app for backups (device flow) |
+| `iliada.system.githubClientId` | Iliada's app | GitHub OAuth app for backups (device flow); `null` turns backups off |
 | `iliada.desktop.setupAssistant` | `true` | Setup Assistant on each user's first login |
 | `iliada.image.enable` | `false` | build the immutable appliance image instead |
 

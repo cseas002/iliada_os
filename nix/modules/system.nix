@@ -25,11 +25,12 @@ in
     };
     githubClientId = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
-      default = null;
+      # Iliada's own GitHub OAuth app (device flow on), registered 2026-11-14.
+      default = "Ov23liAjiMw2pgeP93Al";
       example = "Iv1.0123456789abcdef";
       description = ''
         Client ID of the GitHub OAuth app that backups sign in with (device
-        flow enabled). Public, not a secret. Without it, backups are off.
+        flow enabled). Public, not a secret. null turns backups off.
       '';
     };
     updateUrl = lib.mkOption {
