@@ -119,6 +119,10 @@ struct Recipe {
     /// Any other permissions, as in Permissions.toml.
     #[serde(default)]
     permissions: Vec<iliada_bundle::PermissionRequest>,
+    /// Permissions guessed from the app's libraries that it does not need
+    /// (`not_needed = ["microphone"]`): it is never asked for them.
+    #[serde(default)]
+    not_needed: Vec<iliada_types::Capability>,
     /// Files to put in place in the app (destination = source), what a
     /// Debian maintainer script would have done.
     #[serde(default)]
@@ -234,6 +238,7 @@ async fn build(
                 })
                 .chain(recipe.permissions.iter().cloned())
                 .collect(),
+            not_needed: recipe.not_needed.clone(),
             force: true,
             ..Default::default()
         };
@@ -488,4 +493,30 @@ fn release(source: &Path, version: &str, key: &Path, out: &Path, base_url: &str)
     fs::write(out.join("release.json.sig"), sig + "\n")?;
     eprintln!("{}: {name} ({} KB), release.json, release.json.sig", out.display(), archive.len() / 1024);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recipe_can_drop_a_guessed_permission() {
+        let r: Recipe = toml::from_str(
+            r#"name = "Okular"
+summary = "View and annotate documents"
+category = "Office"
+source = { debian = "okular" }
+not_needed = ["microphone", "camera"]"#,
+        )
+        .unwrap();
+        assert_eq!(r.not_needed, vec![iliada_types::Capability::Microphone, iliada_types::Capability::Camera]);
+        let plain: Recipe = toml::from_str(
+            r#"name = "Mines"
+summary = "Clear the minefield"
+category = "Games"
+source = { debian = "gnome-mines" }"#,
+        )
+        .unwrap();
+        assert!(plain.not_needed.is_empty());
+    }
 }

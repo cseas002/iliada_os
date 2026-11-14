@@ -77,6 +77,9 @@ pub struct IngestConfig {
     /// Permissions the recipe declares (in addition to the inferred ones);
     /// a declared permission is still asked for when the app first runs.
     pub permissions: Vec<iliada_bundle::PermissionRequest>,
+    /// Inferred permissions the app does not need (a PDF viewer that links
+    /// an audio library for sound clips does not need the microphone).
+    pub not_needed: Vec<iliada_types::Capability>,
     pub max_download_bytes: u64,
     pub max_unpacked_bytes: u64,
     /// Follow dependency edges into non-`lib*` packages too.
@@ -108,6 +111,7 @@ impl Default for IngestConfig {
             env: Default::default(),
             copies: Default::default(),
             permissions: vec![],
+            not_needed: vec![],
             max_download_bytes: 1 << 30,
             max_unpacked_bytes: 4 << 30,
             full_closure: false,
@@ -471,6 +475,7 @@ impl Ingestor {
             copy_within(&layout.fhs_root(), src, dst).with_context(|| format!("recipe copy {src} -> {dst}"))?;
         }
         let mut permissions = infer_permissions(closure.records.iter().map(|r| r.soname.as_str()));
+        permissions.requests.retain(|r| !self.cfg.not_needed.contains(&r.capability));
         for req in &self.cfg.permissions {
             // The recipe's own declaration (and purpose) wins over an inferred one.
             permissions.requests.retain(|r| r.capability != req.capability);
