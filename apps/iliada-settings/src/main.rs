@@ -170,6 +170,9 @@ enum Message {
     EmailPassword(String),
     SaveEmail,
     RemoveEmail,
+    SaveReport,
+    ReportSaved(Result<String, String>),
+    OpenReport,
     Confirmed,
     Cancel,
     Dismiss,
@@ -198,6 +201,8 @@ struct App {
     key_input: String,
     replacing_key: bool,
     key_check: Option<KeyCheck>,
+    /// The hardware report: None before one is asked for, Some(None) while it is made.
+    report: Option<Option<Result<String, String>>>,
     email: EmailForm,
 }
 
@@ -794,7 +799,27 @@ impl App {
             .add(settings::item("Name", widget::text::body(s.hostname.clone())))
             .add(settings::item("Iliada", widget::text::body(s.version.clone())))
             .add(settings::item("Configuration", widget::text::body("/etc/iliada (every change is recorded)")));
-        settings::view_column(vec![section.into()]).into()
+        let (description, control): (String, Element<'_, Message>) = match &self.report {
+            None => (
+                "If something doesn't work (screen, Wi-Fi, sound, sleep), save a report on this \
+                 computer's hardware and share it with whoever helps."
+                    .into(),
+                widget::button::standard("Save report").on_press(Message::SaveReport).into(),
+            ),
+            Some(None) => ("Looking at this computer…".into(), widget::button::standard("Save report").into()),
+            Some(Some(Ok(path))) => (
+                format!("Saved as {path}. It is plain text: read it before you share it."),
+                widget::button::standard("Open").on_press(Message::OpenReport).into(),
+            ),
+            Some(Some(Err(e))) => (
+                format!("The report could not be saved: {e}"),
+                widget::button::standard("Try again").on_press(Message::SaveReport).into(),
+            ),
+        };
+        let help = settings::section()
+            .title("Help")
+            .add(settings::item::builder("Hardware report").description(description).control(control));
+        settings::view_column(vec![section.into(), help.into()]).into()
     }
 }
 
@@ -867,6 +892,7 @@ impl cosmic::Application for App {
             key_input: String::new(),
             replacing_key: false,
             key_check: None,
+            report: None,
             email: EmailForm::load(),
         };
         app.set_header_title("Iliada Settings".into());
@@ -1136,6 +1162,27 @@ impl cosmic::Application for App {
             Message::Dismiss => {
                 self.error = None;
                 self.notice = None;
+            }
+            Message::SaveReport => {
+                self.report = Some(None);
+                return cosmic::task::future(async {
+                    let out = tokio::process::Command::new("iliada")
+                        .arg("report")
+                        .stdin(std::process::Stdio::null())
+                        .output()
+                        .await;
+                    Message::ReportSaved(match out {
+                        Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).trim().to_owned()),
+                        Ok(o) => Err(String::from_utf8_lossy(&o.stderr).trim().to_owned()),
+                        Err(e) => Err(e.to_string()),
+                    })
+                });
+            }
+            Message::ReportSaved(r) => self.report = Some(Some(r)),
+            Message::OpenReport => {
+                if let Some(Some(Ok(path))) = &self.report {
+                    let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+                }
             }
         }
         Task::none()
