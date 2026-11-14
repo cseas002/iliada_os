@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- New in the Store (no Iliada update needed): Clocks, File Roller (open and
+  make zip archives) and Okular (documents).
+- Okular, GIMP, Thunderbird and VLC no longer ask for the microphone when
+  they first open; they never record. Installed copies update to the fixed
+  version automatically.
+
 ## 0.2.2 (2026-11-14)
 
 - New in the Store: LibreOffice Calc, Impress and Math, added by the catalog
