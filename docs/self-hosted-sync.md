@@ -1,6 +1,7 @@
 # Your own Iliada server (proposal)
 
-Status: **proposal, nothing built.** Today a computer backs up its
+Status: **proposal, nothing built.** Grown into the Iliada account design:
+[account.md](account.md). Today a computer backs up its
 configuration (`/etc/iliada`: apps, software, services, settings) to a
 private GitHub repository. This page describes a second place to keep it:
 a server you run yourself, which can also keep more than the system

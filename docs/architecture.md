@@ -298,6 +298,9 @@ then continues the backup's.
 9. Your own Iliada server: encrypted backups of the computer and of each
    person's settings, conversations and app data, on a server you run
    ([self-hosted-sync.md](self-hosted-sync.md), a proposal).
+10. The Iliada account: sign up with a passkey, Google or Apple; settings,
+    passwords (Vaultwarden) and later files, encrypted on the computer
+    ([account.md](account.md), being built).
 
 ## 10. The assistant
 
