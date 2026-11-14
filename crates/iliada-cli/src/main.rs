@@ -8,10 +8,13 @@
 //!   iliada ask "install firefox and turn on ssh"      (or just `iliada ask` for a conversation)
 //!   iliada assistant status | on | off | mode ask|auto | model <id> | key
 //!   iliada assistant email status | set <address> [--server …] | test <to> | remove
+//!   iliada report                                    (this computer's hardware, to share for help)
 //!
 //! Apps are `.app` bundles from the Store (no rebuild, no root). Everything
 //! else goes through the Iliada system service, which checks that you are an
 //! administrator; no sudo. Everything here is also in the Settings app.
+
+mod report;
 
 use std::io::IsTerminal;
 
@@ -102,6 +105,13 @@ enum Cmd {
     Assistant {
         #[command(subcommand)]
         cmd: AssistantCmd,
+    },
+    /// Save a report on this computer's hardware (graphics, screens, Wi-Fi,
+    /// sound, sleep, errors) as a text file, to share when something doesn't work.
+    Report {
+        /// Where to save it (default: the Desktop, or your home folder).
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
     },
 }
 
@@ -292,6 +302,12 @@ async fn main() -> Result<()> {
             }
         }
         Cmd::Search { word } => search(&word).await?,
+        Cmd::Report { output } => {
+            eprintln!("Looking at this computer…");
+            let path = report::write(output).await?;
+            println!("{}", path.display());
+            eprintln!("Saved. It is plain text: read it before you share it.");
+        }
         Cmd::Install { names, build } => install(names, build, v).await?,
         Cmd::Remove { names } => remove(names, v).await?,
         Cmd::Update => {
