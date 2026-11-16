@@ -4,6 +4,7 @@
 //!   iliada tool list | tool add <pkg>… | tool remove <pkg>…
 //!   iliada service list | service enable <name> | service disable <name>
 //!   iliada system update | system apply | system status
+//!   iliada account status | sign-in | backup | restore | recovery-key | enter-key | sign-out
 //!   iliada backup status | sign-in | enable <name> | now | list | restore <owner/iliada_name> | sign-out
 //!   iliada ask "install firefox and turn on ssh"      (or just `iliada ask` for a conversation)
 //!   iliada assistant status | on | off | mode ask|auto | model <id> | key
@@ -14,6 +15,7 @@
 //! else goes through the Iliada system service, which checks that you are an
 //! administrator; no sudo. Everything here is also in the Settings app.
 
+mod account;
 mod report;
 
 use std::io::IsTerminal;
@@ -93,6 +95,11 @@ enum Cmd {
     System {
         #[command(subcommand)]
         cmd: SystemCmd,
+    },
+    /// Your Iliada account: sign in, and back up your desktop settings (encrypted here first).
+    Account {
+        #[command(subcommand)]
+        cmd: account::AccountCmd,
     },
     /// Back up apps and settings to a private GitHub repository.
     Backup {
@@ -400,6 +407,7 @@ async fn main() -> Result<()> {
             system(Request::Apply, v).await?;
             eprintln!("Done.");
         }
+        Cmd::Account { cmd } => account::run(cmd).await?,
         Cmd::Backup { cmd } => backup(cmd, v).await?,
         Cmd::Ask { text } => ask(text.join(" ")).await?,
         Cmd::Assistant { cmd } => assistant(cmd, v).await?,

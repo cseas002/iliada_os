@@ -26,6 +26,7 @@ iliada-ingest = { path = "crates/iliada-ingest" }
 iliada-store = { path = "crates/iliada-store" }
 iliada-system = { path = "crates/iliada-system" }
 iliada-assistant = { path = "crates/iliada-assistant" }
+iliada-account = { path = "crates/iliada-account" }
 
 anyhow = "1"
 thiserror = "2"
