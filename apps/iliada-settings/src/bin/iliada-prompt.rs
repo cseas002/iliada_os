@@ -8,13 +8,21 @@
 //! Exit status: 0 allowed, 1 not allowed, 2 closed without answering. With
 //! `--notice` it only tells the user something (one OK button; exit 0).
 //! `iliada-run` runs it before starting an app and remembers the answer.
+//!
+//! It is an overlay (a layer-shell surface, like COSMIC's own password
+//! dialog), not a window: it stays above every app, so it can't end up hidden
+//! behind another window, and no app can cover it.
 
 use std::path::PathBuf;
 
 use cosmic::app::{Settings, Task};
-use cosmic::iced::{Alignment, Length, Size};
+use cosmic::iced::platform_specific::runtime::wayland::layer_surface::{IcedOutput, SctkLayerSurfaceSettings};
+use cosmic::iced::platform_specific::shell::commands::layer_surface::{
+    Anchor, KeyboardInteractivity, Layer, get_layer_surface,
+};
+use cosmic::iced::{Alignment, Length, window};
 use cosmic::widget;
-use cosmic::{ApplicationExt, Core, Element, executor};
+use cosmic::{Core, Element, executor};
 
 #[derive(Debug, Clone, Default)]
 struct Ask {
@@ -72,9 +80,9 @@ fn main() {
         eprintln!("usage: iliada-prompt --app NAME (--wants TEXT [--purpose TEXT] | --notice TEXT) [--icon PATH]");
         std::process::exit(2);
     };
-    let settings = Settings::default().size(Size::new(WIDTH, height(&ask))).resizable(None);
+    let settings = Settings::default().no_main_window(true).exit_on_close(false);
     let _ = cosmic::app::run::<App>(settings, ask);
-    // The window was closed without an answer.
+    // Closed without an answer.
     std::process::exit(2);
 }
 
@@ -86,6 +94,7 @@ enum Message {
 struct App {
     core: Core,
     ask: Ask,
+    surface: window::Id,
 }
 
 impl cosmic::Application for App {
@@ -102,18 +111,20 @@ impl cosmic::Application for App {
     }
 
     fn init(core: Core, ask: Ask) -> (Self, Task<Message>) {
-        let mut app = App { core, ask };
-        app.core.window.show_headerbar = false;
-        let title = if app.ask.notice.is_empty() {
-            format!("{} wants permission", app.ask.app)
-        } else {
-            format!("{} can't open", app.ask.app)
-        };
-        let t = match app.core.main_window_id() {
-            Some(id) => app.set_window_title(title, id),
-            None => Task::none(),
-        };
-        (app, t)
+        let surface = window::Id::unique();
+        let size = (WIDTH as u32, height(&ask) as u32);
+        let overlay = get_layer_surface(SctkLayerSurfaceSettings {
+            id: surface,
+            layer: Layer::Overlay,
+            keyboard_interactivity: KeyboardInteractivity::OnDemand,
+            // No anchor: centred on the screen in use.
+            anchor: Anchor::empty(),
+            output: IcedOutput::Active,
+            namespace: "iliada-prompt".into(),
+            size: Some((Some(size.0), Some(size.1))),
+            ..Default::default()
+        });
+        (App { core, ask, surface }, overlay)
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -123,6 +134,22 @@ impl cosmic::Application for App {
     }
 
     fn view(&self) -> Element<'_, Message> {
+        // There is no main window; the prompt is the overlay.
+        widget::text("").into()
+    }
+
+    fn view_window(&self, id: window::Id) -> Element<'_, Message> {
+        let content = if id == self.surface { self.prompt() } else { widget::text("").into() };
+        widget::container(content)
+            .class(cosmic::theme::Container::Dialog(true))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+}
+
+impl App {
+    fn prompt(&self) -> Element<'_, Message> {
         let spacing = cosmic::theme::spacing();
         let icon: Element<_> = match &self.ask.icon {
             Some(p) if p.is_file() => widget::icon::icon(widget::icon::from_path(p.clone())).size(64).into(),
