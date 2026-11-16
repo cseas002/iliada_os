@@ -83,5 +83,6 @@ about the person).
   one).
 * Whether a hosted account is free, and its storage limit (settings are
   tiny; files are where cost grows).
-* The repository for the server (proposed: `iliada_cloud` in ~/iliada) and
-  whether it is public, like the rest of Iliada.
+* The server is public: [iliada_cloud](https://github.com/cseas002/iliada_cloud)
+  (Rust: axum, webauthn-rs, SQLite; the website is plain HTML with one small
+  script for passkeys).

@@ -15,6 +15,10 @@
   any setup. Only Iliada's backup repositories are listed for restore
   (other repositories whose names start with `iliada_` were listed too), and
   a backup is never written into a repository that isn't one.
+- Permission questions stay above every window (they could end up hidden
+  behind another one, so an app looked as if it never opened).
+- fastfetch and the system's version file say "Iliada 0.2.2", not the NixOS
+  release it is built on.
 
 ## 0.2.2 (2026-11-14)
 
