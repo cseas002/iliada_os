@@ -1,6 +1,9 @@
 # The Iliada account (design)
 
-Status: **design, being built.** It grows the self-hosted server proposal
+Status: **being built.** The server (sign-in, passkeys, the website, encrypted
+storage) and the computer side (Settings → Account, the Setup Assistant,
+`iliada account`, hourly encrypted backups) work in the dev VM against a
+server on the build machine; Iliada's own server has no home yet. It grows the self-hosted server proposal
 ([self-hosted-sync.md](self-hosted-sync.md)) into an account people sign up
 for, the way a Mac has an Apple Account. Iliada runs the default server;
 anyone can run their own, and a computer can point at either.
@@ -63,14 +66,22 @@ about the person).
 
 ## Building it
 
-1. **Server, first version** (on this build server, reachable from the dev
+1. **Server, first version** (done) (on this build server, reachable from the dev
    VM): sign-up and sign-in with a passkey and with an email code, on its
    website; a computer is approved with a code and gets a token; encrypted
    blobs stored per account with a size limit. Tests for each step (passkeys
    with a software authenticator), and an end-to-end test from the dev VM.
-2. **On the computer**: Settings → Account and the Setup Assistant step;
+2. **On the computer** (done in the dev VM, 2026-11-16): Settings → Account and the Setup Assistant step;
    backing up desktop settings, Privacy answers and the assistant's
-   conversations; restore on a fresh install (verified in the installed VM).
+   conversations; restore on a fresh install (verified in the installed VM). Built as the
+   `iliada-account` crate: a code approved on the website gives the computer
+   its own token; the account key is made on the first computer and shown
+   once as a 32-character recovery key; `~/.config/cosmic`, `permissions.toml`
+   and `conversations/` are packed (tar + zstd), sealed with
+   XChaCha20-Poly1305 (the name of what is kept is authenticated too) and
+   uploaded as `settings`; a user timer backs up hourly when something
+   changed. Left: the installed VM, approving a new computer from one already
+   signed in (instead of typing the recovery key), app data.
 3. **Vaultwarden** next to it, the Bitwarden extension pointed at it.
 4. **Google and Apple sign-in.** Needs a Google Cloud project (free) and an
    Apple Developer account ($99 a year) in Iliada's name.

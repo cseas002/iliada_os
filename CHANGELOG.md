@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **The Iliada account** (first version, for computers set up with an account
+  server): Settings → Account and a new Setup Assistant step sign in with a
+  code you approve on the account website. Your desktop settings, Privacy
+  answers and assistant conversations are backed up every hour, encrypted on
+  the computer first with a key only your computers have (you keep a
+  recovery key for a new computer). Restore brings them back on another
+  computer at once. Also `iliada account`. Iliada's own account server isn't
+  online yet.
 - New in the Store (no Iliada update needed): Clocks, File Roller (open and
   make zip archives) and Okular (documents).
 - Okular, GIMP, Thunderbird and VLC no longer ask for the microphone when

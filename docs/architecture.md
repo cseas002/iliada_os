@@ -230,6 +230,7 @@ justification, runtime base), validated by the same Rust types.
 | System service (`iliada-systemd`): tools, services, apply, no sudo | done; validated in the VM (GUI and CLI) |
 | Iliada Settings (updates, backup, tools, services, privacy) | done; validated in the VM |
 | Setup Assistant (first login) | done; shown on first login in the VM |
+| Iliada account on the computer (`iliada account`, Settings → Account, Setup Assistant step, hourly encrypted backup; server: github.com/cseas002/iliada_cloud) | works in the dev VM against the server on the build machine (2026-11-16): signed in from Setup with a code, recovery key shown, backed up; a wiped VM signed in as the same person, a wrong recovery key refused, the right one taken, Restore switched the desktop to light mode at once and brought back a Privacy answer; Show key and Sign out in Settings. The server holds only sealed data (checked: no plain text in its files). Not yet: an installed computer, Iliada's own server (none hosted) |
 | Frosted glass (COSMIC theme defaults `frosted_windows`, `frosted_panel`, `frosted_applets`, `frosted_system_interface`) | done; a fresh dev VM disk comes up frosted at first login (2026-11-12); the Alt+Space panel, Settings and the Welcome window are blurred. COSMIC apps read their built-in fallback theme first, so a user service writes the four keys into each user's theme at login unless already set |
 | GitHub backup and restore | works with Iliada's GitHub app (2026-11-15, on the installed VM and a real account): sign-in with a code, backup to a new private `iliada_iliada-test`, list (only backups since the fix: `iliada_os`/`iliada_apps` were listed too), a backup name that would reuse a non-backup repository refused, restore onto the same computer. Not yet: restore onto a freshly installed computer |
 | Assistant (Ask / Auto, Settings → Assistant, `iliada ask`, the Assistant app) | live-tested in the x86 VM with DeepSeek V4 Flash (OpenRouter): app install, dark/light, volume, commands, email (local mail server; approval and decline), a prompt-injected file not obeyed; Settings → Assistant and the app clicked through; answers stream in as they are written (2026-11-12, both providers covered by tests, DeepSeek live in the panel) |
@@ -301,7 +302,8 @@ then continues the backup's.
    ([self-hosted-sync.md](self-hosted-sync.md), a proposal).
 10. The Iliada account: sign up with a passkey, Google or Apple; settings,
     passwords (Vaultwarden) and later files, encrypted on the computer
-    ([account.md](account.md), being built).
+    ([account.md](account.md); server and computer side work in the dev VM,
+    hosting not decided).
 
 ## 10. The assistant
 
