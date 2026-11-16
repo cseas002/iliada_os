@@ -144,7 +144,7 @@ async fn enter_key(files: &Files) -> Result<()> {
                 eprintln!("That's it: this computer can read your backup now.");
                 return Ok(());
             }
-            Err(e) if std::io::stdin().is_terminal() => eprintln!("{e:#}. Try again (or press Enter to stop)."),
+            Err(e) if std::io::stdin().is_terminal() => eprintln!("{e:#} (Press Enter to stop.)"),
             Err(e) => return Err(e),
         }
     }

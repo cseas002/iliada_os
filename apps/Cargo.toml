@@ -16,6 +16,7 @@ iliada-system = { path = "../crates/iliada-system" }
 iliada-bundle = { path = "../crates/iliada-bundle" }
 iliada-types = { path = "../crates/iliada-types" }
 iliada-assistant = { path = "../crates/iliada-assistant" }
+iliada-account = { path = "../crates/iliada-account" }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "fs", "sync", "process"] }
 futures-util = "0.3"

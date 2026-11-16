@@ -1,4 +1,4 @@
-//! Iliada Settings: updates, backup, command-line tools, services, about.
+//! Iliada Settings: the Iliada account, updates, backup, command-line tools, services, about.
 //!
 //! A COSMIC app over the Iliada system service. Display, network, sound and
 //! the rest stay in COSMIC's own Settings; this is what is Iliada's.
@@ -9,6 +9,7 @@ use cosmic::widget::{self, nav_bar, settings};
 use cosmic::{ApplicationExt, Core, Element, executor};
 use futures_util::StreamExt;
 use iliada_bundle::decisions::{Decision, Decisions};
+use iliada_settings::account::{self, Account};
 use iliada_settings::{Progress, ago, open_url, run};
 use iliada_system::client;
 use iliada_system::protocol::{AssistantMode, AssistantSettings, Backup, Event, Provider, Request, Status, model_name};
@@ -56,6 +57,7 @@ fn main() -> cosmic::iced::Result {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Page {
+    Account,
     Updates,
     Backup,
     Tools,
@@ -137,6 +139,8 @@ enum KeyCheck {
 enum Confirm {
     Restore(String),
     SignOut,
+    AccountRestore(String),
+    AccountSignOut,
     RemoveKey(Provider),
 }
 
@@ -145,6 +149,7 @@ enum Confirm {
 #[derive(Debug, Clone)]
 enum Message {
     Refresh,
+    Account(account::Msg),
     Status(Result<Status, String>),
     Run(Request),
     Progress(Progress),
@@ -204,6 +209,7 @@ struct App {
     /// The hardware report: None before one is asked for, Some(None) while it is made.
     report: Option<Option<Result<String, String>>>,
     email: EmailForm,
+    account: Account,
 }
 
 fn load_status() -> Task<Message> {
@@ -860,6 +866,7 @@ impl cosmic::Application for App {
     fn init(core: Core, _flags: ()) -> (Self, Task<Message>) {
         let mut nav = nav_bar::Model::default();
         let pages = [
+            ("Account", "avatar-default-symbolic", Page::Account),
             ("Updates", "software-update-available-symbolic", Page::Updates),
             ("Backup", "document-save-symbolic", Page::Backup),
             ("Command-line tools", "utilities-terminal-symbolic", Page::Tools),
@@ -868,9 +875,9 @@ impl cosmic::Application for App {
             ("Assistant", "user-available-symbolic", Page::Assistant),
             ("About", "help-about-symbolic", Page::About),
         ];
-        for (i, (text, icon, page)) in pages.into_iter().enumerate() {
+        for (text, icon, page) in pages {
             let e = nav.insert().text(text).icon(widget::icon::from_name(icon)).data(page);
-            if i == 0 {
+            if page == Page::Updates {
                 e.activate();
             }
         }
@@ -894,6 +901,7 @@ impl cosmic::Application for App {
             key_check: None,
             report: None,
             email: EmailForm::load(),
+            account: Account::default(),
         };
         app.set_header_title("Iliada Settings".into());
         let title = match app.core.main_window_id() {
@@ -918,6 +926,9 @@ impl cosmic::Application for App {
             let model = self.status().map(|s| s.assistant.model.clone()).unwrap_or_default();
             return Task::batch([load_status(), self.check_key(&model)]);
         }
+        if self.page() == Page::Account {
+            return Task::batch([load_status(), self.account.refresh().map(account_action)]);
+        }
         if self.page() == Page::Privacy {
             self.privacy = installed_permissions();
             self.decisions = Decisions::default_path().map(|p| Decisions::load(&p)).unwrap_or_default();
@@ -941,6 +952,21 @@ impl cosmic::Application for App {
                 format!("The assistant stops working until you add a {} key again.", p.name()),
                 widget::button::destructive("Remove"),
             ),
+            Confirm::AccountRestore(from) => (
+                "Restore your settings?",
+                format!(
+                    "Your desktop settings, Privacy answers and assistant conversations from {from} \
+                     replace this computer's."
+                ),
+                widget::button::destructive("Restore"),
+            ),
+            Confirm::AccountSignOut => (
+                "Sign out of your Iliada account?",
+                "Backups stop on this computer, and it forgets your account key: signing in again needs \
+                 your recovery key. Your account and its backup are kept."
+                    .to_owned(),
+                widget::button::destructive("Sign out"),
+            ),
             Confirm::SignOut => (
                 "Sign out of GitHub?",
                 "Backups stop. Your backups on GitHub are kept.".to_owned(),
@@ -960,6 +986,12 @@ impl cosmic::Application for App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Refresh => return load_status(),
+            Message::Account(account::Msg::Restore) => {
+                let from = self.account.latest().map(|m| m.computer.clone()).unwrap_or_default();
+                self.confirm = Some(Confirm::AccountRestore(from));
+            }
+            Message::Account(account::Msg::SignOut) => self.confirm = Some(Confirm::AccountSignOut),
+            Message::Account(m) => return self.account.update(m).map(account_action),
             Message::Status(s) => {
                 if let (Ok(st), true) = (&s, self.backup_name.is_empty()) {
                     self.backup_name = st.hostname.clone();
@@ -1146,6 +1178,8 @@ impl cosmic::Application for App {
                 return match self.confirm.take() {
                     Some(Confirm::Restore(repo)) => self.start(Request::Restore { repo }),
                     Some(Confirm::SignOut) => self.start(Request::BackupSignOut),
+                    Some(Confirm::AccountRestore(_)) => self.account.update(account::Msg::Restore).map(account_action),
+                    Some(Confirm::AccountSignOut) => self.account.update(account::Msg::SignOut).map(account_action),
                     Some(Confirm::RemoveKey(p)) => {
                         match iliada_assistant::api::remove_key(p) {
                             Err(e) => self.error = Some(format!("Could not remove the key: {e:#}")),
@@ -1207,12 +1241,15 @@ impl cosmic::Application for App {
                 if let Some(b) = self.banner() {
                     col = col.push(b);
                 }
-                if !s.admin {
+                if self.page() == Page::Account {
+                    // Each person's own: no administrator needed.
+                } else if !s.admin {
                     col = col.push(card(widget::text::body("Only an administrator can change these settings.").into()));
                 } else if let (Some(busy), None) = (&s.busy, &self.job) {
                     col = col.push(card(widget::text::body(format!("Iliada is busy: {busy}…")).into()));
                 }
                 col = col.push(match self.page() {
+                    Page::Account => self.account.view().map(Message::Account),
                     Page::Updates => self.updates(s),
                     Page::Backup => self.backup(s),
                     Page::Tools => self.tools(s),
@@ -1228,4 +1265,8 @@ impl cosmic::Application for App {
         };
         widget::container(body).padding(spacing.space_m).into()
     }
+}
+
+fn account_action(m: account::Msg) -> cosmic::Action<Message> {
+    cosmic::Action::App(Message::Account(m))
 }

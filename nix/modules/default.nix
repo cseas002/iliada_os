@@ -12,6 +12,7 @@
 #   iliada.store         the Store catalog and automatic app updates
 #   iliada.system        the system service: tools, services, updates, backups
 #   iliada.ux            FHS hiding, privilege model
+#   iliada.account       the Iliada account server and settings backups
 { lib, pkgs, ... }:
 {
   imports = [
@@ -28,6 +29,7 @@
     ./system.nix
     ./ux.nix
     ./branding.nix
+    ./account.nix
   ];
 
   options.iliada.version = lib.mkOption {

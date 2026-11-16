@@ -2,7 +2,7 @@
 # installer. One
 # cargo workspace (apps/), built separately from the core tools because it
 # depends on libcosmic (git dependencies, GPU rendering stack).
-{ lib, rustPlatform, libcosmicAppHook }:
+{ lib, rustPlatform, libcosmicAppHook, pkg-config, zstd }:
 
 rustPlatform.buildRustPackage {
   pname = "iliada-desktop-apps";
@@ -32,7 +32,9 @@ rustPlatform.buildRustPackage {
     patch -d "$lc" -p1 < ${./patches/libcosmic-context-menu-position.patch}
   '';
 
-  nativeBuildInputs = [ libcosmicAppHook ];
+  nativeBuildInputs = [ libcosmicAppHook pkg-config ];
+  # zstd: Iliada account backups are compressed before they are encrypted.
+  buildInputs = [ zstd ];
   doCheck = false;
 
   postInstall = ''

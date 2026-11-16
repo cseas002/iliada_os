@@ -1,4 +1,5 @@
-//! The Iliada Setup Assistant: runs on first login. Restore apps and
+//! The Iliada Setup Assistant: runs on first login. Sign in to the Iliada
+//! account (settings come back, encrypted backups go on), restore apps and
 //! settings from a GitHub backup, or start fresh and turn backups on.
 //!
 //!   iliada-setup              always opens
@@ -11,6 +12,7 @@ use cosmic::iced::{Alignment, Length, Size};
 use cosmic::widget;
 use cosmic::{ApplicationExt, Core, Element, executor};
 use futures_util::StreamExt;
+use iliada_settings::account::{self, Account};
 use iliada_settings::{Progress, ago, open_url, run};
 use iliada_system::client;
 use iliada_system::protocol::{Backup, Event, Request, Status};
@@ -33,6 +35,8 @@ fn main() -> cosmic::iced::Result {
 #[derive(Debug, Clone, PartialEq)]
 enum Step {
     Welcome,
+    /// Sign in to the Iliada account (when this computer has one set up).
+    Account,
     /// Restore a backup or start fresh.
     Choice,
     /// Waiting for the GitHub sign-in (then: `then`).
@@ -51,6 +55,7 @@ enum Step {
 enum Message {
     Status(Result<Status, String>),
     Go(Step),
+    Account(account::Msg),
     SignIn(Step),
     OpenGitHub,
     Backups(Result<Vec<Backup>, String>),
@@ -75,6 +80,7 @@ struct App {
     error: Option<String>,
     /// The step to return to after an error.
     back: Step,
+    account: Account,
 }
 
 impl App {
@@ -109,7 +115,10 @@ impl App {
         for c in content {
             col = col.push(c);
         }
-        widget::container(col).center(Length::Fill).padding(spacing.space_l).into()
+        // Scrolls when it doesn't fit (a recovery key and its explanation).
+        widget::container(widget::scrollable(widget::container(col).center_x(Length::Fill).padding(spacing.space_l)))
+            .center_y(Length::Fill)
+            .into()
     }
 }
 
@@ -147,6 +156,7 @@ impl cosmic::Application for App {
             summary: Vec::new(),
             error: None,
             back: Step::Choice,
+            account: Account::default(),
         };
         app.set_header_title("Welcome".into());
         let title = match app.core.main_window_id() {
@@ -170,6 +180,16 @@ impl cosmic::Application for App {
             }
             Message::Go(step) => {
                 self.error = None;
+                if step == Step::Account {
+                    if !self.account.available() {
+                        return self.update(Message::Go(Step::Choice));
+                    }
+                    self.step = step;
+                    return self.account.refresh().map(account_action);
+                }
+                if self.step == Step::Account && self.account.signed_in() {
+                    self.summary.push("Your settings are backed up to your Iliada account, encrypted.".into());
+                }
                 if step == Step::Choice && !self.backup_possible() {
                     // Nothing to restore from or back up to: straight to the end.
                     self.step = Step::Done;
@@ -200,6 +220,7 @@ impl cosmic::Application for App {
                 self.summary.push(format!("Restored your apps and settings from {name}."));
                 return self.start(Request::Restore { repo }, "Restoring your apps and settings", Step::PickBackup);
             }
+            Message::Account(m) => return self.account.update(m).map(account_action),
             Message::Name(n) => self.name = n,
             Message::EnableBackup => {
                 let name = self.name.trim().to_owned();
@@ -262,8 +283,25 @@ impl cosmic::Application for App {
                 "Welcome to Iliada",
                 "Apps are in Applications, each in its own sandbox. Get more from the Store; \
                  install one by dragging it into Applications, remove it by dragging it to the Trash.",
-                vec![widget::button::suggested("Continue").on_press(Message::Go(Step::Choice)).into()],
+                vec![widget::button::suggested("Continue").on_press(Message::Go(Step::Account)).into()],
             ),
+            Step::Account => {
+                let next = if self.account.in_flow() {
+                    None
+                } else if self.account.signed_in() {
+                    Some(widget::button::suggested("Continue"))
+                } else {
+                    Some(widget::button::standard("Not now"))
+                };
+                self.page(
+                    "Your Iliada account",
+                    "Sign in to keep your desktop settings, Privacy answers and assistant conversations \
+                     backed up, encrypted so only you can read them. New here? Signing in makes your account.",
+                    std::iter::once(self.account.view_setup().map(Message::Account))
+                        .chain(next.map(|b| b.on_press(Message::Go(Step::Choice)).into()))
+                        .collect(),
+                )
+            }
             Step::Choice => self.page(
                 "Have you used Iliada before?",
                 "If you backed up another computer to GitHub, bring its apps and settings here.",
@@ -382,4 +420,8 @@ impl cosmic::Application for App {
             }
         }
     }
+}
+
+fn account_action(m: account::Msg) -> cosmic::Action<Message> {
+    cosmic::Action::App(Message::Account(m))
 }

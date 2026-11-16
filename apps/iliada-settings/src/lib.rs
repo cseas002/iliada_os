@@ -1,6 +1,8 @@
 //! What Settings and the Setup Assistant share: running a request on the
 //! Iliada system service as a stream of messages for the UI.
 
+pub mod account;
+
 use futures_util::Stream;
 use iliada_system::client;
 use iliada_system::protocol::{Event, Request};

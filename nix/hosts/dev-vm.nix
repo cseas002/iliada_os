@@ -53,6 +53,9 @@
 
   iliada = {
     settingsFile = ../../examples/settings.toml;
+    # The account server running on the build server (iliada_cloud), as the
+    # VM sees the host.
+    account.server = "http://10.0.2.2:8480";
     applications = {
       list = "/var/lib/iliada/apps.toml";
       initialList = ../../examples/watchlist.toml;

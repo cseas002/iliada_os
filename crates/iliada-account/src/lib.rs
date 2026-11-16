@@ -215,7 +215,7 @@ pub async fn use_recovery_key(files: &Files, text: &str) -> Result<()> {
     let (_, api) = files.signed_in()?;
     let sealed = api.get(KEY_CHECK).await?.context("this account has no key yet; sign in again")?;
     if key.open(KEY_CHECK, &sealed).is_err() {
-        bail!("that recovery key belongs to a different account");
+        bail!("That isn't this account's recovery key. Check it and try again.");
     }
     files.save_key(&key)
 }

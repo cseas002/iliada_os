@@ -57,7 +57,7 @@ impl AccountKey {
         for c in text.chars().filter(|c| !c.is_whitespace() && *c != '-') {
             let up = c.to_ascii_uppercase() as u8;
             let Some(v) = ALPHABET.iter().position(|&a| a == up) else {
-                bail!("{c:?} isn't in a recovery key (it has no 0, O, 1 or I)");
+                bail!("A recovery key has no {c:?}: it uses letters and the digits 2 to 9 (no 0, O, 1 or I).");
             };
             acc = (acc << 5) | v as u32;
             bits += 5;
@@ -68,7 +68,7 @@ impl AccountKey {
             }
         }
         if n != SECRET_LEN * 8 / 5 {
-            bail!("a recovery key has 32 letters and digits; this has {n}");
+            bail!("A recovery key has 32 letters and digits; this has {n}.");
         }
         Ok(AccountKey(out.try_into().expect("20 bytes")))
     }
