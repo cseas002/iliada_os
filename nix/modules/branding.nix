@@ -2,7 +2,7 @@
 # its logo, a Greek helmet (περικεφαλαία) with a horsehair crest: the
 # `iliada` icon, and the picture `fastfetch` / `neofetch` show.
 # The distribution ID stays "nixos" so NixOS tooling keeps working.
-{ pkgs, ... }:
+{ config, pkgs, ... }:
 let
   branding = pkgs.runCommand "iliada-branding" { } ''
     install -Dm644 ${../branding/iliada.svg} $out/share/icons/hicolor/scalable/apps/iliada.svg
@@ -16,7 +16,15 @@ let
 in
 {
   system.nixos.distroName = "Iliada";
-  system.nixos.extraOSReleaseArgs.LOGO = "iliada";
+  # What people see (fastfetch, Settings, the report): Iliada's own version.
+  # VERSION_ID stays the NixOS release, which NixOS tooling reads.
+  system.nixos.extraOSReleaseArgs = {
+    LOGO = "iliada";
+    VERSION = config.iliada.version;
+    PRETTY_NAME = "Iliada ${config.iliada.version}";
+    HOME_URL = "https://github.com/cseas002/iliada_os";
+    BUG_REPORT_URL = "https://github.com/cseas002/iliada_os/issues";
+  };
   environment.systemPackages = [ branding pkgs.fastfetch neofetch ];
   environment.etc."xdg/fastfetch/config.jsonc".source = "${branding}/share/iliada/fastfetch.jsonc";
 }

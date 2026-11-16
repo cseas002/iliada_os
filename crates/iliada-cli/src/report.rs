@@ -46,12 +46,13 @@ async fn collect() -> String {
 
     section(&mut r, "System");
     let os = read("/etc/os-release");
-    let pretty = os
+    // VERSION_ID is the NixOS release Iliada is built on.
+    let base = os
         .lines()
-        .find_map(|l| l.strip_prefix("PRETTY_NAME="))
+        .find_map(|l| l.strip_prefix("VERSION_ID="))
         .map(|v| v.trim_matches('"').to_string())
         .unwrap_or_default();
-    line(&mut r, "Iliada", &format!("{} (base system: {pretty})", env!("CARGO_PKG_VERSION")));
+    line(&mut r, "Iliada", &format!("{} (base: NixOS {base})", env!("CARGO_PKG_VERSION")));
     line(&mut r, "Kernel", run("uname", &["-r"]).await.unwrap_or_default().trim());
     let dmi = |f: &str| read(&format!("/sys/class/dmi/id/{f}")).trim().to_string();
     line(&mut r, "Maker", &dmi("sys_vendor"));
