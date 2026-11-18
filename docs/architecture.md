@@ -1,4 +1,4 @@
-# Iliada architecture
+**next to another system verified 2026-11-18**: a 64 GB disk shaped like ChromeOS Flex (STATE, KERN-A, ROOT-A, EFI-SYSTEM, 40 GB free) in a UEFI VM; the installer recognised Flex, guessed Asia/Nicosia, installed into partitions 13-14, Flex's partitions were bit-identical afterwards and the disk booted to the login. A real HP EliteDesk 800 G2 runs Iliada next to ChromeOS Flex (installed by hand the same way). # Iliada architecture
 
 This document is the reviewed version of the kickoff draft. Where it departs
 from the draft, the reason is stated; the ADRs in `docs/adr/` hold the details.
