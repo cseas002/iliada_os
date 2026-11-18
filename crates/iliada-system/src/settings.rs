@@ -153,6 +153,23 @@ pub fn set_assistant(doc: &mut DocumentMut, a: &crate::protocol::AssistantSettin
     Ok(true)
 }
 
+/// `[updates] testing = true`: this computer takes test updates (the newest
+/// work, between releases). Read by the system service only; no rebuild.
+pub fn testing_updates(doc: &DocumentMut) -> bool {
+    doc.get("updates").and_then(|t| t.get("testing")).and_then(Item::as_bool).unwrap_or(false)
+}
+
+pub fn set_testing_updates(doc: &mut DocumentMut, on: bool) -> bool {
+    if testing_updates(doc) == on {
+        return false;
+    }
+    if !doc.contains_key("updates") {
+        doc["updates"] = Item::Table(Table::new());
+    }
+    doc["updates"]["testing"] = value(on);
+    true
+}
+
 /// How a service is set up: three levels, as on Debian or Fedora.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -221,6 +238,18 @@ pub fn set_service_boot(doc: &mut DocumentMut, name: &str, boot: bool) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn testing_updates_switch() {
+        let mut doc: DocumentMut = "[tools]\npackages = []\n".parse().unwrap();
+        assert!(!testing_updates(&doc));
+        assert!(set_testing_updates(&mut doc, true));
+        assert!(!set_testing_updates(&mut doc, true), "no change");
+        assert!(testing_updates(&doc));
+        assert!(doc.to_string().contains("[updates]\ntesting = true"));
+        assert!(set_testing_updates(&mut doc, false));
+        assert!(!testing_updates(&doc));
+    }
 
     #[test]
     fn units_map_to_services() {

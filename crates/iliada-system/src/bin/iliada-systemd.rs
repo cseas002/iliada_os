@@ -89,6 +89,8 @@ struct Service {
     github_client_id: Option<String>,
     version: String,
     update_url: String,
+    /// Where test updates are published (`[updates] testing = true`).
+    testing_url: String,
     /// One change at a time.
     job: tokio::sync::Mutex<()>,
     busy: Mutex<Option<&'static str>>,
@@ -149,7 +151,10 @@ impl Service {
                 last_backup: b.last_backup,
                 last_error: b.last_error,
             },
-            system_update: self.updates.lock().expect("updates lock").clone(),
+            system_update: UpdateInfo {
+                testing: settings::testing_updates(&doc),
+                ..self.updates.lock().expect("updates lock").clone()
+            },
             assistant: settings::assistant(&doc),
         }
     }
@@ -247,6 +252,19 @@ impl Service {
                 Ok(json!({}))
             }
             Request::UpdateSystem => self.update_system(&log).await,
+            Request::SetTestingUpdates { on } => {
+                let mut doc = self.read_settings()?;
+                if !settings::set_testing_updates(&mut doc, on) {
+                    return Ok(json!({ "changed": false }));
+                }
+                std::fs::write(self.settings_path(), doc.to_string())?;
+                init::commit_all(&self.dir, if on { "Take test updates" } else { "Take only releases" })?;
+                // What was seen on the other channel no longer applies.
+                *self.updates.lock().expect("updates lock") =
+                    UpdateInfo { current: self.version.clone(), ..UpdateInfo::default() };
+                let newer = self.check_update().await.ok().map(|r| update::newer(&r.version, &self.version));
+                Ok(json!({ "changed": true, "newer": newer }))
+            }
             Request::BackupEnable { name } => self.enable_backup(&name, &log).await,
             Request::BackupNow => {
                 self.back_up().await?;
@@ -280,8 +298,15 @@ impl Service {
 
     // ── Updates ────────────────────────────────────────────────────────
 
+    /// Releases, or test updates when this computer takes them.
+    fn update_url(&self) -> String {
+        let testing = self.read_settings().map(|d| settings::testing_updates(&d)).unwrap_or(false);
+        if testing { self.testing_url.clone() } else { self.update_url.clone() }
+    }
+
     async fn check_update(&self) -> Result<update::Release> {
-        let r = update::latest(&self.update_url, iliada_store_key()).await;
+        let url = self.update_url();
+        let r = update::latest(&url, iliada_store_key()).await;
         let mut u = self.updates.lock().expect("updates lock");
         u.last_check = Some(now());
         match &r {
@@ -527,6 +552,7 @@ async fn serve(state: PathBuf) -> Result<()> {
         github_client_id: std::env::var("ILIADA_GITHUB_CLIENT_ID").ok().filter(|s| !s.is_empty()),
         version: std::env::var("ILIADA_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").into()),
         update_url: std::env::var("ILIADA_UPDATE_URL").unwrap_or_else(|_| update::DEFAULT_URL.into()),
+        testing_url: std::env::var("ILIADA_TESTING_UPDATE_URL").unwrap_or_else(|_| update::TESTING_URL.into()),
         job: tokio::sync::Mutex::new(()),
         busy: Mutex::new(None),
         updates: Mutex::new(UpdateInfo::default()),

@@ -32,6 +32,9 @@ pub enum Request {
     CheckSystemUpdate,
     /// Download and apply the newest Iliada release.
     UpdateSystem,
+    /// Take test updates (the newest work, between releases), or only
+    /// releases. Nothing is installed until the next update.
+    SetTestingUpdates { on: bool },
     /// Sign in to GitHub (device flow): emits [`Event::SignInCode`], then
     /// finishes when the user has approved the code in a browser.
     BackupSignIn,
@@ -65,6 +68,7 @@ impl Request {
             Request::SetAssistant { .. } => "Saving assistant settings",
             Request::UpdateApps => "Updating apps",
             Request::UpdateSystem => "Updating Iliada",
+            Request::SetTestingUpdates { .. } => "Changing how Iliada updates",
             Request::BackupSignIn => "Signing in to GitHub",
             Request::BackupEnable { .. } | Request::BackupNow => "Backing up",
             Request::Restore { .. } => "Restoring a backup",
@@ -239,6 +243,9 @@ pub struct UpdateInfo {
     pub last_check: Option<u64>,
     pub latest: Option<String>,
     pub last_error: Option<String>,
+    /// This computer takes test updates (the newest work, between releases).
+    #[serde(default)]
+    pub testing: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -191,12 +191,20 @@ enum ServiceCmd {
     Disable { name: String },
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum OnOff {
+    On,
+    Off,
+}
+
 #[derive(Subcommand)]
 enum SystemCmd {
     /// Version, updates, backup.
     Status,
     /// Install the newest Iliada release.
     Update,
+    /// Take test updates (the newest work, between releases): on or off.
+    Testing { state: OnOff },
     /// Apply /etc/iliada (after editing settings.toml or configuration.nix).
     Apply,
 }
@@ -383,7 +391,10 @@ async fn main() -> Result<()> {
         }
         Cmd::System { cmd: SystemCmd::Status } => {
             let s = client::status().await?;
-            println!("Iliada {} on {}", s.version, s.hostname);
+            println!("Iliada {} on {}", iliada_system::update::describe(&s.version), s.hostname);
+            if s.system_update.testing {
+                println!("Takes test updates (iliada system testing off: only releases)");
+            }
             match (&s.system_update.latest, s.system_update.last_check) {
                 (Some(l), _) if iliada_system::update::newer(l, &s.version) => {
                     println!("Iliada {l} is available: iliada system update")
@@ -401,6 +412,24 @@ async fn main() -> Result<()> {
                 eprintln!("Iliada {} is installed. Restart to finish.", r["version"].as_str().unwrap_or("?"));
             } else {
                 eprintln!("Iliada is up to date.");
+            }
+        }
+        Cmd::System { cmd: SystemCmd::Testing { state } } => {
+            let on = state == OnOff::On;
+            let r = system(Request::SetTestingUpdates { on }, v).await?;
+            eprintln!(
+                "{}",
+                match (changed(&r), on) {
+                    (true, true) =>
+                        "This computer now takes test updates: the newest work, before it is released. They come often and may have problems; each one can be undone from the boot menu.",
+                    (true, false) =>
+                        "This computer now takes only releases. It stays on the test update it has until the next release.",
+                    (false, true) => "This computer already takes test updates.",
+                    (false, false) => "This computer already takes only releases.",
+                }
+            );
+            if r["newer"].as_bool() == Some(true) {
+                eprintln!("An update is available: iliada system update");
             }
         }
         Cmd::System { cmd: SystemCmd::Apply } => {

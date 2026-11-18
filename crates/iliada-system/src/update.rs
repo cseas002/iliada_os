@@ -17,6 +17,34 @@ use sha2::{Digest, Sha256};
 
 pub use iliada_catalog::{RELEASE_KIND as KIND, Release};
 pub const DEFAULT_URL: &str = "https://github.com/cseas002/iliada_os/releases/latest/download/release.json";
+/// Test updates: the newest work, published between releases as the GitHub
+/// pre-release `testing` (its files are replaced each time). Versions are
+/// the last release plus the time it was made (`0.2.2.202611181530`), so
+/// the next release is newer than every test update before it.
+pub const TESTING_URL: &str = "https://github.com/cseas002/iliada_os/releases/download/testing/release.json";
+
+/// A version as people read it: "0.2.3", or for a test update
+/// "0.2.2, test update of 18 Nov 2026 15:30".
+pub fn describe(version: &str) -> String {
+    let parts: Vec<&str> = version.split('.').collect();
+    if let [a, b, c, stamp] = parts.as_slice()
+        && stamp.len() == 12
+        && stamp.bytes().all(|d| d.is_ascii_digit())
+    {
+        const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        let month = stamp[4..6].parse::<usize>().ok().and_then(|m| MONTHS.get(m.wrapping_sub(1)));
+        if let Some(month) = month {
+            let day = stamp[6..8].trim_start_matches('0');
+            return format!(
+                "{a}.{b}.{c}, test update of {day} {month} {} {}:{} UTC",
+                &stamp[..4],
+                &stamp[8..10],
+                &stamp[10..]
+            );
+        }
+    }
+    version.to_owned()
+}
 const MAX_SOURCE: u64 = 256 << 20;
 
 /// `a` is a newer version than `b` (dotted numbers; "0.10.0" > "0.9.1").
@@ -133,5 +161,16 @@ mod tests {
         assert!(newer("v1.0", "0.99"));
         assert!(!newer("0.1.0", "0.1.0"));
         assert!(!newer("0.1.0", "0.2.0"));
+        // Test updates come after their release and before the next one.
+        assert!(newer("0.2.2.202611181530", "0.2.2"));
+        assert!(newer("0.2.3", "0.2.2.202611181530"));
+        assert!(newer("0.2.2.202611190900", "0.2.2.202611181530"));
+    }
+
+    #[test]
+    fn described() {
+        assert_eq!(describe("0.2.3"), "0.2.3");
+        assert_eq!(describe("0.2.2.202611081530"), "0.2.2, test update of 8 Nov 2026 15:30 UTC");
+        assert_eq!(describe("0.2.2.2026"), "0.2.2.2026");
     }
 }

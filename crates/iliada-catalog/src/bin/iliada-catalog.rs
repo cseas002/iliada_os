@@ -106,6 +106,22 @@ enum Cmd {
         #[arg(long, default_value = "https://github.com/cseas002/iliada_os/releases/download")]
         base_url: String,
     },
+    /// Package a test update (the newest work, between releases): version
+    /// <VERSION>.<stamp>, for the GitHub pre-release `testing`. Upload the
+    /// three files there, replacing the ones before.
+    Testing {
+        #[arg(long)]
+        source: PathBuf,
+        /// The time in UTC, YYYYMMDDHHMM (`date -u +%Y%m%d%H%M`).
+        #[arg(long)]
+        stamp: String,
+        #[arg(long)]
+        key: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, default_value = "https://github.com/cseas002/iliada_os/releases/download")]
+        base_url: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -445,30 +461,21 @@ async fn main() -> Result<()> {
             }
         }
         Cmd::Release { source, version, key, out, base_url } => release(&source, &version, &key, &out, &base_url)?,
+        Cmd::Testing { source, stamp, key, out, base_url } => testing(&source, &stamp, &key, &out, &base_url)?,
     }
     Ok(())
 }
 
 fn release(source: &Path, version: &str, key: &Path, out: &Path, base_url: &str) -> Result<()> {
-    let sk = iliada_catalog::parse_signing_key(&fs::read_to_string(key)?)?;
-    let committed = |file: &str| -> Result<String> {
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(source)
-            .args(["show", &format!("HEAD:{file}")])
-            .output()
-            .context("running git show")?;
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-    };
     // Systems learn their version from the source's VERSION: a release whose
     // source says otherwise would be offered again and again after installing.
-    let declared = committed("VERSION")?.trim().to_owned();
+    let declared = committed(source, "VERSION")?.trim().to_owned();
     if declared != version {
         bail!("the source's committed VERSION is {declared:?}, not {version:?}: change VERSION and commit first");
     }
     // The programs report their Cargo version (`iliada --version`).
     for manifest in ["Cargo.toml", "apps/Cargo.toml"] {
-        let text = committed(manifest)?;
+        let text = committed(source, manifest)?;
         let cargo = toml::from_str::<toml::Value>(&text)
             .ok()
             .and_then(|v| v.get("workspace")?.get("package")?.get("version")?.as_str().map(str::to_owned));
@@ -476,8 +483,38 @@ fn release(source: &Path, version: &str, key: &Path, out: &Path, base_url: &str)
             bail!("the committed {manifest} declares version {cargo:?}, not {version:?}: change it and commit first");
         }
     }
-    fs::create_dir_all(out)?;
-    // Committed files only, under one folder.
+    let tar = git_archive(source, version)?;
+    publish_files(&tar, version, key, out, &format!("{base_url}/v{version}"))
+}
+
+/// A test update: the committed source as version `<VERSION>.<stamp>`
+/// (`0.2.2.202611181530`: after its release, before the next one), with
+/// the archive's VERSION saying so. Published as the pre-release `testing`.
+fn testing(source: &Path, stamp: &str, key: &Path, out: &Path, base_url: &str) -> Result<()> {
+    if stamp.len() != 12 || !stamp.bytes().all(|b| b.is_ascii_digit()) {
+        bail!("--stamp is the time in UTC as YYYYMMDDHHMM (date -u +%Y%m%d%H%M)");
+    }
+    let base = committed(source, "VERSION")?.trim().to_owned();
+    if base.split('.').count() != 3 {
+        bail!("the committed VERSION {base:?} is not a release version (x.y.z)");
+    }
+    let version = format!("{base}.{stamp}");
+    let tar = with_version(&git_archive(source, &version)?, &format!("iliada-{version}/"), &version)?;
+    publish_files(&tar, &version, key, out, &format!("{base_url}/testing"))
+}
+
+fn committed(source: &Path, file: &str) -> Result<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(source)
+        .args(["show", &format!("HEAD:{file}")])
+        .output()
+        .context("running git show")?;
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Committed files only, under one folder.
+fn git_archive(source: &Path, version: &str) -> Result<Vec<u8>> {
     let tar = std::process::Command::new("git")
         .arg("-C")
         .arg(source)
@@ -487,13 +524,54 @@ fn release(source: &Path, version: &str, key: &Path, out: &Path, base_url: &str)
     if !tar.status.success() {
         bail!("git archive: {}", String::from_utf8_lossy(&tar.stderr));
     }
+    Ok(tar.stdout)
+}
+
+/// The same archive with `<prefix>VERSION` saying `version`.
+fn with_version(tar_bytes: &[u8], prefix: &str, version: &str) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let mut out = tar::Builder::new(Vec::new());
+    let mut found = false;
+    for entry in tar::Archive::new(tar_bytes).entries()? {
+        let mut entry = entry?;
+        let kind = entry.header().entry_type();
+        if kind == tar::EntryType::XGlobalHeader {
+            continue; // git's note of the commit
+        }
+        let path = entry.path()?.into_owned();
+        let mut header = entry.header().clone();
+        if kind.is_symlink() {
+            let target = entry.link_name()?.context("a link without a target")?.into_owned();
+            out.append_link(&mut header, &path, &target)?;
+            continue;
+        }
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data)?;
+        if path == Path::new(prefix).join("VERSION") {
+            data = format!("{version}\n").into_bytes();
+            found = true;
+        }
+        header.set_size(data.len() as u64);
+        out.append_data(&mut header, &path, data.as_slice())?;
+    }
+    if !found {
+        bail!("the source has no VERSION file");
+    }
+    Ok(out.into_inner()?)
+}
+
+/// Write iliada-<version>-source.tar.zst and the signed release.json naming
+/// it at `<dir_url>/<name>`.
+fn publish_files(tar: &[u8], version: &str, key: &Path, out: &Path, dir_url: &str) -> Result<()> {
+    let sk = iliada_catalog::parse_signing_key(&fs::read_to_string(key)?)?;
+    fs::create_dir_all(out)?;
     let name = format!("iliada-{version}-source.tar.zst");
-    let archive = zstd::encode_all(tar.stdout.as_slice(), 19)?;
+    let archive = zstd::encode_all(tar, 19)?;
     fs::write(out.join(&name), &archive)?;
     let manifest = iliada_catalog::Release {
         kind: iliada_catalog::RELEASE_KIND.into(),
         version: version.into(),
-        source: format!("{base_url}/v{version}/{name}"),
+        source: format!("{dir_url}/{name}"),
         sha256: hex::encode(Sha256::digest(&archive)),
         size: archive.len() as u64,
     };
@@ -509,6 +587,50 @@ fn release(source: &Path, version: &str, key: &Path, out: &Path, base_url: &str)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test update's archive says its own version, and keeps long paths
+    /// and links.
+    #[test]
+    fn test_update_archive_says_its_version() {
+        use std::io::Read;
+        let t = tempfile::tempdir().unwrap();
+        let repo = t.path();
+        let long = format!("{}/file.txt", "deep".repeat(30));
+        fs::create_dir_all(repo.join(&long).parent().unwrap()).unwrap();
+        fs::write(repo.join(&long), "x").unwrap();
+        fs::write(repo.join("VERSION"), "0.2.2\n").unwrap();
+        std::os::unix::fs::symlink("VERSION", repo.join("link")).unwrap();
+        let git = |a: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .arg("-C")
+                .arg(repo)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(a)
+                .status()
+                .unwrap();
+            assert!(ok.success());
+        };
+        git(&["init", "-q"]);
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "x"]);
+        let v = "0.2.2.202611181530";
+        let tar = with_version(&git_archive(repo, v).unwrap(), &format!("iliada-{v}/"), v).unwrap();
+        let mut seen = std::collections::BTreeMap::new();
+        for e in tar::Archive::new(tar.as_slice()).entries().unwrap() {
+            let mut e = e.unwrap();
+            let path = e.path().unwrap().to_string_lossy().into_owned();
+            let mut s = String::new();
+            if e.header().entry_type().is_symlink() {
+                s = e.link_name().unwrap().unwrap().to_string_lossy().into_owned();
+            } else {
+                e.read_to_string(&mut s).unwrap();
+            }
+            seen.insert(path, s);
+        }
+        assert_eq!(seen[&format!("iliada-{v}/VERSION")], format!("{v}\n"));
+        assert_eq!(seen[&format!("iliada-{v}/{long}")], "x");
+        assert_eq!(seen[&format!("iliada-{v}/link")], "VERSION");
+    }
 
     #[test]
     fn recipe_can_drop_a_guessed_permission() {

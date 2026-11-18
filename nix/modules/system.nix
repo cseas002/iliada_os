@@ -38,6 +38,15 @@ in
       default = "https://github.com/cseas002/iliada_os/releases/latest/download/release.json";
       description = "The signed manifest of the newest Iliada release.";
     };
+    testingUpdateUrl = lib.mkOption {
+      type = lib.types.str;
+      default = "https://github.com/cseas002/iliada_os/releases/download/testing/release.json";
+      description = 
+        The signed manifest of the newest test update (the newest work,
+        between releases). Used when Settings → Updates → Test updates is on
+        (`[updates] testing = true` in settings.toml).
+      ;
+    };
     firstBoot = {
       enable = lib.mkEnableOption "creating /etc/iliada on first boot (ready-to-run images)";
       user = lib.mkOption {
@@ -84,6 +93,7 @@ in
       environment = {
         ILIADA_VERSION = config.iliada.version;
         ILIADA_UPDATE_URL = cfg.updateUrl;
+        ILIADA_TESTING_UPDATE_URL = cfg.testingUpdateUrl;
       } // lib.optionalAttrs (cfg.githubClientId != null) { ILIADA_GITHUB_CLIENT_ID = cfg.githubClientId; };
       # A switch must not restart the service that is running the switch; it
       # restarts itself once idle when its binary has changed.

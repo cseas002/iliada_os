@@ -13,6 +13,7 @@ use iliada_settings::account::{self, Account};
 use iliada_settings::{Progress, ago, open_url, run};
 use iliada_system::client;
 use iliada_system::protocol::{AssistantMode, AssistantSettings, Backup, Event, Provider, Request, Status, model_name};
+use iliada_system::update::describe;
 
 /// Models offered in Settings (the first is the default). Claude models use
 /// an Anthropic key; "vendor/model" ones an OpenRouter key.
@@ -142,6 +143,7 @@ enum Confirm {
     AccountRestore(String),
     AccountSignOut,
     RemoveKey(Provider),
+    TestingUpdates,
 }
 
 // Messages are moved around once each; boxing the large one buys nothing.
@@ -233,12 +235,19 @@ fn success(request: &Request, result: &serde_json::Value) -> Option<String> {
         Request::UpdateSystem => match result["updated"].as_bool() {
             Some(true) => format!(
                 "Iliada {} is installed. Restart the computer to finish.",
-                result["version"].as_str().unwrap_or("")
+                describe(result["version"].as_str().unwrap_or(""))
             ),
             _ => "Iliada is up to date.".into(),
         },
+        Request::SetTestingUpdates { on } if changed => match (on, result["newer"].as_bool()) {
+            (true, Some(true)) => "This computer now gets test updates. One is ready: choose Update now.".into(),
+            (true, _) => "This computer now gets test updates.".into(),
+            (false, _) => "This computer now gets only releases. It keeps the test update it has until the next \
+                           release."
+                .into(),
+        },
         Request::CheckSystemUpdate => match result["newer"].as_bool() {
-            Some(true) => format!("Iliada {} is available.", result["latest"].as_str().unwrap_or("")),
+            Some(true) => format!("Iliada {} is available.", describe(result["latest"].as_str().unwrap_or(""))),
             _ => "Iliada is up to date.".into(),
         },
         Request::BackupSignIn => format!("Signed in as {}.", result["account"].as_str().unwrap_or("")),
@@ -312,7 +321,7 @@ impl App {
         let u = &s.system_update;
         let newer = u.latest.as_ref().filter(|l| iliada_system::update::newer(l, &s.version));
         let state = match (newer, u.last_check, &u.last_error) {
-            (Some(l), _, _) => format!("Iliada {l} is available."),
+            (Some(l), _, _) => format!("Iliada {} is available.", describe(l)),
             (None, _, Some(e)) => format!("Could not check for updates: {e}"),
             (None, Some(t), None) => format!("Up to date (checked {}).", ago(t)),
             (None, None, None) => "Iliada looks for updates every day.".into(),
@@ -325,7 +334,24 @@ impl App {
         };
         let system = settings::section()
             .title("Iliada")
-            .add(settings::item::builder(format!("Iliada {}", s.version)).description(state).control(action));
+            .add(settings::item::builder(format!("Iliada {}", describe(&s.version))).description(state).control(action))
+            .add(
+                settings::item::builder("Test updates")
+                    .description(
+                        "Get Iliada's newest work before it is released. Fixes arrive sooner, and so do new \
+                         problems.",
+                    )
+                    .toggler_maybe(
+                        u.testing,
+                        ok.then_some(|on| {
+                            if on {
+                                Message::Ask(Confirm::TestingUpdates)
+                            } else {
+                                Message::Run(Request::SetTestingUpdates { on: false })
+                            }
+                        }),
+                    ),
+            );
         let apps = settings::section().title("Apps").add(
             settings::item::builder("App updates")
                 .description("Apps from the Store update automatically, every few hours.")
@@ -967,6 +993,14 @@ impl cosmic::Application for App {
                     .to_owned(),
                 widget::button::destructive("Sign out"),
             ),
+            Confirm::TestingUpdates => (
+                "Get test updates?",
+                "This computer gets Iliada's newest work as soon as it is ready, before it is released to \
+                 everyone: fixes arrive sooner, and so do new problems. If an update causes trouble, restart \
+                 and choose the previous version in the start-up menu."
+                    .to_owned(),
+                widget::button::suggested("Get test updates"),
+            ),
             Confirm::SignOut => (
                 "Sign out of GitHub?",
                 "Backups stop. Your backups on GitHub are kept.".to_owned(),
@@ -1178,6 +1212,7 @@ impl cosmic::Application for App {
                 return match self.confirm.take() {
                     Some(Confirm::Restore(repo)) => self.start(Request::Restore { repo }),
                     Some(Confirm::SignOut) => self.start(Request::BackupSignOut),
+                    Some(Confirm::TestingUpdates) => self.start(Request::SetTestingUpdates { on: true }),
                     Some(Confirm::AccountRestore(_)) => self.account.update(account::Msg::Restore).map(account_action),
                     Some(Confirm::AccountSignOut) => self.account.update(account::Msg::SignOut).map(account_action),
                     Some(Confirm::RemoveKey(p)) => {
