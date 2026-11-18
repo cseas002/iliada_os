@@ -41,11 +41,11 @@ in
     testingUpdateUrl = lib.mkOption {
       type = lib.types.str;
       default = "https://github.com/cseas002/iliada_os/releases/download/testing/release.json";
-      description = 
+      description = ''
         The signed manifest of the newest test update (the newest work,
         between releases). Used when Settings → Updates → Test updates is on
         (`[updates] testing = true` in settings.toml).
-      ;
+      '';
     };
     firstBoot = {
       enable = lib.mkEnableOption "creating /etc/iliada on first boot (ready-to-run images)";
