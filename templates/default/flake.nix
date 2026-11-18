@@ -3,7 +3,7 @@
 {
   description = "My Iliada system";
 
-  inputs.iliada.url = "github:cseas002/iliada_os";
+  inputs.iliada.url = "github:iliada-os/iliada";
 
   outputs = { iliada, ... }: {
     nixosConfigurations.iliada = iliada.lib.iliadaSystem {

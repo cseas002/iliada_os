@@ -94,6 +94,6 @@ about the person).
   one).
 * Whether a hosted account is free, and its storage limit (settings are
   tiny; files are where cost grows).
-* The server is public: [iliada_cloud](https://github.com/cseas002/iliada_cloud)
+* The server is public: [iliada-os/cloud](https://github.com/iliada-os/cloud)
   (Rust: axum, webauthn-rs, SQLite; the website is plain HTML with one small
   script for passkeys).

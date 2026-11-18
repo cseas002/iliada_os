@@ -11,8 +11,8 @@ For everyday use (installing apps, Python, services; updates; backups), see
 A disk image that boots straight to the desktop: `iliada.qcow2`.
 
 ```sh
-nix build github:cseas002/iliada_os#packages.aarch64-linux.utm-image   # Apple Silicon (UTM)
-nix build github:cseas002/iliada_os#packages.x86_64-linux.utm-image    # x86 (UTM, QEMU, Proxmox)
+nix build github:iliada-os/iliada#packages.aarch64-linux.utm-image   # Apple Silicon (UTM)
+nix build github:iliada-os/iliada#packages.x86_64-linux.utm-image    # x86 (UTM, QEMU, Proxmox)
 ```
 
 **UTM on a Mac:**
@@ -46,7 +46,7 @@ internet during installation.
 
 1. **Get the ISO.** Build it on any Linux machine with Nix:
    ```sh
-   nix build github:cseas002/iliada_os#installer-iso     # or `.#installer-iso` in a checkout
+   nix build github:iliada-os/iliada#installer-iso     # or `.#installer-iso` in a checkout
    ls result/iso/                                        # iliada-…-x86_64-linux.iso
    ```
 2. **Write it to a USB stick** (replace `/dev/sdX`, which is erased):
@@ -72,7 +72,7 @@ sudo iliada-install --disk /dev/nvme0n1 --user alex --fullname "Alex" \
 
 ```sh
 sudo mkdir -p /etc/iliada && cd /etc/iliada
-sudo nix flake init -t github:cseas002/iliada_os
+sudo nix flake init -t github:iliada-os/iliada
 sudo nixos-generate-config --show-hardware-config | sudo tee hardware-configuration.nix
 sudoedit configuration.nix          # set your user, host name, time zone
 sudo nixos-rebuild switch --flake /etc/iliada#iliada

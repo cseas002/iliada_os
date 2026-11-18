@@ -16,12 +16,12 @@ use anyhow::{Context, Result, bail, ensure};
 use sha2::{Digest, Sha256};
 
 pub use iliada_catalog::{RELEASE_KIND as KIND, Release};
-pub const DEFAULT_URL: &str = "https://github.com/cseas002/iliada_os/releases/latest/download/release.json";
+pub const DEFAULT_URL: &str = "https://github.com/iliada-os/iliada/releases/latest/download/release.json";
 /// Test updates: the newest work, published between releases as the GitHub
 /// pre-release `testing` (its files are replaced each time). Versions are
 /// the last release plus the time it was made (`0.2.2.202611181530`), so
 /// the next release is newer than every test update before it.
-pub const TESTING_URL: &str = "https://github.com/cseas002/iliada_os/releases/download/testing/release.json";
+pub const TESTING_URL: &str = "https://github.com/iliada-os/iliada/releases/download/testing/release.json";
 
 /// A version as people read it: "0.2.3", or for a test update
 /// "0.2.2, test update of 18 Nov 2026 15:30".

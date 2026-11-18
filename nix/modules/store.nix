@@ -15,7 +15,7 @@ in
     };
     catalog = lib.mkOption {
       type = lib.types.str;
-      default = "https://github.com/cseas002/iliada_apps/releases/download/catalog/catalog.json";
+      default = "https://github.com/iliada-os/apps/releases/download/catalog/catalog.json";
       description = "The signed app catalog (its signature must match the key built into Iliada).";
     };
     updateInterval = lib.mkOption {

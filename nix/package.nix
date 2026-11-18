@@ -27,7 +27,7 @@ rustPlatform.buildRustPackage {
   # Only the default members (crates/*) are built; xtask is dev tooling.
   meta = {
     description = "Iliada system tools: the system service, Store, broker, sandbox and the iliada command";
-    homepage = "https://github.com/cseas002/iliada_os";
+    homepage = "https://iliada-os.com";
     license = with lib.licenses; [ mit asl20 ];
     platforms = lib.platforms.unix;
     mainProgram = "iliada-broker";

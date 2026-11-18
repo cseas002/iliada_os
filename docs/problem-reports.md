@@ -32,7 +32,7 @@ passwords, assistant conversations or app data.
    in or not. Rate-limited per computer.
 2. The server groups reports that look the same (same app and error, same
    hardware problem) so one problem is one issue, with a count.
-3. A new group becomes a **GitHub issue** in cseas002/iliada_os (labels
+3. A new group becomes a **GitHub issue** in iliada-os/iliada (labels
    `report`, `hardware`/`app`/`update`), through a GitHub App that can only
    create and comment on issues. Later reports of the same problem add a
    comment ("+3 computers, HP EliteDesk 800 G2") instead of new issues.

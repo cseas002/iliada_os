@@ -14,7 +14,7 @@ in
     default = null;
     example = "https://account.example.org";
     description = ''
-      The Iliada account server (github.com/cseas002/iliada_cloud). null
+      The Iliada account server (github.com/iliada-os/cloud). null
       leaves the account out of Settings until there is one; `iliada account
       sign-in --server …` still works.
     '';

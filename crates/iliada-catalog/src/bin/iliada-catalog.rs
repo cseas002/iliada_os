@@ -21,7 +21,7 @@ use iliada_ingest::{IngestConfig, Ingestor, Source};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-const DEFAULT_BASE: &str = "https://github.com/cseas002/iliada_apps/releases/download";
+const DEFAULT_BASE: &str = "https://github.com/iliada-os/apps/releases/download";
 
 #[derive(Parser)]
 #[command(name = "iliada-catalog", about = "Build the Iliada app catalog")]
@@ -103,7 +103,7 @@ enum Cmd {
         #[arg(long)]
         out: PathBuf,
         /// Where the source archive will be downloadable from.
-        #[arg(long, default_value = "https://github.com/cseas002/iliada_os/releases/download")]
+        #[arg(long, default_value = "https://github.com/iliada-os/iliada/releases/download")]
         base_url: String,
     },
     /// Package a test update (the newest work, between releases): version
@@ -119,7 +119,7 @@ enum Cmd {
         key: PathBuf,
         #[arg(long)]
         out: PathBuf,
-        #[arg(long, default_value = "https://github.com/cseas002/iliada_os/releases/download")]
+        #[arg(long, default_value = "https://github.com/iliada-os/iliada/releases/download")]
         base_url: String,
     },
 }

@@ -22,8 +22,8 @@ in
     LOGO = "iliada";
     VERSION = config.iliada.version;
     PRETTY_NAME = "Iliada ${config.iliada.version}";
-    HOME_URL = "https://github.com/cseas002/iliada_os";
-    BUG_REPORT_URL = "https://github.com/cseas002/iliada_os/issues";
+    HOME_URL = "https://iliada-os.com";
+    BUG_REPORT_URL = "https://github.com/iliada-os/iliada/issues";
   };
   environment.systemPackages = [ branding pkgs.fastfetch neofetch ];
   environment.etc."xdg/fastfetch/config.jsonc".source = "${branding}/share/iliada/fastfetch.jsonc";

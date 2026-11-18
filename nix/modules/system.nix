@@ -35,12 +35,12 @@ in
     };
     updateUrl = lib.mkOption {
       type = lib.types.str;
-      default = "https://github.com/cseas002/iliada_os/releases/latest/download/release.json";
+      default = "https://github.com/iliada-os/iliada/releases/latest/download/release.json";
       description = "The signed manifest of the newest Iliada release.";
     };
     testingUpdateUrl = lib.mkOption {
       type = lib.types.str;
-      default = "https://github.com/cseas002/iliada_os/releases/download/testing/release.json";
+      default = "https://github.com/iliada-os/iliada/releases/download/testing/release.json";
       description = ''
         The signed manifest of the newest test update (the newest work,
         between releases). Used when Settings → Updates → Test updates is on

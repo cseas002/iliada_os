@@ -213,7 +213,7 @@ impl Api {
                     .post(&self.url)
                     .bearer_auth(&self.key)
                     .header("X-Title", "Iliada")
-                    .header("HTTP-Referer", "https://github.com/cseas002/iliada_os");
+                    .header("HTTP-Referer", "https://iliada-os.com");
                 (body, req)
             }
         };

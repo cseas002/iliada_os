@@ -9,7 +9,7 @@ default-members = ["crates/*"]
 version = "0.2.3"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/cseas002/iliada_os"
+repository = "https://github.com/iliada-os/iliada"
 rust-version = "1.89"
 
 [workspace.dependencies]

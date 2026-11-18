@@ -33,7 +33,7 @@
       # For your own system flake: iliada.lib.iliadaSystem { system; modules; }
       lib = { inherit iliadaSystem; };
 
-      # `nix flake init -t github:cseas002/iliada_os` -> flake.nix, configuration.nix, apps.toml
+      # `nix flake init -t github:iliada-os/iliada` -> flake.nix, configuration.nix, apps.toml
       templates.default = {
         path = ./templates/default;
         description = "An Iliada system configuration";

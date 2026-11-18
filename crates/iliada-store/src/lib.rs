@@ -26,7 +26,7 @@ use iliada_catalog::{AppEntry, Catalog, VerifyingKey};
 use iliada_ingest::extract::{ExtractLimits, extract_tar_stream};
 use sha2::{Digest, Sha256};
 
-pub const DEFAULT_CATALOG: &str = "https://github.com/cseas002/iliada_apps/releases/download/catalog/catalog.json";
+pub const DEFAULT_CATALOG: &str = "https://github.com/iliada-os/apps/releases/download/catalog/catalog.json";
 /// Written by the `iliada.store` NixOS module.
 pub const SYSTEM_CONFIG: &str = "/etc/iliada/store.json";
 /// The Iliada catalog signing key (public half).
