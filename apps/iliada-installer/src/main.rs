@@ -17,7 +17,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 const MIN_DISK: u64 = 20_000_000_000;
 
 fn main() -> cosmic::iced::Result {
-    let settings = Settings::default().size(Size::new(760.0, 600.0));
+    let settings = Settings::default().size(Size::new(780.0, 720.0));
     cosmic::app::run::<App>(settings, ())
 }
 
@@ -387,8 +387,18 @@ impl App {
         for a in actions {
             row = row.push(a);
         }
-        col = col.push(row);
-        widget::container(col).center(Length::Fill).padding(spacing.space_l).into()
+        // The page scrolls when it doesn't fit; the buttons stay below it at
+        // their normal size.
+        let body = widget::container(widget::scrollable(widget::container(col).center_x(Length::Fill)))
+            .center_y(Length::Fill)
+            .width(Length::Fill);
+        let bar = widget::container(widget::column::with_capacity(1).push(row).max_width(600)).center_x(Length::Fill);
+        widget::column::with_capacity(2)
+            .push(body)
+            .push(bar)
+            .spacing(spacing.space_m)
+            .padding(spacing.space_l)
+            .into()
     }
 }
 
@@ -605,7 +615,7 @@ impl cosmic::Application for App {
                                     .width(Length::Fill),
                             );
                         }
-                        widget::scrollable(col).height(Length::Shrink).into()
+                        col.into()
                     }
                 };
                 self.page(
@@ -691,9 +701,7 @@ impl cosmic::Application for App {
                     "About you",
                     "Your account is an administrator: it can install apps and change settings.",
                     vec![
-                        widget::scrollable(widget::column::with_children(content).spacing(spacing.space_s))
-                            .height(Length::Fixed(330.0))
-                            .into(),
+                        widget::column::with_children(content).spacing(spacing.space_s).into(),
                     ],
                     vec![
                         widget::button::standard("Back").on_press(Message::Go(Step::Disk)),
