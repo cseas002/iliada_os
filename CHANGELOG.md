@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.2.3 (2026-11-18)
+
+- **Updates download instead of compiling**: Iliada's own programs come
+  ready-made from cache.iliada-os.com (signed), so an update takes minutes
+  and works on computers with little memory.
 - **"Iliada 0.2.3 is available"**: a notice after start-up when an update is
   ready (once per version); clicking it opens Iliada Settings → Updates.
   Iliada now looks for updates 2 minutes after start-up and every 6 hours
