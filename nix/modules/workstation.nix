@@ -36,5 +36,10 @@ in
     hardware.cpu.amd.updateMicrocode = lib.mkDefault config.hardware.enableRedistributableFirmware;
     zramSwap.enable = lib.mkDefault true;
     nix.settings.experimental-features = [ "nix-command" "flakes" ];
+    # Iliada's own programs, built once for every computer (Cloudflare R2;
+    # scripts/push-cache.sh): updates download instead of compiling here.
+    # Only what this key signed is accepted.
+    nix.settings.substituters = [ "https://cache.iliada-os.com" ];
+    nix.settings.trusted-public-keys = [ "cache.iliada-os.com-1:m3Nzs56JqFzorWcJP9N49LnaeHNyzdodpQE26xtwQXk=" ];
   };
 }
