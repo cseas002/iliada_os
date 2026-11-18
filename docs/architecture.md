@@ -302,8 +302,11 @@ then continues the backup's.
    ([self-hosted-sync.md](self-hosted-sync.md), a proposal).
 10. The Iliada account: sign up with a passkey, Google or Apple; settings,
     passwords (Vaultwarden) and later files, encrypted on the computer
-    ([account.md](account.md); server and computer side work in the dev VM,
-    hosting not decided).
+    ([account.md](account.md); server and computer side work in the dev VM;
+    domain iliada-os.com bought 2026-11-18, hosting not decided).
+11. Problem reports sent to Iliada, opt-in and shown first, anonymous unless
+    the person adds a way to reach them; similar reports become one GitHub
+    issue ([problem-reports.md](problem-reports.md), design only).
 
 ## 10. The assistant
 
