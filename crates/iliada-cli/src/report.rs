@@ -132,6 +132,10 @@ async fn collect() -> String {
         .collect();
     block(&mut r, "Input devices", &inputs.join("\n"));
 
+    section(&mut r, "Disks");
+    cmd(&mut r, "Disks and partitions", "lsblk", &["-o", "NAME,SIZE,TYPE,FSTYPE,LABEL,PARTLABEL,MOUNTPOINTS"]).await;
+    cmd(&mut r, "Space", "df", &["-h", "-x", "tmpfs", "-x", "devtmpfs", "-x", "efivarfs", "-x", "squashfs"]).await;
+
     section(&mut r, "Devices");
     cmd(&mut r, "PCI (with the driver in use)", "lspci", &["-nnk"]).await;
     cmd(&mut r, "USB", "lsusb", &[]).await;
@@ -250,14 +254,22 @@ async fn journal(r: &mut String, title: &str, args: &[&str], keep: usize) {
     let mut a = vec!["--no-pager", "-q"];
     a.extend_from_slice(args);
     let out = run("journalctl", &a).await.unwrap_or_else(|| "(the journal could not be read)".into());
-    let lines: Vec<&str> = out.lines().collect();
+    // Messages that look alarming but say nothing about this computer.
+    let lines: Vec<&str> = out.lines().filter(|l| !NOISE.iter().any(|n| l.contains(n))).collect();
     let body = if lines.len() > keep {
         format!("  ({} earlier lines left out)\n{}", lines.len() - keep, lines[lines.len() - keep..].join("\n"))
     } else {
-        out.clone()
+        lines.join("\n")
     };
     block(r, title, &body);
 }
+
+/// Journal lines left out of the report: harmless, and they hide real problems.
+const NOISE: &[&str] = &[
+    "Ignoring duplicate name",     // D-Bus: a service file listed twice
+    "[Firmware Bug]",              // the maker's firmware, not Linux
+    "ACPI Error: Aborting method", // follows an ACPI BIOS error
+];
 
 fn uptime(secs: &str) -> String {
     let s = secs.parse::<f64>().unwrap_or(0.0) as u64;
@@ -447,9 +459,16 @@ mod tests {
     #[tokio::test]
     async fn report_has_every_section() {
         let text = collect().await;
-        for s in
-            ["## System", "## Graphics", "## Network", "## Sound", "## Power and sleep", "## Devices", "## Problems"]
-        {
+        for s in [
+            "## System",
+            "## Graphics",
+            "## Network",
+            "## Sound",
+            "## Power and sleep",
+            "## Disks",
+            "## Devices",
+            "## Problems",
+        ] {
             assert!(text.contains(s), "missing {s}");
         }
     }

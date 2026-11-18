@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Test updates**: Settings → Updates → Test updates (or
+  `iliada system testing on`) gets Iliada's newest work as soon as it is
+  ready, between releases. Fixes arrive sooner, and so do new problems;
+  every update can still be undone from the start-up menu. Test updates
+  are named after their time ("0.2.2, test update of 18 Nov 2026 15:30
+  UTC"), and the next release replaces them.
 - **The Iliada account** (first version, for computers set up with an account
   server): Settings → Account and a new Setup Assistant step sign in with a
   code you approve on the account website. Your desktop settings, Privacy

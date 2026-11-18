@@ -12,6 +12,7 @@ let
       dosfstools
       e2fsprogs
       gnused
+      gnugrep
       nixos-install-tools
       config.nix.package
       git
