@@ -248,6 +248,9 @@ impl Ingestor {
         if !report.skipped.is_empty() {
             tracing::warn!(skipped = ?report.skipped, "special files were not extracted");
         }
+        for dropped in drop_qt_shims(&layout.fhs_root())? {
+            tracing::info!(file = %dropped.display(), "left out a Qt add-on (the GTK look is used)");
+        }
         let package = control.package().context("control file has no Package field")?.to_owned();
         let version = control.version().context("control file has no Version field")?.to_owned();
         // The app's own version: Debian's, plus Iliada's build number when the
@@ -1130,5 +1133,47 @@ mod write_tests {
         std::os::unix::fs::symlink(outside.path(), root.path().join("out")).unwrap();
         assert!(write_within(root.path(), "out/x", "x").is_err());
         assert!(!outside.path().join("x").exists());
+    }
+}
+
+/// Chrome-family browsers (Google Chrome, Edge, Brave, Vivaldi) ship Qt
+/// add-ons for their window look. Qt can't start in the sandbox (it has no
+/// Wayland plugin there) and aborts, taking the browser with it; without the
+/// add-ons the browser uses its GTK look, as on GNOME.
+fn drop_qt_shims(root: &Path) -> Result<Vec<PathBuf>> {
+    const SHIMS: &[&str] = &["libqt5_shim.so", "libqt6_shim.so"];
+    let mut dropped = Vec::new();
+    let mut dirs = vec![root.to_owned()];
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for e in entries.flatten() {
+            let (path, kind) = (e.path(), e.file_type()?);
+            if kind.is_dir() {
+                dirs.push(path);
+            } else if SHIMS.iter().any(|s| e.file_name() == *s) {
+                fs::remove_file(&path)?;
+                dropped.push(path);
+            }
+        }
+    }
+    Ok(dropped)
+}
+
+#[cfg(test)]
+mod qt_shim_tests {
+    use super::*;
+
+    #[test]
+    fn chrome_qt_addons_are_left_out() {
+        let t = tempfile::tempdir().unwrap();
+        let chrome = t.path().join("opt/google/chrome");
+        fs::create_dir_all(&chrome).unwrap();
+        for f in ["chrome", "libqt5_shim.so", "libqt6_shim.so", "libvulkan.so.1"] {
+            fs::write(chrome.join(f), "x").unwrap();
+        }
+        let dropped = drop_qt_shims(t.path()).unwrap();
+        assert_eq!(dropped.len(), 2);
+        assert!(chrome.join("chrome").exists() && chrome.join("libvulkan.so.1").exists());
+        assert!(!chrome.join("libqt5_shim.so").exists());
     }
 }

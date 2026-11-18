@@ -94,9 +94,57 @@ pub fn request(app_list: &Path, package: &str) -> Result<bool> {
     })
 }
 
+/// An app Iliada builds on this computer from its maker's own download,
+/// because its licence doesn't let the Store hand out copies. The app list
+/// keeps it updated from the same address.
+#[derive(Debug)]
+pub struct FromMaker {
+    pub name: &'static str,
+    /// What people type for it.
+    pub names: &'static [&'static str],
+    pub url: &'static str,
+}
+
+pub const FROM_MAKER: &[FromMaker] = &[FromMaker {
+    name: "Google Chrome",
+    names: &["chrome", "google-chrome", "google chrome", "google-chrome-stable"],
+    url: "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb",
+}];
+
+pub fn from_maker(typed: &str) -> Option<&'static FromMaker> {
+    let t = typed.trim().to_lowercase();
+    FROM_MAKER.iter().find(|a| a.names.contains(&t.as_str()) || a.name.to_lowercase() == t)
+}
+
+/// Asks the translator to build an app from its maker's download (`url =`
+/// in the app list). `false`: it was asked for already.
+pub fn request_url(app_list: &Path, url: &str) -> Result<bool> {
+    if !url.starts_with("https://") {
+        bail!("{url:?} is not an https address");
+    }
+    iliada_applist::edit(app_list, |aot| {
+        if aot.iter().any(|t| t.get("url").and_then(|v| v.as_str()) == Some(url)) {
+            return Ok(false);
+        }
+        let mut t = iliada_applist::Table::new();
+        t["url"] = value(url);
+        aot.push(t);
+        Ok(true)
+    })
+}
+
 /// Waits until `package` is built (or fails), reporting each new state.
 /// Gives up after `limit`.
 pub async fn wait(package: &str, limit: Duration, on_state: &(dyn Fn(BuildState) + Sync)) -> Result<()> {
+    wait_key(&key(package), limit, on_state).await
+}
+
+/// The same for an app built from its maker's download.
+pub async fn wait_url(url: &str, limit: Duration, on_state: &(dyn Fn(BuildState) + Sync)) -> Result<()> {
+    wait_key(url, limit, on_state).await
+}
+
+async fn wait_key(key: &str, limit: Duration, on_state: &(dyn Fn(BuildState) + Sync)) -> Result<()> {
     let start = std::time::Instant::now();
     let mut last = None;
     // A status older than the request belongs to an earlier try.
@@ -106,7 +154,8 @@ pub async fn wait(package: &str, limit: Duration, on_state: &(dyn Fn(BuildState)
         .unwrap_or(0)
         .saturating_sub(5);
     loop {
-        if let Some(s) = status(package).filter(|s| s.time >= asked) {
+        let now = iliada_ingest::serve::read_status(&cache_dir()).remove(key);
+        if let Some(s) = now.filter(|s| s.time >= asked) {
             if last != Some(s.state) {
                 on_state(s.state);
                 last = Some(s.state);

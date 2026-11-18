@@ -469,7 +469,13 @@ fn names(items: &[&iliada_system::software::Item]) -> String {
 async fn install(names_typed: Vec<String>, build: bool, v: bool) -> Result<()> {
     use iliada_system::software::{Kind, lookup};
     let (mut software, mut services, mut apps) = (Vec::new(), Vec::new(), Vec::new());
+    // Built here from the maker's own download (Google Chrome).
+    let mut makers = Vec::new();
     for n in &names_typed {
+        if let Some(m) = translate::from_maker(n) {
+            makers.push(m);
+            continue;
+        }
         match lookup(n) {
             Some(i) if i.kind == Kind::Software => software.push(i),
             Some(i) => services.push(i),
@@ -527,7 +533,31 @@ async fn install(names_typed: Vec<String>, build: bool, v: bool) -> Result<()> {
     for app in &to_build {
         build_from_debian(app, build).await?;
     }
+    for m in makers {
+        build_from_maker(m).await?;
+    }
     Ok(())
+}
+
+/// An app whose licence keeps it out of the Store: this computer downloads
+/// it from its maker and makes it into a sandboxed app (and keeps it updated).
+async fn build_from_maker(m: &translate::FromMaker) -> Result<()> {
+    let list = StoreConfig::from_env()?.app_list.unwrap_or_else(|| "/etc/iliada/apps.toml".into());
+    translate::request_url(&list, m.url)?;
+    let name = m.name;
+    let r = translate::wait_url(m.url, std::time::Duration::from_secs(30 * 60), &move |state| match state {
+        translate::BuildState::Queued => eprintln!("Waiting to download {name}…"),
+        translate::BuildState::Building => eprintln!("Downloading {name} from its maker and setting it up…"),
+        _ => {}
+    })
+    .await;
+    match r {
+        Ok(()) => {
+            eprintln!("{name} is in Applications.");
+            Ok(())
+        }
+        Err(e) => anyhow::bail!("{name} could not be installed: {e:#}"),
+    }
 }
 
 /// An app that isn't in the Store: built from Debian's package on this
