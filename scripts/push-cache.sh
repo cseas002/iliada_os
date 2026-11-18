@@ -31,8 +31,8 @@ echo "Iliada $(cat "$src/VERSION")"
 
 # An installed system, set up as the installer does (a typical PC).
 root="$work/root"
-mkdir -p "$root/etc/iliada"
-cat > "$root/etc/iliada/hardware-configuration.nix" <<'EOF'
+mkdir -p "$root/etc/nixos"
+cat > "$root/etc/nixos/hardware-configuration.nix" <<'EOF'
 { lib, ... }: {
   fileSystems."/" = { device = "/dev/disk/by-label/iliada"; fsType = "ext4"; };
   fileSystems."/boot" = { device = "/dev/disk/by-label/ILIADA-ESP"; fsType = "vfat"; };
@@ -56,7 +56,23 @@ nix path-info -r "$system" | xargs -P 16 -n 1 sh -c '
 ' > "$missing"
 echo "$(wc -l < "$missing") paths to upload"
 
-store="s3://iliada-cache?endpoint=$R2_ACCOUNT_ID.r2.cloudflarestorage.com&region=auto&scheme=https&compression=zstd&secret-key=$key"
+# Packed and signed locally first (`nix copy` brings everything a path
+# depends on), then only the missing paths go up: their .narinfo and NAR.
+# What they depend on comes from cache.nixos.org, as it does for everyone.
+local_cache="$work/cache"
 # shellcheck disable=SC2046
-nix copy --to "$store" $(cat "$missing")
+nix copy --to "file://$local_cache?compression=zstd&secret-key=$key" $(cat "$missing")
+aws=$(nix build --no-link --print-out-paths nixpkgs#awscli2 | head -1)/bin/aws
+endpoint="https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com"
+export AWS_DEFAULT_REGION=auto
+up=0
+while read -r p; do
+  h=$(basename "$p" | cut -d- -f1)
+  nar=$(sed -n 's/^URL: //p' "$local_cache/$h.narinfo")
+  "$aws" s3 cp --quiet "$local_cache/$nar" "s3://iliada-cache/$nar" --endpoint-url "$endpoint"
+  "$aws" s3 cp --quiet "$local_cache/$h.narinfo" "s3://iliada-cache/$h.narinfo" \
+    --content-type text/x-nix-narinfo --endpoint-url "$endpoint"
+  up=$((up + $(stat -c %s "$local_cache/$nar")))
+done < "$missing"
+echo "uploaded $(wc -l < "$missing") paths, $((up / 1048576)) MB"
 echo "cache.iliada-os.com has Iliada $(cat "$src/VERSION")"
