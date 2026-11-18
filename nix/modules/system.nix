@@ -85,6 +85,26 @@ in
       exec ${config.systemd.package}/bin/systemctl "$@"
     ''));
 
+    # "Iliada 0.2.3 is available" in the person's session, once per version.
+    systemd.user.services.iliada-update-notice = {
+      description = "Tell when an Iliada update is ready";
+      path = [ config.iliada.package pkgs.libnotify ];
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${config.iliada.package}/bin/iliada system notify";
+        # Iliada Settings, opened from the notice, outlives this job.
+        KillMode = "process";
+      };
+    };
+    systemd.user.timers.iliada-update-notice = {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        # After the system's own check, 2 minutes after start-up.
+        OnStartupSec = "4min";
+        OnUnitActiveSec = "1h";
+      };
+    };
+
     systemd.services.iliada-system = {
       description = "Iliada system service";
       wantedBy = [ "multi-user.target" ];

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **"Iliada 0.2.3 is available"**: a notice after start-up when an update is
+  ready (once per version); clicking it opens Iliada Settings → Updates.
+  Iliada now looks for updates 2 minutes after start-up and every 6 hours
+  (it was an hour after start-up, then daily, so a computer switched off
+  sooner never looked).
+- The installer: install **next to another system** (ChromeOS Flex,
+  Windows…) in its free space, the time zone found from the internet
+  connection and chosen from region and city lists, and a page that scrolls
+  instead of cutting off the password fields. `iliada report` lists the
+  disks.
+- **Google Chrome**: `iliada install chrome` downloads it from Google and
+  makes it into a sandboxed app on the computer (Chrome's licence keeps it
+  out of the Store).
 - **Test updates**: Settings → Updates → Test updates (or
   `iliada system testing on`) gets Iliada's newest work as soon as it is
   ready, between releases. Fixes arrive sooner, and so do new problems;

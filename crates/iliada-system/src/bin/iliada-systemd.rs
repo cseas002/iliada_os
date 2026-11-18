@@ -467,8 +467,12 @@ impl Service {
         }
     }
 
-    /// Hourly: back up app changes; daily: look for Iliada updates.
+    /// Look for Iliada updates soon after start-up (desktops are often
+    /// switched off within the hour) and every 6 hours; back up app changes
+    /// hourly.
     async fn background(self: Arc<Self>) {
+        tokio::time::sleep(Duration::from_secs(2 * 60)).await;
+        let _ = self.check_update().await;
         let mut tick = 0u64;
         loop {
             tokio::time::sleep(Duration::from_secs(60 * 60)).await;
@@ -476,7 +480,7 @@ impl Service {
             if let Ok(_job) = self.job.try_lock() {
                 self.back_up_quietly().await;
             }
-            if tick % 24 == 1 {
+            if tick.is_multiple_of(6) {
                 let _ = self.check_update().await;
             }
         }

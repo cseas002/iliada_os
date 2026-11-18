@@ -20,7 +20,7 @@ mod report;
 
 use std::io::IsTerminal;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use iliada_store::{Store, StoreConfig, translate};
 use iliada_system::client;
@@ -205,6 +205,10 @@ enum SystemCmd {
     Update,
     /// Take test updates (the newest work, between releases): on or off.
     Testing { state: OnOff },
+    /// Tell the person in their session when an update is ready (once per
+    /// version; run by a user timer).
+    #[command(hide = true)]
+    Notify,
     /// Apply /etc/iliada (after editing settings.toml or configuration.nix).
     Apply,
 }
@@ -414,6 +418,7 @@ async fn main() -> Result<()> {
                 eprintln!("Iliada is up to date.");
             }
         }
+        Cmd::System { cmd: SystemCmd::Notify } => update_notice().await?,
         Cmd::System { cmd: SystemCmd::Testing { state } } => {
             let on = state == OnOff::On;
             let r = system(Request::SetTestingUpdates { on }, v).await?;
@@ -909,6 +914,51 @@ async fn backup(cmd: BackupCmd, v: bool) -> Result<()> {
             system(Request::BackupSignOut, v).await?;
             eprintln!("Signed out; backups are off.");
         }
+    }
+    Ok(())
+}
+
+/// "Iliada 0.2.3 is available", once per version, with an Update button
+/// that opens Iliada Settings (its first page is Updates).
+async fn update_notice() -> Result<()> {
+    let s = client::status().await?;
+    let Some(latest) = s.system_update.latest.clone() else { return Ok(()) };
+    if !iliada_system::update::newer(&latest, &s.version) {
+        return Ok(());
+    }
+    let state = std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".local/state")))
+        .context("no home folder")?
+        .join("iliada/update-notice");
+    if std::fs::read_to_string(&state).is_ok_and(|v| v.trim() == latest) {
+        return Ok(());
+    }
+    if let Some(dir) = state.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(&state, &latest)?;
+    let out = tokio::process::Command::new("notify-send")
+        .args([
+            "--app-name=Iliada",
+            "--icon=software-update-available",
+            "--action=update=Update",
+            // Clicking the notice itself (where buttons aren't shown).
+            "--action=default=Open Iliada Settings",
+            // It stays until dismissed: easy to miss otherwise.
+            "--expire-time=0",
+            "--wait",
+            &format!("Iliada {} is available", iliada_system::update::describe(&latest)),
+            "Update in a few clicks. Your apps and files stay as they are, and you can go back to this version.",
+        ])
+        .output()
+        .await
+        .context("showing the notification")?;
+    if matches!(String::from_utf8_lossy(&out.stdout).trim(), "update" | "default") {
+        // User services have a short PATH; the system's programs are here.
+        let settings = "/run/current-system/sw/bin/iliada-settings";
+        let settings = if std::path::Path::new(settings).exists() { settings } else { "iliada-settings" };
+        std::process::Command::new(settings).spawn().context("opening Iliada Settings")?;
     }
     Ok(())
 }
