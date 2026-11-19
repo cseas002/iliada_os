@@ -56,12 +56,13 @@ nix path-info -r "$system" | xargs -P 16 -n 1 sh -c '
 ' > "$missing"
 echo "$(wc -l < "$missing") paths to upload"
 
-# Packed and signed locally first (`nix copy` brings everything a path
-# depends on), then only the missing paths go up: their .narinfo and NAR.
+# Packed and signed locally first, only the missing paths (--no-recursive:
+# without it `nix copy` packs the whole system, 1,400 paths, for nothing),
+# then they go up: their .narinfo and NAR.
 # What they depend on comes from cache.nixos.org, as it does for everyone.
 local_cache="$work/cache"
 # shellcheck disable=SC2046
-nix copy --to "file://$local_cache?compression=zstd&secret-key=$key" $(cat "$missing")
+nix copy --no-recursive --to "file://$local_cache?compression=zstd&secret-key=$key" $(cat "$missing")
 aws=$(nix build --no-link --print-out-paths nixpkgs#awscli2 | head -1)/bin/aws
 endpoint="https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com"
 export AWS_DEFAULT_REGION=auto
