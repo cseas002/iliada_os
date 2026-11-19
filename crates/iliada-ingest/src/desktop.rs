@@ -85,7 +85,39 @@ pub fn find_icon(root: &Path, icon: &str) -> Option<PathBuf> {
             }
         }
     }
-    ["png", "svg", "xpm"].iter().map(|ext| root.join(format!("usr/share/pixmaps/{icon}.{ext}"))).find(|p| p.is_file())
+    ["png", "svg", "xpm"]
+        .iter()
+        .map(|ext| root.join(format!("usr/share/pixmaps/{icon}.{ext}")))
+        .find(|p| p.is_file())
+        .or_else(|| opt_icon(root, icon))
+}
+
+/// Vendor packages (Google Chrome, Brave, Edge…) keep their icon under /opt
+/// and install it from a script, which a translation never runs.
+fn opt_icon(root: &Path, icon: &str) -> Option<PathBuf> {
+    let wanted = [
+        format!("{icon}.png"),
+        format!("{icon}.svg"),
+        "product_logo_256.png".into(),
+        "product_logo_128.png".into(),
+        "product_logo_64.png".into(),
+        "product_logo_48.png".into(),
+    ];
+    let mut found = Vec::new();
+    collect_files(&root.join("opt"), 4, &mut found);
+    wanted.iter().find_map(|w| found.iter().find(|p| p.file_name().is_some_and(|n| n == w.as_str())).cloned())
+}
+
+fn collect_files(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let p = e.path();
+        match e.file_type() {
+            Ok(t) if t.is_dir() && depth > 0 => collect_files(&p, depth - 1, out),
+            Ok(t) if t.is_file() => out.push(p),
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]
@@ -106,5 +138,19 @@ mod tests {
         assert_eq!(d.exec.as_deref(), Some("gimp-2.10"));
         assert_eq!(d.categories, ["Graphics", "2DGraphics"]);
         assert_eq!(d.mime_types, ["image/png"]);
+    }
+
+    #[test]
+    fn finds_a_vendor_icon_under_opt() {
+        // Google Chrome: Icon=google-chrome, the logo only in /opt.
+        let root = tempfile::tempdir().unwrap();
+        let chrome = root.path().join("opt/google/chrome");
+        fs::create_dir_all(&chrome).unwrap();
+        for size in [48, 256] {
+            fs::write(chrome.join(format!("product_logo_{size}.png")), "png").unwrap();
+        }
+        assert_eq!(find_icon(root.path(), "google-chrome"), Some(chrome.join("product_logo_256.png")));
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(find_icon(empty.path(), "google-chrome"), None);
     }
 }
