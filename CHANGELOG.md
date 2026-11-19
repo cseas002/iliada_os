@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.5 (2026-11-19)
+
 - **The Iliada account is online** at account.iliada-os.com: Settings →
   Account and the Setup Assistant offer it on every Iliada. Sign in with
   an email code, then a passkey; desktop settings, Privacy answers and
