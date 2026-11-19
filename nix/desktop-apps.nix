@@ -49,11 +49,9 @@ rustPlatform.buildRustPackage {
       apps/iliada-settings/res/org.iliada.Settings.desktop \
       apps/iliada-settings/res/org.iliada.Setup.desktop \
       apps/iliada-settings/res/org.iliada.Assistant.desktop
-    # Their icons: the Store's agora and Homer's coin.
-    install -Dm644 apps/iliada-store-gui/res/org.iliada.Store.svg \
-      $out/share/icons/hicolor/scalable/apps/org.iliada.Store.svg
-    install -Dm644 apps/iliada-settings/res/org.iliada.Assistant.svg \
-      $out/share/icons/hicolor/scalable/apps/org.iliada.Assistant.svg
+    # Their icons (nix/branding/README.md): the Store's agora, Homer's coin,
+    # the Settings gear, the Setup Assistant's wreath, the installer's ship.
+    install -Dm644 -t $out/share/icons/hicolor/scalable/apps apps/*/res/org.iliada.*.svg
     # The installer's entries are only linked in on the live system.
     install -Dm644 -t $out/share/iliada/installer apps/iliada-installer/res/*.desktop
   '';

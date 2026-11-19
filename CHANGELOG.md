@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- New icons for Settings (a bronze gear with a meander), the Setup
+  Assistant (a laurel wreath around an alpha) and the installer (a Greek
+  ship), to match the Store and Homer.
+
 ## 0.2.4 (2026-11-19)
 
 - **Choose your apps** in the Setup Assistant: a browser (Firefox, Google

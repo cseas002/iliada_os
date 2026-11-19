@@ -2,5 +2,5 @@
 Type=Application
 Name=Install Iliada
 Exec=iliada-installer
-Icon=system-software-install
+Icon=org.iliada.Installer
 NoDisplay=true
