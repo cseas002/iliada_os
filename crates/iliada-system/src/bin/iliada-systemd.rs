@@ -181,6 +181,13 @@ impl Service {
         *self.busy.lock().expect("busy lock") = Some(req.activity());
         let _busy = Busy(&self.busy);
         let log = logger(tx);
+        // A power cut can leave the configuration's history unreadable,
+        // and then nothing can be applied or updated: mend it first.
+        match init::repair(&self.dir) {
+            Ok(true) => log("Repaired the configuration's history after an unexpected shutdown".into()),
+            Ok(false) => {}
+            Err(e) => eprintln!("repairing {}: {e:#}", self.dir.display()),
+        }
         match req {
             Request::AddTools { packages } => {
                 if !self.dir.join("flake.nix").exists() {

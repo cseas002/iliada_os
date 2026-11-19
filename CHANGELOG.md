@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Safe against power cuts**: the configuration's history is now written
+  to disk before a change counts as done, and if a crash still damages it,
+  Iliada mends it on its own before the next change or update. (A test
+  computer switched off right after an update could not update again.)
+
 ## 0.2.5 (2026-11-19)
 
 - **The Iliada account is online** at account.iliada-os.com: Settings →

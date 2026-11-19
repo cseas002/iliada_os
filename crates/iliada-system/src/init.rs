@@ -88,6 +88,10 @@ pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
         .arg("-C")
         .arg(dir)
         .args(["-c", "user.name=Iliada", "-c", "user.email=iliada@localhost", "-c", "commit.gpgsign=false"])
+        // Every object and ref on the disk before git says it's done: by
+        // default git leaves new objects in the cache, and a power cut
+        // after a commit left an empty object that stopped all updates.
+        .args(["-c", "core.fsync=all", "-c", "core.fsyncMethod=fsync"])
         .args(args)
         .output()
         .context("running git")?;
@@ -95,6 +99,63 @@ pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
         bail!("git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Mend the history of `dir` if a crash or power cut damaged it (empty or
+/// missing objects: then Nix can't read the configuration and nothing can
+/// be applied or updated). Goes back to the newest commit that is whole,
+/// keeping the files as they are; the next commit records them again.
+/// `Ok(true)`: something was mended.
+pub fn repair(dir: &Path) -> Result<bool> {
+    let git_dir = dir.join(".git");
+    if !git_dir.exists() || git(dir, &["fsck", "--no-progress", "--no-dangling"]).is_ok() {
+        return Ok(false);
+    }
+    // Empty object files are what an interrupted write leaves: never valid.
+    remove_empty_files(&git_dir.join("objects"));
+    let whole = |c: &str| git(dir, &["rev-list", "--objects", c]).is_ok();
+    // The branch's own log, newest last: every commit it has pointed at.
+    let log = std::fs::read_to_string(git_dir.join("logs/refs/heads/main")).unwrap_or_default();
+    let good = log.lines().rev().filter_map(|l| l.split(' ').nth(1)).find(|c| whole(c)).map(str::to_owned);
+    let _ = std::fs::remove_file(git_dir.join("index"));
+    match good {
+        Some(commit) => {
+            git(dir, &["update-ref", "refs/heads/main", &commit])?;
+            git(dir, &["symbolic-ref", "HEAD", "refs/heads/main"])?;
+            // The logs still name the lost commits, which fsck counts as damage.
+            git(dir, &["reflog", "expire", "--expire=now", "--all"])?;
+            // The index again from that commit; the files stay as they are.
+            git(dir, &["reset", "-q"])?;
+        }
+        None => {
+            // Nothing whole is left: keep the broken history aside, start anew.
+            let aside = dir.join(format!(".git-damaged-{}", now_secs()));
+            std::fs::rename(&git_dir, &aside)?;
+            git(dir, &["init", "-q", "-b", "main"])?;
+            // Kept for a person to look at, never part of the configuration.
+            std::fs::write(git_dir.join("info/exclude"), "/.git-damaged-*\n")?;
+        }
+    }
+    commit_all(dir, "Repaired after an unexpected shutdown")?;
+    Ok(true)
+}
+
+fn remove_empty_files(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let p = e.path();
+        match e.file_type() {
+            Ok(t) if t.is_dir() => remove_empty_files(&p),
+            Ok(t) if t.is_file() && e.metadata().is_ok_and(|m| m.len() == 0) => {
+                let _ = std::fs::remove_file(&p);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 /// Commit everything that changed (nothing if nothing did). A system set
@@ -329,5 +390,75 @@ mod tests {
         );
         assert!(valid_hostname("my-pc") && !valid_hostname("-x") && !valid_hostname("a b"));
         assert!(valid_timezone("America/New_York") && !valid_timezone("../etc") && !valid_timezone("a b"));
+    }
+}
+
+#[cfg(test)]
+mod repair_tests {
+    use super::*;
+
+    /// A power cut right after a commit: the commit's object file is empty.
+    #[test]
+    fn mends_a_history_a_power_cut_broke() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        std::fs::write(d.join("settings.toml"), "a = 1\n").unwrap();
+        commit_all(d, "first").unwrap();
+        std::fs::write(d.join("settings.toml"), "a = 2\n").unwrap();
+        commit_all(d, "second").unwrap();
+        assert!(!repair(d).unwrap(), "a whole history needs nothing");
+
+        let head = git(d, &["rev-parse", "HEAD"]).unwrap();
+        let obj = d.join(".git/objects").join(&head[..2]).join(head[2..].trim());
+        let mut perms = std::fs::metadata(&obj).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&obj, perms).unwrap();
+        std::fs::write(&obj, "").unwrap();
+        assert!(git(d, &["fsck", "--no-progress"]).is_err(), "the history is broken now");
+
+        assert!(repair(d).unwrap());
+        git(d, &["fsck", "--no-progress", "--no-dangling"]).unwrap();
+        // The files are as they were, and recorded again.
+        assert_eq!(std::fs::read_to_string(d.join("settings.toml")).unwrap(), "a = 2\n");
+        assert_eq!(git(d, &["show", "HEAD:settings.toml"]).unwrap(), "a = 2\n");
+        let log = git(d, &["log", "--format=%s"]).unwrap();
+        assert_eq!(log.lines().collect::<Vec<_>>(), ["Repaired after an unexpected shutdown", "first"]);
+    }
+
+    #[test]
+    fn starts_anew_when_nothing_is_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        std::fs::write(d.join("apps.toml"), "x\n").unwrap();
+        commit_all(d, "only").unwrap();
+        // Every object emptied.
+        for e in walk(&d.join(".git/objects")) {
+            let mut p = std::fs::metadata(&e).unwrap().permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            p.set_readonly(false);
+            std::fs::set_permissions(&e, p).unwrap();
+            std::fs::write(&e, "").unwrap();
+        }
+        assert!(repair(d).unwrap());
+        git(d, &["fsck", "--no-progress", "--no-dangling"]).unwrap();
+        assert_eq!(git(d, &["show", "HEAD:apps.toml"]).unwrap(), "x\n");
+        assert!(
+            std::fs::read_dir(d)
+                .unwrap()
+                .flatten()
+                .any(|e| e.file_name().to_string_lossy().starts_with(".git-damaged-"))
+        );
+        // Set aside, and never committed (backups would carry it).
+        assert!(!git(d, &["ls-files"]).unwrap().contains(".git-damaged"));
+    }
+
+    fn walk(dir: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() { out.extend(walk(&p)) } else { out.push(p) }
+        }
+        out
     }
 }
