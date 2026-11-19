@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.4 (2026-11-19)
+
 - **Choose your apps** in the Setup Assistant: a browser (Firefox, Google
   Chrome or Chromium) and everyday apps (LibreOffice, VLC, photos, PDFs…),
   with a few ticked to start. They install in the background after setup
@@ -16,6 +18,8 @@
   Power, Users and COSMIC's other pages next to Iliada's own (each opens
   right at that page). COSMIC Settings leaves Applications and the dock;
   Homer joins the dock.
+- Google Chrome (and other apps that keep their logo under /opt) shows its
+  own icon instead of a gear.
 - The project moved to the **iliada-os** organization on GitHub; updates,
   the Store catalog and links use the new addresses (the old ones redirect).
 
