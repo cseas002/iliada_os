@@ -2,7 +2,7 @@
 
 Iliada is a **developer preview**. Try it in a virtual machine (Option 0),
 or install it from a USB stick. Either way the whole system is described by
-one configuration folder, `/etc/iliada`, and changed from Iliada Settings.
+one configuration folder, `/etc/iliada`, and changed from Settings.
 For everyday use (installing apps, Python, services; updates; backups), see
 **[using.md](using.md)**.
 
@@ -104,7 +104,7 @@ sudo nixos-rebuild switch --flake /etc/iliada#iliada
 | `iliada system apply` | apply `/etc/iliada` after editing it by hand |
 | `iliada backup sign-in` · `enable <name>` · `now` · `list` · `restore <owner/iliada_name>` | GitHub backup |
 
-Everything here is also in **Iliada Settings** (Updates, Backup,
+Everything here is also in **Settings** (Updates, Backup,
 Command-line tools, Services, Privacy, About). Neither needs `sudo`: the
 Iliada system service does the work for administrators (members of
 `wheel`). Changes apply the system atomically and are committed to

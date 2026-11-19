@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **Choose your apps** in the Setup Assistant: a browser (Firefox, Google
+  Chrome or Chromium) and everyday apps (LibreOffice, VLC, photos, PDFs…),
+  with a few ticked to start. They install in the background after setup
+  and a notification says when they are ready. Skipped after a restore,
+  which brings its own apps. `iliada install --keep-going` goes on when one
+  name fails.
+- **Homer**: the assistant has a name (the poet of the Iliad, and he knows
+  it well) and an icon, a bronze coin with his profile. The Store has its
+  own icon too: a stoa of the agora.
+- **One Settings app**: "Iliada Settings" is now just **Settings**, and its
+  sidebar lists Wi-Fi, Bluetooth, Displays, Sound, Appearance, Keyboard,
+  Power, Users and COSMIC's other pages next to Iliada's own (each opens
+  right at that page). COSMIC Settings leaves Applications and the dock;
+  Homer joins the dock.
+- The project moved to the **iliada-os** organization on GitHub; updates,
+  the Store catalog and links use the new addresses (the old ones redirect).
+
 ## 0.2.3 (2026-11-18)
 
 - **Updates download instead of compiling**: Iliada's own programs come

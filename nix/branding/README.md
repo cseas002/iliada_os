@@ -13,6 +13,8 @@ the same hand-authored helmet and crest paths, so they always match.
 | `iliada-mono.svg` | Single-color mark using `currentColor`. Legible down to 16 px. |
 | `iliada-lockup.svg` | Mark plus "Iliada" wordmark, for light backgrounds. |
 | `iliada-lockup-dark.svg` | Same lockup, for dark backgrounds. |
+| `apps/iliada-store-gui/res/org.iliada.Store.svg` | The Store icon: a stoa of the agora (pediment, meander, columns, amphorae) on the navy squircle. |
+| `apps/iliada-settings/res/org.iliada.Assistant.svg` | Homer (the assistant): his bearded profile with a red fillet on a bronze coin, eye closed (Homer was blind). |
 | `logo.txt` | fastfetch ASCII art. `$1` is the crest color, `$2` the helmet color. |
 | `fastfetch.jsonc` | fastfetch config that uses `logo.txt`. |
 | `png/` | Raster exports: icon at 16 to 1024 px, mark and mono mark at 512 px, lockups at 1600 px wide. |

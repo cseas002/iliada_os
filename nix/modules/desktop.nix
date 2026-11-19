@@ -42,6 +42,8 @@ in
       source = ../../apps/iliada-settings/res/org.iliada.Setup-autostart.desktop;
     };
     environment.systemPackages = [
+      # Notifications from scripts and the Setup Assistant's background installs.
+      pkgs.libnotify
       # The Store, Iliada Settings and the Setup Assistant.
       (pkgs.callPackage ../desktop-apps.nix { })
       # Iliada's desktop defaults (users can still change them): Applications
@@ -62,14 +64,26 @@ in
             Videos,
         ]
         EOF
+        # One Settings app: Iliada Settings lists COSMIC's pages too, so COSMIC's
+        # own entry leaves Applications (it still opens from the panel).
+        apps=$out/share/applications
+        mkdir -p $apps
+        sed '/^\[Desktop Entry\]/a NoDisplay=true' \
+          ${pkgs.cosmic-settings}/share/applications/com.system76.CosmicSettings.desktop \
+          > $apps/com.system76.CosmicSettings.desktop
+        # Tools for the terminal and for Linux experts stay out of the app
+        # library (they still run from a terminal).
+        for id in htop btop nixos-manual qt5ct qt6ct; do
+          printf '[Desktop Entry]\nType=Application\nName=%s\nExec=true\nNoDisplay=true\n' $id > $apps/$id.desktop
+        done
         cat > $dock/favorites <<'EOF'
         [
             "com.system76.CosmicFiles",
             "org.iliada.Store",
+            "org.iliada.Assistant",
             "org.iliada.Settings",
             "com.system76.CosmicEdit",
             "com.system76.CosmicTerm",
-            "com.system76.CosmicSettings",
         ]
         EOF
         # Alt+Space opens the assistant's quick panel from anywhere (Super+Space stays the

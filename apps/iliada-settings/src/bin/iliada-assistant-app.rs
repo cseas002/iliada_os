@@ -1,14 +1,14 @@
-//! Assistant: ask Iliada to do things ("install Firefox and turn on SSH").
+//! Homer, the assistant: ask it to do things ("install Firefox and turn on SSH").
 //!
 //! Two faces of one program:
-//! * **The app** (`iliada-assistant-app`, "Assistant" in Applications): a
+//! * **The app** (`iliada-assistant-app`, "Homer" in Applications): a
 //!   window with your conversations in the sidebar (each one saved, and
 //!   continued where you left it) and **Activity**: everything the assistant
 //!   did, with Undo where an action can be reversed, and every change made
 //!   to this computer from anywhere.
 //! * **The quick panel** (`--panel`, Alt+Space anywhere): a large "Ask
 //!   Iliada…" field and the answer below it; Esc closes. Its conversations
-//!   are saved too, and "Open in Assistant" continues one in the app.
+//!   are saved too, and "Open in Homer" continues one in the app.
 //!
 //! In Ask mode each action appears as a card with Allow / Don't Allow; in
 //! Auto mode actions run and are listed as they happen. One window of each
@@ -422,13 +422,13 @@ impl App {
         let spacing = cosmic::theme::spacing();
         let off = matches!(&self.settings, Some(Ok(s)) if !s.enabled);
         let text = match (&self.notice, off) {
-            (_, true) => "The assistant is off.".to_owned(),
+            (_, true) => "Homer is off.".to_owned(),
             (Some(n), false) => n.clone(),
-            (None, false) => "The assistant isn't ready yet.".to_owned(),
+            (None, false) => "Homer isn't ready yet.".to_owned(),
         };
         widget::row::with_capacity(2)
             .push(widget::text::body(text))
-            .push(widget::button::suggested("Set it up in Iliada Settings").on_press(Message::OpenSettings))
+            .push(widget::button::suggested("Set it up in Settings").on_press(Message::OpenSettings))
             .spacing(spacing.space_s)
             .align_y(Alignment::Center)
             .into()
@@ -494,7 +494,7 @@ impl App {
 
     fn ask_field(&self, size: u16) -> Element<'_, Message> {
         let spacing = cosmic::theme::spacing();
-        let placeholder = if self.conversation.lines.is_empty() { "Ask Iliada…" } else { "Reply…" };
+        let placeholder = if self.conversation.lines.is_empty() { "Ask Homer…" } else { "Reply…" };
         widget::text_input(placeholder, &self.input)
             .id(self.field.clone())
             .on_input(Message::Input)
@@ -519,7 +519,7 @@ impl App {
             .spacing(spacing.space_s)
             .align_y(Alignment::Center);
         if !self.conversation.lines.is_empty() && !self.busy {
-            footer = footer.push(widget::button::text("Open in Assistant").on_press(Message::OpenInApp));
+            footer = footer.push(widget::button::text("Open in Homer").on_press(Message::OpenInApp));
         }
         footer =
             footer.push(widget::text::caption(if self.busy { "Working…" } else { "Enter to ask · Esc to close" }));
@@ -579,11 +579,10 @@ impl App {
         if let Some(n) = &self.notice {
             items.push(self.banner(n));
         }
-        let mut done = settings::section().title("What the assistant did");
+        let mut done = settings::section().title("What Homer did");
         if self.activity.is_empty() {
-            done = done.add(settings::item_row(vec![
-                widget::text::body("Nothing yet. Actions the assistant takes appear here.").into(),
-            ]));
+            done = done
+                .add(settings::item_row(vec![widget::text::body("Nothing yet. What Homer does appears here.").into()]));
         }
         for (i, a) in self.activity.iter().enumerate() {
             let outcome = match a.outcome.as_str() {
@@ -626,7 +625,7 @@ impl App {
         items.push(
             widget::column::with_capacity(2)
                 .push(widget::text::caption(
-                    "Everything that changed the system, made in Settings, the Store, the terminal or by the assistant.",
+                    "Everything that changed the system, made in Settings, the Store, the terminal or by Homer.",
                 ))
                 .push(changes)
                 .spacing(spacing.space_xxs)
@@ -682,7 +681,7 @@ impl cosmic::Application for App {
         }
         app.rebuild_nav();
         let title = match app.core.main_window_id() {
-            Some(id) => app.set_window_title("Assistant".into(), id),
+            Some(id) => app.set_window_title("Homer".into(), id),
             None => Task::none(),
         };
         let load = cosmic::task::future(async {

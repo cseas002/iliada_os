@@ -34,9 +34,9 @@ Examples:
   iliada search database          find something
   iliada remove python            remove it again
   iliada system update            update Iliada itself
-  iliada ask \"turn on dark mode\"  ask the assistant
+  iliada ask \"turn on dark mode\"  ask Homer, the assistant
 
-Everything here is also in the Store and in Iliada Settings.";
+Everything here is also in the Store and in Settings.";
 
 #[derive(Parser)]
 #[command(
@@ -67,6 +67,12 @@ enum Cmd {
         /// Build apps that aren't in the Store from Debian's package without asking.
         #[arg(long)]
         build: bool,
+        /// When one can't be installed, go on with the others (and say which failed at the end).
+        #[arg(long)]
+        keep_going: bool,
+        /// Show a notification when done (the Setup Assistant installs apps this way, in the background).
+        #[arg(long, hide = true)]
+        notify: bool,
     },
     /// Remove apps or software, or turn services off.
     Remove {
@@ -106,9 +112,9 @@ enum Cmd {
         #[command(subcommand)]
         cmd: BackupCmd,
     },
-    /// Ask the assistant to do something (no text: a conversation).
+    /// Ask Homer, the assistant, to do something (no text: a conversation).
     Ask { text: Vec<String> },
-    /// The assistant's settings.
+    /// Homer's settings (the assistant).
     Assistant {
         #[command(subcommand)]
         cmd: AssistantCmd,
@@ -141,7 +147,7 @@ enum AssistantCmd {
     },
     /// Set your API key (read from the terminal, not the command line).
     Key,
-    /// Your email account, which the assistant sends email from.
+    /// Your email account, which Homer sends email from.
     Email {
         #[command(subcommand)]
         cmd: EmailCmd,
@@ -327,7 +333,10 @@ async fn main() -> Result<()> {
             println!("{}", path.display());
             eprintln!("Saved. It is plain text: read it before you share it.");
         }
-        Cmd::Install { names, build } => install(names, build, v).await?,
+        Cmd::Install { names, build, keep_going: false, notify: false } => {
+            install(names, build, v).await?;
+        }
+        Cmd::Install { names, build, notify, .. } => install_each(names, build, notify, v).await?,
         Cmd::Remove { names } => remove(names, v).await?,
         Cmd::Update => {
             let r = store().await?.sync().await?;
@@ -524,15 +533,20 @@ async fn install(names_typed: Vec<String>, build: bool, v: bool) -> Result<()> {
             if entry.network {
                 eprintln!("{} uses the internet.", entry.name);
             }
+            // A line per percent only where someone watches (a terminal), not in logs.
+            let tty = std::io::stderr().is_terminal();
+            if !tty {
+                eprintln!("Downloading {}…", entry.name);
+            }
             let last = std::sync::atomic::AtomicU64::new(u64::MAX);
             s.install(entry, &|d, t| {
                 let pct = d * 100 / t.max(1);
-                if last.swap(pct, std::sync::atomic::Ordering::Relaxed) != pct {
+                if tty && last.swap(pct, std::sync::atomic::Ordering::Relaxed) != pct {
                     eprint!("\rDownloading {}… {pct:>3}%", entry.name);
                 }
             })
             .await?;
-            eprintln!("\n{} is in Applications.", entry.name);
+            eprintln!("{}{} is in Applications.", if tty { "\n" } else { "" }, entry.name);
         }
     }
     for app in &to_build {
@@ -542,6 +556,61 @@ async fn install(names_typed: Vec<String>, build: bool, v: bool) -> Result<()> {
         build_from_maker(m).await?;
     }
     Ok(())
+}
+
+/// Install each name on its own, going on when one fails; with `notify`, a
+/// desktop notification says how it went (the Setup Assistant's apps).
+async fn install_each(names_typed: Vec<String>, build: bool, notify: bool, v: bool) -> Result<()> {
+    let (mut done, mut failed) = (Vec::new(), Vec::new());
+    for n in names_typed {
+        match install(vec![n.clone()], build, v).await {
+            Ok(()) => done.push(n),
+            Err(e) => {
+                eprintln!("{n}: {e:#}");
+                failed.push(n);
+            }
+        }
+    }
+    if notify {
+        let (title, body) = install_notice(&done, &failed);
+        let notify_send = ["/run/current-system/sw/bin/notify-send", "notify-send"]
+            .into_iter()
+            .find(|p| !p.starts_with('/') || std::path::Path::new(p).exists())
+            .unwrap_or("notify-send");
+        let icon = if failed.is_empty() { "--icon=emblem-ok-symbolic" } else { "--icon=dialog-warning-symbolic" };
+        let _ =
+            tokio::process::Command::new(notify_send).args(["--app-name=Iliada", icon, &title, &body]).status().await;
+    }
+    anyhow::ensure!(failed.is_empty(), "{} could not be installed", and_list(&failed));
+    Ok(())
+}
+
+/// "Firefox", "Firefox and VLC", "Firefox, VLC and GIMP".
+fn and_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+fn install_notice(done: &[String], failed: &[String]) -> (String, String) {
+    let are = if done.len() == 1 { "is" } else { "are" };
+    match (done.is_empty(), failed.is_empty()) {
+        (_, true) => ("Your apps are ready".into(), format!("{} {are} in Applications.", and_list(done))),
+        (true, false) => (
+            "Your apps could not be installed".into(),
+            format!("Check the internet connection, then get {} from the Store or ask Homer.", and_list(failed)),
+        ),
+        (false, false) => (
+            "Some apps could not be installed".into(),
+            format!(
+                "{} {are} in Applications. Get {} later from the Store, or ask Homer.",
+                and_list(done),
+                and_list(failed)
+            ),
+        ),
+    }
 }
 
 /// An app whose licence keeps it out of the Store: this computer downloads
@@ -710,7 +779,7 @@ struct Terminal;
 #[async_trait::async_trait]
 impl iliada_assistant::Frontend for Terminal {
     async fn approve(&self, action: &str) -> bool {
-        eprint!("  The assistant wants to: {action}. Allow? [y/N] ");
+        eprint!("  Homer wants to: {action}. Allow? [y/N] ");
         let mut line = String::new();
         let _ = std::io::stdin().read_line(&mut line);
         matches!(line.trim(), "y" | "Y" | "yes" | "Yes")
@@ -731,7 +800,7 @@ async fn ask(text: String) -> Result<()> {
         iliada_system::protocol::AssistantMode::Ask => "it asks before doing anything",
         iliada_system::protocol::AssistantMode::Auto => "it acts on its own",
     };
-    eprintln!("Iliada assistant ({}; {mode}). An empty line ends.", settings.model);
+    eprintln!("Homer, the Iliada assistant ({}; {mode}). An empty line ends.", settings.model);
     loop {
         eprint!("> ");
         let mut line = String::new();
@@ -759,7 +828,7 @@ async fn assistant(cmd: AssistantCmd, v: bool) -> Result<()> {
                 AssistantMode::Auto => "auto (acts on its own)",
                 AssistantMode::Ask => "ask (every action needs your OK)",
             };
-            println!("Assistant:   {}", if s.enabled { "on" } else { "off" });
+            println!("Homer:       {}", if s.enabled { "on" } else { "off" });
             println!("Mode:        {mode}");
             println!("Full access: {}", if s.full_access { "on (may run commands as you)" } else { "off" });
             println!("Model:       {} ({})", s.model, provider.name());
@@ -919,7 +988,7 @@ async fn backup(cmd: BackupCmd, v: bool) -> Result<()> {
 }
 
 /// "Iliada 0.2.3 is available", once per version, with an Update button
-/// that opens Iliada Settings (its first page is Updates).
+/// that opens Settings (its first page is Updates).
 async fn update_notice() -> Result<()> {
     let s = client::status().await?;
     let Some(latest) = s.system_update.latest.clone() else { return Ok(()) };
@@ -944,7 +1013,7 @@ async fn update_notice() -> Result<()> {
             "--icon=software-update-available",
             "--action=update=Update",
             // Clicking the notice itself (where buttons aren't shown).
-            "--action=default=Open Iliada Settings",
+            "--action=default=Open Settings",
             // It stays until dismissed: easy to miss otherwise.
             "--expire-time=0",
             "--wait",
@@ -961,4 +1030,31 @@ async fn update_notice() -> Result<()> {
         std::process::Command::new(settings).spawn().context("opening Iliada Settings")?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn lists_read_like_a_sentence() {
+        assert_eq!(and_list(&s(&["Firefox"])), "Firefox");
+        assert_eq!(and_list(&s(&["Firefox", "VLC"])), "Firefox and VLC");
+        assert_eq!(and_list(&s(&["Firefox", "VLC", "GIMP"])), "Firefox, VLC and GIMP");
+    }
+
+    #[test]
+    fn the_notice_says_what_happened() {
+        let (t, b) = install_notice(&s(&["Firefox", "VLC"]), &[]);
+        assert_eq!((t.as_str(), b.as_str()), ("Your apps are ready", "Firefox and VLC are in Applications."));
+        let (t, b) = install_notice(&s(&["Firefox"]), &s(&["Google Chrome"]));
+        assert_eq!(t, "Some apps could not be installed");
+        assert_eq!(b, "Firefox is in Applications. Get Google Chrome later from the Store, or ask Homer.");
+        let (t, _) = install_notice(&[], &s(&["VLC"]));
+        assert_eq!(t, "Your apps could not be installed");
+    }
 }

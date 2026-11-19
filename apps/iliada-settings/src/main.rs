@@ -1,7 +1,7 @@
-//! Iliada Settings: the Iliada account, updates, backup, command-line tools, services, about.
-//!
-//! A COSMIC app over the Iliada system service. Display, network, sound and
-//! the rest stay in COSMIC's own Settings; this is what is Iliada's.
+//! Settings: one app for everything. Iliada's own pages (the account,
+//! updates, backup, privacy, Homer, command-line tools, services, about) are
+//! here; COSMIC's (Wi-Fi, displays, sound…) are listed in the same sidebar
+//! and open in COSMIC's settings window, right at that page.
 
 use cosmic::app::{Settings, Task};
 use cosmic::iced::{Alignment, Length, Size};
@@ -66,6 +66,47 @@ enum Page {
     Privacy,
     Assistant,
     About,
+    /// One of COSMIC's settings pages (`cosmic-settings <page>`): Wi-Fi,
+    /// displays, sound… One Settings app lists them all.
+    Cosmic(&'static str),
+}
+
+/// COSMIC's settings pages, as the sidebar groups them: (page, name, icon).
+/// Each opens in COSMIC's own settings window, right at that page.
+const COSMIC_PAGES: [&[(&str, &str, &str)]; 4] = [
+    &[
+        ("wireless", "Wi-Fi", "preferences-wireless-symbolic"),
+        ("network", "Network", "preferences-network-and-wireless-symbolic"),
+        ("bluetooth", "Bluetooth", "bluetooth-active-symbolic"),
+    ],
+    &[
+        ("displays", "Displays", "video-display-symbolic"),
+        ("sound", "Sound", "preferences-sound-symbolic"),
+        ("appearance", "Appearance", "preferences-appearance-symbolic"),
+        ("wallpaper", "Wallpaper", "preferences-desktop-wallpaper-symbolic"),
+        ("dock", "Dock", "preferences-dock-symbolic"),
+    ],
+    &[
+        ("keyboard", "Keyboard", "input-keyboard-symbolic"),
+        ("mouse", "Mouse", "input-mouse-symbolic"),
+        ("touchpad", "Touchpad", "input-touchpad-symbolic"),
+        ("power", "Power and battery", "preferences-power-and-battery-symbolic"),
+    ],
+    &[
+        ("date-time", "Date and time", "accessories-clock-symbolic"),
+        ("region-language", "Language and region", "preferences-region-and-language-symbolic"),
+        ("users", "Users", "system-users-symbolic"),
+        ("accessibility", "Accessibility", "preferences-desktop-accessibility-symbolic"),
+        ("default-apps", "Default apps", "preferences-default-applications-symbolic"),
+    ],
+];
+
+fn cosmic_page_name(page: &str) -> &'static str {
+    COSMIC_PAGES.iter().flat_map(|g| g.iter()).find(|p| p.0 == page).map_or("Settings", |p| p.1)
+}
+
+fn open_cosmic_page(page: &str) {
+    let _ = std::process::Command::new("cosmic-settings").arg(page).spawn();
 }
 
 /// An app's permissions that are asked for (and can be changed here).
@@ -151,6 +192,7 @@ enum Confirm {
 #[derive(Debug, Clone)]
 enum Message {
     Refresh,
+    OpenCosmic(&'static str),
     Account(account::Msg),
     Status(Result<Status, String>),
     Run(Request),
@@ -610,9 +652,9 @@ impl App {
             let a = a.clone();
             ok.then_some(move |enabled| Message::AssistantSet(AssistantSettings { enabled, ..a.clone() }))
         };
-        let main = settings::section().title("Assistant").add(
-            settings::item::builder("Use the assistant")
-                .description("Ask Iliada to do things for you in plain words, in the Assistant app. It uses Claude (Anthropic) or a model on OpenRouter, with your own API key.")
+        let main = settings::section().title("Homer").add(
+            settings::item::builder("Use Homer")
+                .description("Homer, Iliada's assistant, does things for you when you ask in plain words. It uses Claude (Anthropic) or a model on OpenRouter, with your own API key.")
                 .toggler_maybe(a.enabled, on),
         );
         let mut items: Vec<Element<_>> = vec![main.into()];
@@ -765,8 +807,8 @@ impl App {
         let saved = iliada_assistant::email::load();
         let mut section = settings::section().title("Email").add(info(
             match &saved {
-                Some(a) => format!("The assistant sends email as {}", a.address),
-                None => "Let the assistant send email for you".to_owned(),
+                Some(a) => format!("Homer sends email as {}", a.address),
+                None => "Let Homer send email for you".to_owned(),
             },
             Some(
                 "From your own email account. You see every email before it is sent. For Gmail, iCloud and Yahoo use an app password from your account's security settings.".to_owned(),
@@ -891,20 +933,35 @@ impl cosmic::Application for App {
 
     fn init(core: Core, _flags: ()) -> (Self, Task<Message>) {
         let mut nav = nav_bar::Model::default();
-        let pages = [
-            ("Account", "avatar-default-symbolic", Page::Account),
-            ("Updates", "software-update-available-symbolic", Page::Updates),
-            ("Backup", "document-save-symbolic", Page::Backup),
-            ("Command-line tools", "utilities-terminal-symbolic", Page::Tools),
+        // One list, ordered as on a Mac: Iliada's own pages among COSMIC's.
+        let own = |pages: &[(&'static str, &'static str, Page)]| pages.to_vec();
+        let mut groups: Vec<Vec<(&'static str, &'static str, Page)>> =
+            vec![own(&[("Account", "avatar-default-symbolic", Page::Account)])];
+        for group in COSMIC_PAGES {
+            groups.push(group.iter().map(|&(page, name, icon)| (name, icon, Page::Cosmic(page))).collect());
+        }
+        // After the hardware: Iliada's own.
+        groups.insert(
+            4,
+            own(&[
+                ("Privacy", "security-high-symbolic", Page::Privacy),
+                ("Homer", "user-available-symbolic", Page::Assistant),
+                ("Updates", "software-update-available-symbolic", Page::Updates),
+                ("Backup", "document-save-symbolic", Page::Backup),
+            ]),
+        );
+        groups.push(own(&[
             ("Services", "network-server-symbolic", Page::Services),
-            ("Privacy", "security-high-symbolic", Page::Privacy),
-            ("Assistant", "user-available-symbolic", Page::Assistant),
+            ("Command-line tools", "utilities-terminal-symbolic", Page::Tools),
             ("About", "help-about-symbolic", Page::About),
-        ];
-        for (text, icon, page) in pages {
-            let e = nav.insert().text(text).icon(widget::icon::from_name(icon)).data(page);
-            if page == Page::Updates {
-                e.activate();
+        ]));
+        for (g, group) in groups.into_iter().enumerate() {
+            for (i, (text, icon, page)) in group.into_iter().enumerate() {
+                let e = nav.insert().text(text).icon(widget::icon::from_name(icon)).data(page);
+                let e = if g > 0 && i == 0 { e.divider_above(true) } else { e };
+                if page == Page::Updates {
+                    e.activate();
+                }
             }
         }
         let mut app = App {
@@ -929,9 +986,9 @@ impl cosmic::Application for App {
             email: EmailForm::load(),
             account: Account::default(),
         };
-        app.set_header_title("Iliada Settings".into());
+        app.set_header_title("Settings".into());
         let title = match app.core.main_window_id() {
-            Some(id) => app.set_window_title("Iliada Settings".into(), id),
+            Some(id) => app.set_window_title("Settings".into(), id),
             None => Task::none(),
         };
         (app, Task::batch([title, load_status()]))
@@ -947,6 +1004,10 @@ impl cosmic::Application for App {
         // still running keeps showing.
         self.error = None;
         self.notice = None;
+        if let Page::Cosmic(page) = self.page() {
+            open_cosmic_page(page);
+            return Task::none();
+        }
         if self.page() == Page::Assistant {
             self.replacing_key = false;
             let model = self.status().map(|s| s.assistant.model.clone()).unwrap_or_default();
@@ -975,13 +1036,13 @@ impl cosmic::Application for App {
             ),
             Confirm::RemoveKey(p) => (
                 "Remove the API key?",
-                format!("The assistant stops working until you add a {} key again.", p.name()),
+                format!("Homer stops working until you add a {} key again.", p.name()),
                 widget::button::destructive("Remove"),
             ),
             Confirm::AccountRestore(from) => (
                 "Restore your settings?",
                 format!(
-                    "Your desktop settings, Privacy answers and assistant conversations from {from} \
+                    "Your desktop settings, Privacy answers and conversations with Homer from {from} \
                      replace this computer's."
                 ),
                 widget::button::destructive("Restore"),
@@ -1020,6 +1081,7 @@ impl cosmic::Application for App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Refresh => return load_status(),
+            Message::OpenCosmic(page) => open_cosmic_page(page),
             Message::Account(account::Msg::Restore) => {
                 let from = self.account.latest().map(|m| m.computer.clone()).unwrap_or_default();
                 self.confirm = Some(Confirm::AccountRestore(from));
@@ -1145,7 +1207,7 @@ impl cosmic::Application for App {
                         Ok(()) => {
                             self.email.password.clear();
                             self.notice = Some(format!(
-                                "The assistant can now send email as {}. Only you can read the password.",
+                                "Homer can now send email as {}. Only you can read the password.",
                                 account.address
                             ));
                         }
@@ -1276,7 +1338,7 @@ impl cosmic::Application for App {
                 if let Some(b) = self.banner() {
                     col = col.push(b);
                 }
-                if self.page() == Page::Account {
+                if matches!(self.page(), Page::Account | Page::Cosmic(_)) {
                     // Each person's own: no administrator needed.
                 } else if !s.admin {
                     col = col.push(card(widget::text::body("Only an administrator can change these settings.").into()));
@@ -1292,6 +1354,7 @@ impl cosmic::Application for App {
                     Page::Privacy => self.privacy(),
                     Page::Assistant => self.assistant(s),
                     Page::About => self.about(s),
+                    Page::Cosmic(page) => cosmic_page(page),
                 });
                 widget::scrollable(widget::container(col.max_width(760)).width(Length::Fill).align_x(Alignment::Center))
                     .height(Length::Fill)
@@ -1304,4 +1367,16 @@ impl cosmic::Application for App {
 
 fn account_action(m: account::Msg) -> cosmic::Action<Message> {
     cosmic::Action::App(Message::Account(m))
+}
+
+/// What the window shows while one of COSMIC's pages is open in its own.
+fn cosmic_page<'a>(page: &'static str) -> Element<'a, Message> {
+    let spacing = cosmic::theme::spacing();
+    let name = cosmic_page_name(page);
+    widget::column::with_capacity(3)
+        .push(widget::text::title3(name))
+        .push(widget::text::body(format!("{name} opens in its own window.")))
+        .push(widget::button::standard(format!("Open {name}")).on_press(Message::OpenCosmic(page)))
+        .spacing(spacing.space_s)
+        .into()
 }

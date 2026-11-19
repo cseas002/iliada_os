@@ -393,12 +393,7 @@ impl App {
             .center_y(Length::Fill)
             .width(Length::Fill);
         let bar = widget::container(widget::column::with_capacity(1).push(row).max_width(600)).center_x(Length::Fill);
-        widget::column::with_capacity(2)
-            .push(body)
-            .push(bar)
-            .spacing(spacing.space_m)
-            .padding(spacing.space_l)
-            .into()
+        widget::column::with_capacity(2).push(body).push(bar).spacing(spacing.space_m).padding(spacing.space_l).into()
     }
 }
 
@@ -700,9 +695,7 @@ impl cosmic::Application for App {
                 self.page(
                     "About you",
                     "Your account is an administrator: it can install apps and change settings.",
-                    vec![
-                        widget::column::with_children(content).spacing(spacing.space_s).into(),
-                    ],
+                    vec![widget::column::with_children(content).spacing(spacing.space_s).into()],
                     vec![
                         widget::button::standard("Back").on_press(Message::Go(Step::Disk)),
                         widget::button::suggested("Continue")

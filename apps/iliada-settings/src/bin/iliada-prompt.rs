@@ -180,7 +180,7 @@ impl App {
                 .push(widget::text::caption(self.ask.purpose.as_str()).width(Length::Fill).align_x(Alignment::Center));
         }
         col = col.push(
-            widget::text::caption("You can change this later in Iliada Settings → Privacy.")
+            widget::text::caption("You can change this later in Settings → Privacy.")
                 .width(Length::Fill)
                 .align_x(Alignment::Center),
         );

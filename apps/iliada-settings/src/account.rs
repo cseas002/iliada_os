@@ -317,7 +317,7 @@ impl Account {
                     .add(
                         settings::item::builder("Sign in to your Iliada account")
                             .description(
-                                "Your desktop settings, Privacy answers and assistant conversations are backed up, \
+                                "Your desktop settings, Privacy answers and conversations with Homer are backed up, \
                                  encrypted on this computer first so only you can read them. On a new computer, \
                                  sign in and they come back. New here? Signing in makes your account.",
                             )

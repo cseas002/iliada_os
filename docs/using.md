@@ -1,7 +1,7 @@
 # Using Iliada: how do I…
 
 Everything below can be done without a terminal, in the **Store** (in the
-dock) or **Iliada Settings**. If you like the terminal, the `iliada` command
+dock) or **Settings**. If you like the terminal, the `iliada` command
 does the same things; you never need `sudo`.
 
 There are three kinds of things you can add:

@@ -2996,9 +2996,12 @@ dependencies = [
  "iliada-account",
  "iliada-assistant",
  "iliada-bundle",
+ "iliada-catalog",
+ "iliada-store",
  "iliada-system",
  "iliada-types",
  "libcosmic",
+ "reqwest",
  "serde_json",
  "tokio",
 ]

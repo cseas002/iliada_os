@@ -1,10 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=Assistant
-Comment=Ask Iliada to do things for you
+Name=Homer
+GenericName=Assistant
+Comment=Ask Homer to do things for you
 Exec=iliada-assistant-app
-Icon=user-available
+Icon=org.iliada.Assistant
 Categories=Utility;System;
-Keywords=ai;claude;help;ask;
+Keywords=ai;assistant;homer;claude;help;ask;
 StartupNotify=true
 StartupWMClass=org.iliada.Assistant
