@@ -18,6 +18,7 @@ the same hand-authored helmet and crest paths, so they always match.
 | `apps/iliada-settings/res/org.iliada.Settings.svg` | Settings: a bronze gear with a meander ring and a red boss. |
 | `apps/iliada-settings/res/org.iliada.Setup.svg` | The Setup Assistant: a laurel wreath around a red alpha (the beginning). |
 | `apps/iliada-installer/res/org.iliada.Installer.svg` | The installer: a Greek ship with a red-striped sail setting out. |
+| `wallpaper/wine-dark-sea.svg` | The default wallpaper: the wine-dark sea at dusk, Troy on its hill (left), the Achaean ships (right). Rendered to a 3840 px PNG at build time (nix/modules/desktop.nix). |
 | `logo.txt` | fastfetch ASCII art. `$1` is the crest color, `$2` the helmet color. |
 | `fastfetch.jsonc` | fastfetch config that uses `logo.txt`. |
 | `png/` | Raster exports: icon at 16 to 1024 px, mark and mono mark at 512 px, lockups at 1600 px wide. |

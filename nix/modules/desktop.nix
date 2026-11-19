@@ -4,6 +4,14 @@
 { config, lib, pkgs, ... }:
 let
   cfg = config.iliada.desktop;
+  desktopApps = pkgs.callPackage ../desktop-apps.nix { };
+  # The default wallpaper: Homer's wine-dark sea at dusk, Troy on its hill,
+  # the Achaean ships on the horizon (nix/branding/wallpaper).
+  wallpaper = pkgs.runCommand "iliada-wallpaper" { nativeBuildInputs = [ pkgs.librsvg ]; } ''
+    mkdir -p $out/share/backgrounds/iliada
+    rsvg-convert -w 3840 ${../branding/wallpaper/wine-dark-sea.svg} -o $out/share/backgrounds/iliada/wine-dark-sea.png
+  '';
+  themeIds = "com.system76.CosmicTheme.Dark com.system76.CosmicTheme.Light com.system76.CosmicTheme.Dark.Builder com.system76.CosmicTheme.Light.Builder";
 in
 {
   options.iliada.desktop = {
@@ -45,11 +53,28 @@ in
       # Notifications from scripts and the Setup Assistant's background installs.
       pkgs.libnotify
       # The Store, Iliada Settings and the Setup Assistant.
-      (pkgs.callPackage ../desktop-apps.nix { })
+      desktopApps
+      wallpaper
       # Iliada's desktop defaults (users can still change them): Applications
-      # in the Files sidebar; the Iliada Store in the dock. hiPrio: they replace
-      # COSMIC's own defaults for the same settings.
+      # in the Files sidebar; the Iliada Store in the dock; the Iliad look.
+      # hiPrio: they replace COSMIC's own defaults for the same settings.
       (lib.hiPrio (pkgs.runCommand "iliada-cosmic-defaults" { } ''
+        # The Iliad look: bronze on navy (dark), deep bronze on parchment
+        # (light), computed by COSMIC's own theme code (iliada-theme).
+        ${desktopApps}/bin/iliada-theme $out/share
+        bg=$out/share/cosmic/com.system76.CosmicBackground/v1
+        mkdir -p $bg
+        cat > $bg/all <<EOF
+        (
+            output: "all",
+            source: Path("${wallpaper}/share/backgrounds/iliada/wine-dark-sea.png"),
+            filter_by_theme: false,
+            rotation_frequency: 3600,
+            filter_method: Lanczos,
+            scaling_mode: Zoom,
+            sampling_method: Alphanumeric,
+        )
+        EOF
         files=$out/share/cosmic/com.system76.CosmicFiles/v1
         dock=$out/share/cosmic/com.system76.CosmicAppList/v1
         mkdir -p $files $dock
@@ -100,29 +125,44 @@ in
         # (COSMIC Settings → Appearance turns it off). Set for the theme and
         # for the builder COSMIC regenerates the theme from, light and dark.
         for theme in Dark Light Dark.Builder Light.Builder; do
-          d=$out/share/cosmic/com.system76.CosmicTheme.$theme/v1
-          mkdir -p $d
-          for key in frosted_windows frosted_panel frosted_applets frosted_system_interface; do
-            echo true > $d/$key
+          for v in v1 v2; do
+            d=$out/share/cosmic/com.system76.CosmicTheme.$theme/$v
+            mkdir -p $d
+            for key in frosted_windows frosted_panel frosted_applets frosted_system_interface; do
+              echo true > $d/$key
+            done
           done
         done
       ''))
     ];
     # COSMIC's apps read the built-in fallback theme before the system
-    # defaults above, so they would not know about frosted glass. Each user
-    # gets the frosted settings in their own theme at login, except the ones
-    # they already have (turning it off in COSMIC Settings stays off).
-    systemd.user.services.iliada-frosted-glass = {
-      description = "Iliada's frosted glass default";
+    # defaults above, so each person gets Iliada's look (colours and frosted
+    # glass) in their own settings at login. A theme the person changed in
+    # Appearance is theirs and stays; one still as Iliada left it follows
+    # Iliada's (a newer Iliada can refresh its look).
+    systemd.user.services.iliada-look = {
+      description = "Iliada's look: the Iliad theme and frosted glass";
       wantedBy = [ "default.target" ];
+      path = [ pkgs.diffutils ];
       serviceConfig.Type = "oneshot";
       script = ''
         base=''${XDG_CONFIG_HOME:-$HOME/.config}/cosmic
-        for theme in Dark Light Dark.Builder Light.Builder; do
-          d=$base/com.system76.CosmicTheme.$theme/v1
-          mkdir -p "$d"
-          for key in frosted_windows frosted_panel frosted_applets frosted_system_interface; do
-            [ -e "$d/$key" ] || echo true > "$d/$key"
+        sys=/run/current-system/sw/share/cosmic
+        saved=''${XDG_STATE_HOME:-$HOME/.local/state}/iliada/look
+        for id in ${themeIds}; do
+          for v in v1 v2; do
+            src=$sys/$id/$v
+            [ -d "$src" ] || continue
+            dst=$base/$id/$v
+            was=$saved/$id/$v
+            mkdir -p "$dst"
+            if [ -z "$(ls -A "$dst")" ] || { [ -d "$was" ] && diff -rq "$dst" "$was" >/dev/null; }; then
+              rm -rf "$dst" "$was"
+              mkdir -p "$dst" "$was"
+              cp -L "$src"/* "$dst"/
+              cp -L "$src"/* "$was"/
+              chmod -R u+w "$dst" "$was"
+            fi
           done
         done
       '';

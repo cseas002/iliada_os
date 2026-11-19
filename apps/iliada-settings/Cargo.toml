@@ -21,6 +21,10 @@ path = "src/bin/iliada-prompt.rs"
 name = "iliada-assistant-app"
 path = "src/bin/iliada-assistant-app.rs"
 
+[[bin]]
+name = "iliada-theme"
+path = "src/bin/iliada-theme.rs"
+
 [dependencies]
 iliada-system.workspace = true
 iliada-bundle.workspace = true
