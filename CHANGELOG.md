@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **The Iliada account is online** at account.iliada-os.com: Settings →
+  Account and the Setup Assistant offer it on every Iliada. Sign in with
+  an email code, then a passkey; desktop settings, Privacy answers and
+  conversations with Homer are backed up encrypted, readable only by you.
+
+- **The Iliad look**: a new default wallpaper, Homer's wine-dark sea at
+  dusk with Troy on its hill and the Achaean ships, and a bronze-on-navy
+  theme (deep bronze on parchment in light mode) for windows, the panel,
+  the dock and the lock screen. People who picked their own colours in
+  Appearance keep them.
 - New icons for Settings (a bronze gear with a meander), the Setup
   Assistant (a laurel wreath around an alpha) and the installer (a Greek
   ship), to match the Store and Homer.

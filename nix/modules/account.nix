@@ -10,13 +10,13 @@ in
 {
   options.iliada.account.server = lib.mkOption {
     type = lib.types.nullOr lib.types.str;
-    # Iliada's own server, once it has a home (a domain and a host).
-    default = null;
+    # Iliada's own server (online since 2026-11-19).
+    default = "https://account.iliada-os.com";
     example = "https://account.example.org";
     description = ''
-      The Iliada account server (github.com/iliada-os/cloud). null
-      leaves the account out of Settings until there is one; `iliada account
-      sign-in --server …` still works.
+      The Iliada account server (github.com/iliada-os/cloud): Iliada's own
+      by default, or one you run yourself. null leaves the account out of
+      Settings; `iliada account sign-in --server …` still works.
     '';
   };
 
