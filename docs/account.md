@@ -80,8 +80,12 @@ about the person).
    and `conversations/` are packed (tar + zstd), sealed with
    XChaCha20-Poly1305 (the name of what is kept is authenticated too) and
    uploaded as `settings`; a user timer backs up hourly when something
-   changed. Left: the installed VM, approving a new computer from one already
-   signed in (instead of typing the recovery key), app data.
+   changed. A new computer gets the key from one already signed in
+   (2026-11-20): it leaves a one-time X25519 public key with the server
+   (`/v1/keys`), the other computer seals the account key to it (X25519 +
+   XChaCha20-Poly1305) after the person sees the same 8-character code on
+   both screens (a hash of that public key), and the new computer checks
+   the key against `key-check`. Left: the installed VM, app data.
 3. **Vaultwarden** next to it, the Bitwarden extension pointed at it.
 4. **Google and Apple sign-in.** Needs a Google Cloud project (free) and an
    Apple Developer account ($99 a year) in Iliada's name.

@@ -25,6 +25,17 @@ pub enum Msg {
     RecoveryInput(String),
     UseRecoveryKey,
     KeyUsed(Result<(), String>),
+    /// Get the key from a computer already signed in.
+    AskOtherComputer,
+    Asked(Result<account::KeyRequest, String>),
+    CancelKeyWait,
+    /// Look for new computers waiting for the key (while the page is open).
+    PollWaiting,
+    WaitingList(Result<Vec<account::Waiting>, String>),
+    GiveKey(String),
+    RefuseKey(String),
+    Answered(Result<String, String>),
+    Refused,
     BackUp,
     BackedUp(Result<account::Backup, String>),
     Latest(Result<Option<Manifest>, String>),
@@ -44,6 +55,8 @@ enum Step {
     Code(DeviceCode),
     /// Showing the recovery key: just made (`true`), or asked for again.
     Key(String, bool),
+    /// Waiting for another computer to hand over the key; the code to compare.
+    KeyWait(String),
 }
 
 #[derive(Debug)]
@@ -54,6 +67,9 @@ pub struct Account {
     step: Step,
     wait: Option<Handle>,
     recovery: String,
+    /// Other computers waiting for the key (when this one has it).
+    waiting: Vec<account::Waiting>,
+    polling: bool,
     latest: Option<Result<Option<Manifest>, String>>,
     /// The account was made here just now (nothing to restore).
     fresh: bool,
@@ -73,6 +89,8 @@ impl Default for Account {
             step: Step::Idle,
             wait: None,
             recovery: String::new(),
+            waiting: Vec::new(),
+            polling: false,
             latest: None,
             fresh: false,
             busy: None,
@@ -107,11 +125,16 @@ impl Account {
         if let Some(f) = &self.files {
             self.status = account::status(f);
         }
+        let mut tasks = Vec::new();
         if self.signed_in() && self.latest.is_none() {
             let files = self.files.clone().expect("signed in");
-            return Task::perform(async move { account::latest(&files).await.map_err(text_err) }, Msg::Latest);
+            tasks.push(Task::perform(async move { account::latest(&files).await.map_err(text_err) }, Msg::Latest));
         }
-        Task::none()
+        if self.signed_in() && !self.polling {
+            self.polling = true;
+            tasks.push(Task::done(Msg::PollWaiting));
+        }
+        Task::batch(tasks)
     }
 
     pub fn update(&mut self, msg: Msg) -> Task<Msg> {
@@ -202,6 +225,8 @@ impl Account {
             }
             Msg::KeyUsed(r) => {
                 self.busy = None;
+                self.wait = None;
+                self.step = Step::Idle;
                 match r {
                     Ok(()) => {
                         self.recovery.clear();
@@ -209,6 +234,78 @@ impl Account {
                         self.latest = None;
                         return self.refresh();
                     }
+                    Err(e) => self.error = Some(e),
+                }
+            }
+            Msg::AskOtherComputer => {
+                self.busy = Some("Asking");
+                self.error = None;
+                return Task::perform(async move { account::ask_for_key(&files).await.map_err(text_err) }, Msg::Asked);
+            }
+            Msg::Asked(Err(e)) => {
+                self.busy = None;
+                self.error = Some(e);
+            }
+            Msg::Asked(Ok(request)) => {
+                self.busy = None;
+                self.step = Step::KeyWait(request.code.clone());
+                let (task, handle) = Task::perform(
+                    async move { account::wait_for_key(&files, &request).await.map_err(text_err) },
+                    Msg::KeyUsed,
+                )
+                .abortable();
+                self.wait = Some(handle);
+                return task;
+            }
+            Msg::CancelKeyWait => {
+                if let Some(h) = self.wait.take() {
+                    h.abort();
+                }
+                self.step = Step::Idle;
+            }
+            Msg::PollWaiting => {
+                if !self.signed_in() {
+                    self.polling = false;
+                    return Task::none();
+                }
+                return Task::perform(
+                    async move { account::waiting_for_key(&files).await.map_err(text_err) },
+                    Msg::WaitingList,
+                );
+            }
+            Msg::WaitingList(r) => {
+                // A failed look (offline) just waits for the next one.
+                if let Ok(w) = r {
+                    self.waiting = w;
+                }
+                return Task::perform(tokio::time::sleep(std::time::Duration::from_secs(10)), |_| Msg::PollWaiting);
+            }
+            Msg::GiveKey(id) | Msg::RefuseKey(id) if !self.waiting.iter().any(|w| w.id == id) => {}
+            Msg::GiveKey(id) => {
+                let to = self.waiting.iter().find(|w| w.id == id).cloned().expect("checked");
+                self.waiting.retain(|w| w.id != id);
+                self.busy = Some("Handing over the key");
+                self.error = None;
+                return Task::perform(
+                    async move { account::hand_over_key(&files, &to).await.map(|()| to.computer).map_err(text_err) },
+                    Msg::Answered,
+                );
+            }
+            Msg::RefuseKey(id) => {
+                let to = self.waiting.iter().find(|w| w.id == id).cloned().expect("checked");
+                self.waiting.retain(|w| w.id != id);
+                return Task::perform(
+                    async move {
+                        let _ = account::refuse_key(&files, &to).await;
+                    },
+                    |_| Msg::Refused,
+                );
+            }
+            Msg::Refused => {}
+            Msg::Answered(r) => {
+                self.busy = None;
+                match r {
+                    Ok(computer) => self.notice = Some(format!("“{computer}” has your account key now.")),
                     Err(e) => self.error = Some(e),
                 }
             }
@@ -307,6 +404,10 @@ impl Account {
                 items.push(key_card(k, *new));
                 return settings::view_column(items).into();
             }
+            Step::KeyWait(code) => {
+                items.push(key_wait_card(code));
+                return settings::view_column(items).into();
+            }
             Step::Idle | Step::Asking => {}
         }
         let idle = self.idle();
@@ -329,6 +430,31 @@ impl Account {
                 items.push(self.recovery_section().title("Iliada account").add(signed_in_as(email, idle)).into())
             }
             Status::Ready { email, last_backup, last_error } => {
+                if !self.waiting.is_empty() {
+                    let mut s = settings::section().title("A new computer asks for your account key");
+                    for w in &self.waiting {
+                        let buttons = widget::row::with_capacity(2)
+                            .push(
+                                widget::button::standard("Refuse")
+                                    .on_press_maybe(idle.then(|| Msg::RefuseKey(w.id.clone()))),
+                            )
+                            .push(
+                                widget::button::suggested("Approve")
+                                    .on_press_maybe(idle.then(|| Msg::GiveKey(w.id.clone()))),
+                            )
+                            .spacing(theme::spacing().space_xs);
+                        s = s.add(
+                            settings::item::builder(format!("“{}” wants to read your backup", w.computer))
+                                .description(format!(
+                                    "Approve only if that computer shows the code {} and you are setting it up \
+                                     yourself.",
+                                    w.code
+                                ))
+                                .control(buttons),
+                        );
+                    }
+                    items.push(s.into());
+                }
                 let last = match (last_backup, last_error) {
                     (_, Some(e)) => format!("The last backup didn't work: {e}"),
                     (Some(t), None) => format!("Last backup: {}.", ago(*t)),
@@ -383,6 +509,7 @@ impl Account {
         let content: Element<'_, Msg> = match (&self.step, &self.status) {
             (Step::Code(c), _) => code_card(c),
             (Step::Key(k, new), _) => key_card(k, *new),
+            (Step::KeyWait(code), _) => key_wait_card(code),
             (_, Status::SignedOut) => {
                 widget::button::suggested("Sign in").on_press_maybe(idle.then_some(Msg::SignIn)).into()
             }
@@ -409,7 +536,7 @@ impl Account {
             .on_submit(|_| Msg::UseRecoveryKey)
             .font(cosmic::font::mono())
             .width(Length::Fill);
-        let go = widget::button::suggested("Continue")
+        let go = widget::button::standard("Continue")
             .on_press_maybe((idle && !self.recovery.trim().is_empty()).then_some(Msg::UseRecoveryKey));
         let row = widget::row::with_capacity(2)
             .push(input)
@@ -417,11 +544,18 @@ impl Account {
             .spacing(theme::spacing().space_xs)
             .align_y(Alignment::Center);
         settings::section()
-            .add(info(
-                "Type your recovery key",
-                "Your backup is encrypted with a key only your computers have. This computer needs \
-                 it once: type the recovery key you saved when you made your account.",
-            ))
+            .add(
+                settings::item::builder("Get it from another computer")
+                    .description(
+                        "Your backup is encrypted with a key only your computers have. If one of them is \
+                         signed in, it can hand the key to this one.",
+                    )
+                    .control(
+                        widget::button::suggested("Ask another computer")
+                            .on_press_maybe(idle.then_some(Msg::AskOtherComputer)),
+                    ),
+            )
+            .add(info("Or type your recovery key", "The one you saved when you made your account."))
             .add(settings::item_row(vec![row.into()]))
     }
 
@@ -516,4 +650,19 @@ fn restore_item<'a>(m: &'a Manifest, button: &'static str, idle: bool) -> Elemen
         ))
         .control(widget::button::standard(button).on_press_maybe(idle.then_some(Msg::Restore)))
         .into()
+}
+
+fn key_wait_card(code: &str) -> Element<'_, Msg> {
+    let spacing = theme::spacing();
+    let col = widget::column::with_capacity(4)
+        .push(widget::text::body(
+            "On a computer already signed in to your account, open Settings → Iliada account. \
+             Approve this computer there if it shows this code:",
+        ))
+        .push(widget::text::title1(code).font(cosmic::font::mono()))
+        .push(widget::button::standard("Cancel").on_press(Msg::CancelKeyWait))
+        .push(widget::text::caption("Waiting for the other computer…"))
+        .spacing(spacing.space_s)
+        .align_x(Alignment::Center);
+    card(col.width(Length::Fill).into())
 }

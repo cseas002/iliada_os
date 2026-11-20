@@ -17,6 +17,8 @@ sha2.workspace = true
 hex.workspace = true
 chacha20poly1305 = "0.10"
 getrandom = "0.3"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+base64 = "0.22"
 tar = "0.4"
 zstd = "0.13"
 

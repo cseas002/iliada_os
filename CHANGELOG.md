@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **A new computer gets your account key from one already signed in**: no
+  need to type the recovery key. On the new computer, Settings → Iliada
+  account → "Ask another computer" shows a code; on a computer already
+  signed in, Settings → Iliada account shows the request with the same code
+  and Approve. The key travels sealed for that one computer (the account
+  server only passes it on and can't read it), and the matching codes catch
+  anyone in the middle. Also `iliada account get-key` / `give-key`.
+
 ## 0.2.6 (2026-11-20)
 
 - **One Settings window.** Iliada's pages (the Iliada account, Privacy,

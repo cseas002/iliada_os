@@ -5,7 +5,8 @@
 //!   its own token. Linux has no passkeys outside web browsers, so this is
 //!   how a computer signs in.
 //! * **The account key** ([`key`]): made on the first computer and never sent
-//!   to the server; a new computer gets it from the recovery key.
+//!   to the server; a new computer gets it from a computer already signed in
+//!   ([`ask_for_key`], [`hand_over_key`]) or from the recovery key.
 //! * **Backups** ([`snapshot`]): the desktop settings, Privacy answers and
 //!   assistant conversations, sealed with the account key before they leave.
 //!
@@ -218,6 +219,92 @@ pub async fn use_recovery_key(files: &Files, text: &str) -> Result<()> {
         bail!("That isn't this account's recovery key. Check it and try again.");
     }
     files.save_key(&key)
+}
+
+/// A new computer asking the account's other computers for the key.
+#[derive(Debug, Clone)]
+pub struct KeyRequest {
+    pub id: String,
+    /// The code this computer shows; the other one shows the same.
+    pub code: String,
+    receiver: key::Receiver,
+}
+
+const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
+
+/// Asks a computer already signed in to hand over the account key (instead
+/// of typing the recovery key). Then wait with [`wait_for_key`].
+pub async fn ask_for_key(files: &Files) -> Result<KeyRequest> {
+    use base64::Engine;
+    let (_, api) = files.signed_in()?;
+    let receiver = key::Receiver::new()?;
+    let public = receiver.public_key();
+    let id = api.ask_for_key(&B64.encode(public)).await?;
+    Ok(KeyRequest { id, code: key::match_code(&public), receiver })
+}
+
+/// Waits (up to 15 minutes) until another computer hands over the key,
+/// checks it is this account's, and keeps it.
+pub async fn wait_for_key(files: &Files, request: &KeyRequest) -> Result<()> {
+    use base64::Engine;
+    let (_, api) = files.signed_in()?;
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        match api.key_request(&request.id).await? {
+            None => bail!("No computer answered in time. Try again, or use your recovery key."),
+            Some((state, _)) if state == "waiting" => {}
+            Some((state, _)) if state == "refused" => bail!("The other computer said no."),
+            Some((_, sealed)) => {
+                let sealed = B64.decode(sealed.unwrap_or_default().trim())?;
+                let key = request.receiver.open(&sealed)?;
+                let check = api.get(KEY_CHECK).await?.context("this account has no key yet; sign in again")?;
+                if key.open(KEY_CHECK, &check).is_err() {
+                    bail!("The other computer sent a key that isn't this account's.");
+                }
+                return files.save_key(&key);
+            }
+        }
+    }
+}
+
+/// Another computer of this account waiting for the key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Waiting {
+    pub id: String,
+    pub computer: String,
+    /// The code that computer shows.
+    pub code: String,
+    public_key: [u8; 32],
+}
+
+/// The account's other computers waiting for the key (none unless this
+/// computer has it).
+pub async fn waiting_for_key(files: &Files) -> Result<Vec<Waiting>> {
+    use base64::Engine;
+    let Ok((_, api, _)) = files.ready() else { return Ok(Vec::new()) };
+    Ok(api
+        .key_requests()
+        .await?
+        .into_iter()
+        .filter_map(|r| {
+            let public_key: [u8; 32] = B64.decode(r.public_key.trim()).ok()?.try_into().ok()?;
+            Some(Waiting { id: r.id, computer: r.computer, code: key::match_code(&public_key), public_key })
+        })
+        .collect())
+}
+
+/// Hands the account key to a waiting computer (after the person saw the
+/// same code on both screens).
+pub async fn hand_over_key(files: &Files, to: &Waiting) -> Result<()> {
+    use base64::Engine;
+    let (_, api, key) = files.ready()?;
+    api.approve_key_request(&to.id, &B64.encode(key.seal_for(&to.public_key)?)).await
+}
+
+/// Says no to a waiting computer.
+pub async fn refuse_key(files: &Files, to: &Waiting) -> Result<()> {
+    let (_, api) = files.signed_in()?;
+    api.refuse_key_request(&to.id).await
 }
 
 /// The recovery key, to show the person again.

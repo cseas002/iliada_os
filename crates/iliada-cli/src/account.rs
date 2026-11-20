@@ -22,6 +22,12 @@ pub enum AccountCmd {
     RecoveryKey,
     /// Type your recovery key (a computer needs it once to read your backup).
     EnterKey,
+    /// Get your account key from another computer already signed in (instead
+    /// of typing the recovery key): it shows a code to compare there.
+    GetKey,
+    /// Hand your account key to a new computer waiting for it, after checking
+    /// it shows the same code.
+    GiveKey,
     /// Back up your settings now.
     Backup {
         /// Do nothing (and say nothing) if this computer isn't signed in;
@@ -46,7 +52,9 @@ pub async fn run(cmd: AccountCmd) -> Result<()> {
                 }
             }
             Status::NeedsKey { email } => {
-                println!("Signed in as {email}, but this computer needs your recovery key: iliada account enter-key")
+                println!(
+                    "Signed in as {email}, but this computer needs your account key: iliada account get-key\n(from another computer signed in) or iliada account enter-key (your recovery key)"
+                )
             }
             Status::Ready { email, last_backup, last_error } => {
                 println!("Signed in as {email}.");
@@ -67,6 +75,8 @@ pub async fn run(cmd: AccountCmd) -> Result<()> {
             None => bail!("this computer doesn't have your account key"),
         },
         AccountCmd::EnterKey => enter_key(&files).await?,
+        AccountCmd::GetKey => get_key(&files).await?,
+        AccountCmd::GiveKey => give_key(&files).await?,
         AccountCmd::Backup { if_signed_in } => {
             if if_signed_in && !matches!(account::status(&files), Status::Ready { .. }) {
                 return Ok(());
@@ -118,7 +128,8 @@ async fn sign_in(files: &Files, server: Option<String>) -> Result<()> {
             );
         }
         KeyStep::Needed => {
-            eprintln!("\nYour account's backup is encrypted. This computer needs your recovery key once.");
+            eprintln!("\nYour account's backup is encrypted. This computer needs your account key once:");
+            eprintln!("from a computer already signed in (iliada account get-key), or your recovery key.");
             if std::io::stdin().is_terminal() {
                 enter_key(files).await?;
             } else {
@@ -160,4 +171,47 @@ async fn offer_restore(files: &Files) {
             crate::ago(m.created)
         );
     }
+}
+
+async fn get_key(files: &Files) -> Result<()> {
+    let request = account::ask_for_key(files).await?;
+    eprintln!(
+        "On a computer already signed in to your account, open Settings → Iliada account\n\
+         (or run: iliada account give-key) and approve this computer if it shows the code\n\n    {}\n",
+        request.code
+    );
+    eprintln!("Waiting… (Ctrl+C stops)");
+    account::wait_for_key(files, &request).await?;
+    eprintln!("That's it: this computer can read your backup now.");
+    offer_restore(files).await;
+    Ok(())
+}
+
+async fn give_key(files: &Files) -> Result<()> {
+    if !matches!(account::status(files), Status::Ready { .. }) {
+        bail!("this computer doesn't have your account key, so it can't hand it over");
+    }
+    let waiting = account::waiting_for_key(files).await?;
+    if waiting.is_empty() {
+        eprintln!("No computer is waiting for your account key. On the new one: iliada account get-key");
+        return Ok(());
+    }
+    for w in &waiting {
+        eprintln!("\"{}\" asks for your account key. It should show the code  {}", w.computer, w.code);
+        if !std::io::stdin().is_terminal() {
+            bail!("run this in a terminal to answer");
+        }
+        eprint!("Same code on that computer? Hand it the key? [y/N] ");
+        std::io::stderr().flush()?;
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        if line.trim().eq_ignore_ascii_case("y") || line.trim().eq_ignore_ascii_case("yes") {
+            account::hand_over_key(files, w).await?;
+            eprintln!("Done: \"{}\" has your account key.", w.computer);
+        } else {
+            account::refuse_key(files, w).await?;
+            eprintln!("Refused.");
+        }
+    }
+    Ok(())
 }

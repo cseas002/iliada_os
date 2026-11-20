@@ -40,6 +40,16 @@ pub struct AccountInfo {
     pub quota: u64,
 }
 
+/// Another computer of the account asking for the account key.
+#[derive(Debug, Clone, Deserialize)]
+pub struct KeyRequestInfo {
+    pub id: String,
+    /// Its name, as it signed in.
+    pub computer: String,
+    /// Its one-time public key, base64.
+    pub public_key: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct Server {
     base: String,
@@ -137,6 +147,62 @@ impl Server {
         if !r.status().is_success() {
             return Err(Self::failure(r).await);
         }
+        Ok(())
+    }
+
+    /// Sends a JSON request with this computer's token; the answer as JSON
+    /// (`None` when the server knows no such thing).
+    async fn json(&self, r: reqwest::RequestBuilder) -> Result<Option<serde_json::Value>> {
+        let r = self.send(self.authed(r)).await?;
+        match r.status() {
+            StatusCode::NO_CONTENT => Ok(Some(serde_json::Value::Null)),
+            s if s.is_success() => Ok(Some(r.json().await?)),
+            StatusCode::NOT_FOUND => Ok(None),
+            _ => Err(Self::failure(r).await),
+        }
+    }
+
+    /// Asks the account's other computers for the account key, leaving a
+    /// one-time public key (base64). Returns the request's id.
+    pub async fn ask_for_key(&self, public_key: &str) -> Result<String> {
+        let v = self
+            .json(self.http.post(self.url("/v1/keys")).json(&json!({ "public_key": public_key })))
+            .await?
+            .context("this Iliada account server can't hand keys between computers yet")?;
+        v["id"].as_str().map(str::to_owned).context("the account server sent no request id")
+    }
+
+    /// Where a request stands: `waiting`, `refused`, or `answered` with the
+    /// sealed key (base64). `None`: expired or unknown.
+    pub async fn key_request(&self, id: &str) -> Result<Option<(String, Option<String>)>> {
+        Ok(self
+            .json(self.http.get(self.url(&format!("/v1/keys/{id}"))))
+            .await?
+            .map(|v| (v["state"].as_str().unwrap_or_default().to_owned(), v["sealed"].as_str().map(str::to_owned))))
+    }
+
+    /// The account's other computers waiting for the key.
+    pub async fn key_requests(&self) -> Result<Vec<KeyRequestInfo>> {
+        #[derive(Deserialize)]
+        struct List {
+            requests: Vec<KeyRequestInfo>,
+        }
+        match self.json(self.http.get(self.url("/v1/keys"))).await? {
+            Some(v) => Ok(serde_json::from_value::<List>(v)?.requests),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Answers a request with the sealed key (base64).
+    pub async fn approve_key_request(&self, id: &str, sealed: &str) -> Result<()> {
+        self.json(self.http.post(self.url(&format!("/v1/keys/{id}/approve"))).json(&json!({ "sealed": sealed })))
+            .await?
+            .context("that computer stopped waiting (the request expired); ask it to try again")?;
+        Ok(())
+    }
+
+    pub async fn refuse_key_request(&self, id: &str) -> Result<()> {
+        self.json(self.http.post(self.url(&format!("/v1/keys/{id}/refuse"))).json(&json!({}))).await?;
         Ok(())
     }
 
