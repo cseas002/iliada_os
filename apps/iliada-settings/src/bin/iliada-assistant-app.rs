@@ -826,7 +826,7 @@ impl cosmic::Application for App {
                 return Task::batch([self.to_end(), widget::text_input::focus(self.field.clone())]);
             }
             Message::OpenSettings => {
-                let _ = std::process::Command::new("iliada-settings").spawn();
+                let _ = std::process::Command::new("iliada-settings").arg("homer").spawn();
             }
             Message::NewConversation => {
                 if self.busy {

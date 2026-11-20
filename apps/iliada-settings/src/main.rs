@@ -20,7 +20,7 @@ fn main() -> cosmic::iced::Result {
     if !standalone {
         use std::os::unix::process::CommandExt;
         // Only returns if COSMIC Settings could not be started.
-        let err = std::process::Command::new("cosmic-settings").arg(format!("iliada-{}", page.id())).exec();
+        let err = std::process::Command::new("cosmic-settings").args(["iliada", page.id()]).exec();
         eprintln!("cosmic-settings: {err}; showing Iliada's pages on their own");
     }
     let settings = Settings::default().size(Size::new(900.0, 680.0));

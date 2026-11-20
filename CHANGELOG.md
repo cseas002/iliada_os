@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Fixed: Settings links in 0.2.6** did nothing: the update notice, Homer's
+  Settings button and the Settings icon in docks from before 0.2.6. Those
+  docks now show the new Settings icon.
 - **A new computer gets your account key from one already signed in**: no
   need to type the recovery key. On the new computer, Settings → Iliada
   account → "Ask another computer" shows a code; on a computer already
