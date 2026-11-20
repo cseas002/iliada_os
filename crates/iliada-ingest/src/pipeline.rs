@@ -16,6 +16,7 @@ use iliada_types::AppId;
 use crate::closure::{Closure, LibCandidate, compute_closure};
 use crate::control::Control;
 use crate::deb::open_deb;
+use crate::desktop::internet_app;
 use crate::desktop::{self, DesktopEntry};
 use crate::elf::{host_deb_arch, multiarch_triplet, provided_sonames, scan_tree};
 use crate::extract::{ExtractLimits, extract_tar, symlink_stays_inside};
@@ -483,7 +484,10 @@ impl Ingestor {
             icon,
             runtime: self.runtime.name.clone(),
             isolation: self.cfg.isolation,
-            network: self.cfg.network,
+            // A recipe says so, or the app's own launcher does (a browser,
+            // mail, chat: apps built here from the maker or Debian have no
+            // recipe, and Chrome had no internet).
+            network: self.cfg.network || desktop.as_ref().is_some_and(internet_app),
             categories: desktop.as_ref().map(|d| d.categories.clone()).unwrap_or_default(),
             mime_types: desktop.as_ref().map(|d| d.mime_types.clone()).unwrap_or_default(),
         };

@@ -69,6 +69,15 @@ fn split_list(v: &str) -> Vec<String> {
     v.split(';').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect()
 }
 
+/// An app whose launcher says it works over the internet: a browser, mail,
+/// chat, or one that opens web links. Its sandbox gets the network.
+pub fn internet_app(d: &DesktopEntry) -> bool {
+    const KINDS: [&str; 7] =
+        ["Network", "WebBrowser", "Email", "Chat", "InstantMessaging", "IRCClient", "FileTransfer"];
+    d.categories.iter().any(|c| KINDS.contains(&c.as_str()))
+        || d.mime_types.iter().any(|m| m == "x-scheme-handler/http" || m == "x-scheme-handler/https")
+}
+
 /// Resolve an `Icon=` value to a file inside the extracted tree, preferring
 /// large PNGs, then SVG, then pixmaps. Absolute values are re-rooted.
 pub fn find_icon(root: &Path, icon: &str) -> Option<PathBuf> {
@@ -123,6 +132,24 @@ fn collect_files(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browsers_and_mail_get_the_internet() {
+        let entry = |categories: &[&str], mime: &[&str]| DesktopEntry {
+            file: PathBuf::new(),
+            name: None,
+            exec: None,
+            icon: None,
+            categories: categories.iter().map(|s| s.to_string()).collect(),
+            mime_types: mime.iter().map(|s| s.to_string()).collect(),
+            no_display: false,
+        };
+        // Google Chrome's launcher.
+        assert!(internet_app(&entry(&["Network", "WebBrowser"], &["text/html", "x-scheme-handler/https"])));
+        assert!(internet_app(&entry(&["Office", "Email"], &[])));
+        // A calculator stays offline.
+        assert!(!internet_app(&entry(&["GNOME", "Utility", "Calculator"], &[])));
+    }
 
     #[test]
     fn parses_exec_and_lists() {
