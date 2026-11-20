@@ -22,8 +22,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "fs", "sync", "process"]
 futures-util = "0.3"
 
 [workspace.dependencies.libcosmic]
-git = "https://github.com/pop-os/libcosmic.git"
-rev = "430f3d48a97d8779f9c1985473912e594ccca1ae"
+# Named exactly as COSMIC Settings names it (one copy when its pages are
+# built in); the commit is pinned in Cargo.lock.
+git = "https://github.com/pop-os/libcosmic"
 default-features = false
 features = ["tokio", "winit", "wayland", "multi-window", "wgpu"]
 

@@ -125,11 +125,22 @@ pub struct AssistantSettings {
     /// without an administrator's password.
     #[serde(default)]
     pub full_access: bool,
+    /// Kinds of important actions (done in the person's name: sending a
+    /// message, posting) it may take without asking in Auto mode. Empty:
+    /// it always asks first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub on_its_own: Vec<String>,
 }
 
 impl Default for AssistantSettings {
     fn default() -> Self {
-        AssistantSettings { enabled: false, mode: AssistantMode::Ask, model: DEFAULT_MODEL.into(), full_access: false }
+        AssistantSettings {
+            enabled: false,
+            mode: AssistantMode::Ask,
+            model: DEFAULT_MODEL.into(),
+            full_access: false,
+            on_its_own: Vec::new(),
+        }
     }
 }
 

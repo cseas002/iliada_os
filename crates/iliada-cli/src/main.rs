@@ -73,6 +73,9 @@ enum Cmd {
         /// Show a notification when done (the Setup Assistant installs apps this way, in the background).
         #[arg(long, hide = true)]
         notify: bool,
+        /// Afterwards, make this app the web browser (links, web pages) and put it in the dock.
+        #[arg(long, hide = true, value_name = "APP")]
+        default_browser: Option<String>,
     },
     /// Remove apps or software, or turn services off.
     Remove {
@@ -271,13 +274,7 @@ fn changed(v: &serde_json::Value) -> bool {
 }
 
 fn ago(t: u64) -> String {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(t);
-    match now.saturating_sub(t) {
-        s if s < 90 => "just now".into(),
-        s if s < 90 * 60 => format!("{} minutes ago", s / 60),
-        s if s < 36 * 3600 => format!("{} hours ago", s / 3600),
-        s => format!("{} days ago", s / 86400),
-    }
+    iliada_system::ago(t)
 }
 
 async fn store() -> Result<Store> {
@@ -333,10 +330,19 @@ async fn main() -> Result<()> {
             println!("{}", path.display());
             eprintln!("Saved. It is plain text: read it before you share it.");
         }
-        Cmd::Install { names, build, keep_going: false, notify: false } => {
+        Cmd::Install { names, build, keep_going: false, notify: false, default_browser: None } => {
             install(names, build, v).await?;
         }
-        Cmd::Install { names, build, notify, .. } => install_each(names, build, notify, v).await?,
+        Cmd::Install { names, build, notify, default_browser, .. } => {
+            let r = install_each(names, build, notify, v).await;
+            // The browser chosen in the Setup Assistant opens links, and sits in the dock.
+            if let Some(browser) = default_browser
+                && let Err(e) = make_default_browser(&browser)
+            {
+                eprintln!("{browser} could not be made the default browser: {e:#}");
+            }
+            r?
+        }
         Cmd::Remove { names } => remove(names, v).await?,
         Cmd::Update => {
             let r = store().await?.sync().await?;
@@ -583,6 +589,63 @@ async fn install_each(names_typed: Vec<String>, build: bool, notify: bool, v: bo
     }
     anyhow::ensure!(failed.is_empty(), "{} could not be installed", and_list(&failed));
     Ok(())
+}
+
+/// Make the app `name` (in Applications) the browser for links and web
+/// pages, and put it in the dock after Files.
+fn make_default_browser(name: &str) -> Result<()> {
+    // iliada-appd writes each app's launcher here, naming its bundle.
+    let bundle_line = format!("X-Iliada-Bundle=/Applications/{name}.app");
+    let launcher = std::fs::read_dir("/var/lib/iliada-desktop/applications")?
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| std::fs::read_to_string(p).is_ok_and(|t| t.lines().any(|l| l == bundle_line)))
+        .with_context(|| format!("{name} has no launcher (is it in Applications?)"))?;
+    let file = launcher.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+    for mime in ["x-scheme-handler/http", "x-scheme-handler/https", "text/html", "application/xhtml+xml"] {
+        let ok = std::process::Command::new("xdg-mime").args(["default", &file, mime]).status()?.success();
+        anyhow::ensure!(ok, "xdg-mime could not set {mime}");
+    }
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".config")))
+        .context("no home folder")?;
+    let favorites = base.join("cosmic/com.system76.CosmicAppList/v1/favorites");
+    let current = std::fs::read_to_string(&favorites).or_else(|_| {
+        std::fs::read_to_string("/run/current-system/sw/share/cosmic/com.system76.CosmicAppList/v1/favorites")
+    })?;
+    if let Some(updated) = with_in_dock(&current, file.trim_end_matches(".desktop")) {
+        if let Some(dir) = favorites.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(&favorites, updated)?;
+    }
+    Ok(())
+}
+
+/// The dock's favorites list (COSMIC's RON list of launcher ids) with `id`
+/// added after Files; `None` when it is there already.
+fn with_in_dock(favorites: &str, id: &str) -> Option<String> {
+    let quoted = format!("\"{id}\"");
+    if favorites.contains(&quoted) {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut added = false;
+    for line in favorites.lines() {
+        out.push(line.to_owned());
+        if !added && line.contains("\"com.system76.CosmicFiles\"") {
+            let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+            out.push(format!("{indent}{quoted},"));
+            added = true;
+        }
+    }
+    if !added {
+        // No Files in the dock: first.
+        let at = out.iter().position(|l| l.trim_start().starts_with('[')).map_or(0, |i| i + 1);
+        out.insert(at, format!("    {quoted},"));
+    }
+    Some(out.join("\n") + "\n")
 }
 
 /// "Firefox", "Firefox and VLC", "Firefox, VLC and GIMP".
@@ -1038,6 +1101,20 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn the_browser_goes_into_the_dock_after_files() {
+        let dock = "[\n    \"com.system76.CosmicFiles\",\n    \"org.iliada.Store\",\n]\n";
+        let chrome = "iliada-org.debian.google-chrome-stable";
+        let with = with_in_dock(dock, chrome).unwrap();
+        assert_eq!(
+            with,
+            "[\n    \"com.system76.CosmicFiles\",\n    \"iliada-org.debian.google-chrome-stable\",\n    \"org.iliada.Store\",\n]\n"
+        );
+        assert_eq!(with_in_dock(&with, chrome), None, "already there");
+        let no_files = with_in_dock("[\n    \"org.iliada.Store\",\n]\n", chrome).unwrap();
+        assert!(no_files.starts_with("[\n    \"iliada-org.debian.google-chrome-stable\","));
     }
 
     #[test]

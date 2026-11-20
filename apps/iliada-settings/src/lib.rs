@@ -2,6 +2,7 @@
 //! Iliada system service as a stream of messages for the UI.
 
 pub mod account;
+pub mod panel;
 
 use futures_util::Stream;
 use iliada_system::client;
@@ -41,16 +42,8 @@ pub fn run(request: Request) -> impl Stream<Item = Progress> + Send + 'static {
     })
 }
 
-/// "5 minutes ago".
-pub fn ago(t: u64) -> String {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(t);
-    match now.saturating_sub(t) {
-        s if s < 90 => "just now".into(),
-        s if s < 90 * 60 => format!("{} minutes ago", s / 60),
-        s if s < 36 * 3600 => format!("{} hours ago", s / 3600),
-        s => format!("{} days ago", s / 86400),
-    }
-}
+/// "5 minutes ago", "1 hour ago".
+pub use iliada_system::ago;
 
 /// Open a web page in the user's browser.
 pub fn open_url(url: &str) {

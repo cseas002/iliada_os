@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **One Settings window.** Iliada's pages (the Iliada account, Privacy,
+  Homer, Updates, Backup, Services, Command-line tools, About Iliada) are
+  now pages of COSMIC Settings, next to Wi-Fi, Displays and Sound: one app
+  called Settings, one sidebar. (Before, Displays and the like opened a
+  second settings window.)
+- **Google Chrome**: ticked as the browser in the Setup Assistant, in the
+  Store (downloaded from Google and set up on the computer), and the
+  browser you choose opens links and sits in the dock.
+- **Chrome had no internet**: apps built on the computer (Chrome, Debian
+  apps added later) now get the network when they're a browser, mail or
+  chat app.
+- **Iliad names and icons for the built-in apps**: Files, Text Editor,
+  Terminal, Media Player (a lyre), Photos, System Monitor, Document Reader
+  (a scroll), Screenshot, and the dock's search, workspaces and app
+  library, all in the bronze-and-navy style; "COSMIC" is gone from their
+  names. GVim, Vim and the advanced network editor leave the app library.
+
+- **Homer asks before important things done in your name** (sending a
+  message or an email) even in Auto mode, unless you let him: Settings →
+  Homer → "Send messages and emails without asking", or just tell him.
+  Changing that always needs your yes, so nothing he reads (an email, a web
+  page) can give him more freedom.
+- "Checked 1 hour ago", not "1 hours ago" (Settings, Homer and the
+  `iliada` command now share one wording).
+- A smaller USB image: the live session leaves out COSMIC's document
+  reader (OCR for every language, 1 GB) and System76's scheduler (kernel
+  tracing tools); installed systems keep both.
 - **Safe against power cuts**: the configuration's history is now written
   to disk before a change counts as done, and if a crash still damages it,
   Iliada mends it on its own before the next change or update. (A test

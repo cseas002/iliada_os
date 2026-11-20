@@ -1,0 +1,215 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index fd1c74b..c26de0e 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,5 +1,7 @@
+ [workspace]
+ members = ["cosmic-settings", "page", "pages/*", "subscriptions/*"]
++# Iliada's own source, for its settings pages (iliada-settings): its own workspaces.
++exclude = ["iliada"]
+ default-members = ["cosmic-settings"]
+ resolver = "3"
+ 
+diff --git a/cosmic-settings/Cargo.toml b/cosmic-settings/Cargo.toml
+index fad2df7..5f557b3 100644
+--- a/cosmic-settings/Cargo.toml
++++ b/cosmic-settings/Cargo.toml
+@@ -9,6 +9,8 @@ publish = false
+ xdgen = "0.1"
+ 
+ [dependencies]
++# Iliada's settings pages (updates, privacy, Homer, backup…), shown among COSMIC's.
++iliada-settings = { path = "../iliada/apps/iliada-settings" }
+ accounts-zbus = { git = "https://github.com/pop-os/dbus-settings-bindings", optional = true }
+ anyhow = "1.0"
+ ashpd = { version = "0.12", default-features = false, features = [
+diff --git a/cosmic-settings/src/app.rs b/cosmic-settings/src/app.rs
+index b77f643..8a19d87 100644
+--- a/cosmic-settings/src/app.rs
++++ b/cosmic-settings/src/app.rs
+@@ -143,6 +143,9 @@ impl SettingsApp {
+             PageCommands::Wireless => self.pages.page_id::<networking::wifi::Page>(),
+             #[cfg(feature = "page-workspaces")]
+             PageCommands::Workspaces => self.pages.page_id::<desktop::workspaces::Page>(),
++            PageCommands::Iliada { page } => {
++                self.pages.find_page_by_id(&format!("iliada-{page}")).map(|(id, _)| id)
++            }
+         }
+     }
+ 
+@@ -214,6 +217,8 @@ impl cosmic::Application for SettingsApp {
+             context_title: None,
+         };
+ 
++        // Iliada: its pages among COSMIC's, in one Settings app.
++        app.insert_page::<crate::pages::iliada::Account>();
+         #[cfg(feature = "page-networking")]
+         app.insert_page::<networking::Page>();
+         #[cfg(feature = "page-bluetooth")]
+@@ -230,8 +235,15 @@ impl cosmic::Application for SettingsApp {
+         #[cfg(feature = "page-input")]
+         app.insert_page::<input::Page>();
+         app.insert_page::<applications::Page>();
++        app.insert_page::<crate::pages::iliada::Privacy>();
++        app.insert_page::<crate::pages::iliada::Homer>();
++        app.insert_page::<crate::pages::iliada::Updates>();
++        app.insert_page::<crate::pages::iliada::Backup>();
+         app.insert_page::<time::Page>();
+         app.insert_page::<system::Page>();
++        app.insert_page::<crate::pages::iliada::Services>();
++        app.insert_page::<crate::pages::iliada::Tools>();
++        app.insert_page::<crate::pages::iliada::About>();
+ 
+         let active_id = match flags.sub_command {
+             Some(p) => app.subtask_to_page(&p),
+@@ -401,6 +413,10 @@ impl cosmic::Application for SettingsApp {
+             }
+ 
+             Message::PageMessage(message) => match message {
++                crate::pages::Message::Iliada(page, message) => {
++                    return crate::pages::iliada::update(&mut self.pages, page, message);
++                }
++                crate::pages::Message::IliadaNothing => {}
+                 crate::pages::Message::CloseContextDrawer => return self.close_context_drawer(),
+ 
+                 #[cfg(feature = "page-accessibility")]
+diff --git a/cosmic-settings/src/main.rs b/cosmic-settings/src/main.rs
+index faf1a8f..562dabc 100644
+--- a/cosmic-settings/src/main.rs
++++ b/cosmic-settings/src/main.rs
+@@ -160,6 +160,9 @@ pub enum PageCommands {
+     /// Workspaces settings page
+     #[cfg(feature = "page-workspaces")]
+     Workspaces,
++    /// One of Iliada's pages: updates, privacy, homer, backup, account,
++    /// services, tools, about
++    Iliada { page: String },
+ }
+ 
+ impl FromStr for PageCommands {
+diff --git a/cosmic-settings/src/pages/iliada.rs b/cosmic-settings/src/pages/iliada.rs
+new file mode 100644
+index 0000000..cc859ba
+--- /dev/null
++++ b/cosmic-settings/src/pages/iliada.rs
+@@ -0,0 +1,97 @@
++// Iliada's settings pages (the Iliada account, privacy, Homer, updates,
++// backup, services, command-line tools, about) among COSMIC's own, so the
++// computer has one Settings app. Each page shows Iliada's panel
++// (iliada_settings::panel) for that page.
++
++use cosmic::Task;
++use cosmic_settings_page::{self as page, Section, section};
++use iliada_settings::panel::{self, Page as IliadaPage, Panel};
++use slotmap::SlotMap;
++
++/// An Iliada page's message, as COSMIC Settings carries it.
++fn wrap(page: IliadaPage, task: cosmic::app::Task<panel::Message>) -> Task<crate::pages::Message> {
++    task.map(move |action| match action {
++        cosmic::Action::App(m) => crate::pages::Message::Iliada(page, m),
++        _ => crate::pages::Message::IliadaNothing,
++    })
++}
++
++fn wrap_app(page: IliadaPage, task: cosmic::app::Task<panel::Message>) -> cosmic::app::Task<crate::Message> {
++    task.map(move |action| match action {
++        cosmic::Action::App(m) => cosmic::Action::App(crate::pages::Message::Iliada(page, m).into()),
++        cosmic::Action::Cosmic(c) => cosmic::Action::Cosmic(c),
++        _ => cosmic::Action::None,
++    })
++}
++
++macro_rules! iliada_page {
++    ($name:ident, $page:expr) => {
++        pub struct $name {
++            panel: Panel,
++        }
++
++        impl Default for $name {
++            fn default() -> Self {
++                Self { panel: Panel::new($page) }
++            }
++        }
++
++        impl page::AutoBind<crate::pages::Message> for $name {}
++
++        impl page::Page<crate::pages::Message> for $name {
++            fn info(&self) -> page::Info {
++                page::Info::new(format!("iliada-{}", $page.id()), $page.icon())
++                    .title($page.title())
++                    .description($page.description())
++            }
++
++            fn content(
++                &self,
++                sections: &mut SlotMap<section::Entity, Section<crate::pages::Message>>,
++            ) -> Option<page::Content> {
++                Some(vec![sections.insert(Section::default().view::<$name>(|_binder, page, _section| {
++                    page.panel.content().map(|m| crate::pages::Message::Iliada($page, m))
++                }))])
++            }
++
++            fn dialog(&self) -> Option<cosmic::Element<'_, crate::pages::Message>> {
++                self.panel.dialog().map(|e| e.map(|m| crate::pages::Message::Iliada($page, m)))
++            }
++
++            fn on_enter(&mut self) -> Task<crate::pages::Message> {
++                wrap($page, self.panel.enter($page))
++            }
++        }
++    };
++}
++
++iliada_page!(Account, IliadaPage::Account);
++iliada_page!(Privacy, IliadaPage::Privacy);
++iliada_page!(Homer, IliadaPage::Assistant);
++iliada_page!(Updates, IliadaPage::Updates);
++iliada_page!(Backup, IliadaPage::Backup);
++iliada_page!(Services, IliadaPage::Services);
++iliada_page!(Tools, IliadaPage::Tools);
++iliada_page!(About, IliadaPage::About);
++
++/// A message for one of Iliada's pages.
++pub fn update(
++    pages: &mut page::Binder<crate::pages::Message>,
++    page: IliadaPage,
++    message: panel::Message,
++) -> cosmic::app::Task<crate::Message> {
++    let panel = match page {
++        IliadaPage::Account => pages.page_mut::<Account>().map(|p| &mut p.panel),
++        IliadaPage::Privacy => pages.page_mut::<Privacy>().map(|p| &mut p.panel),
++        IliadaPage::Assistant => pages.page_mut::<Homer>().map(|p| &mut p.panel),
++        IliadaPage::Updates => pages.page_mut::<Updates>().map(|p| &mut p.panel),
++        IliadaPage::Backup => pages.page_mut::<Backup>().map(|p| &mut p.panel),
++        IliadaPage::Services => pages.page_mut::<Services>().map(|p| &mut p.panel),
++        IliadaPage::Tools => pages.page_mut::<Tools>().map(|p| &mut p.panel),
++        IliadaPage::About => pages.page_mut::<About>().map(|p| &mut p.panel),
++    };
++    match panel {
++        Some(panel) => wrap_app(page, panel.update(message)),
++        None => Task::none(),
++    }
++}
+diff --git a/cosmic-settings/src/pages/mod.rs b/cosmic-settings/src/pages/mod.rs
+index e24524e..8710c84 100644
+--- a/cosmic-settings/src/pages/mod.rs
++++ b/cosmic-settings/src/pages/mod.rs
+@@ -11,6 +11,7 @@ pub mod bluetooth;
+ pub mod desktop;
+ #[cfg(feature = "page-display")]
+ pub mod display;
++pub mod iliada;
+ #[cfg(feature = "page-input")]
+ pub mod input;
+ #[cfg(feature = "page-networking")]
+@@ -80,6 +81,10 @@ pub enum Message {
+     #[cfg(feature = "page-networking")]
+     Networking(networking::Message),
+     Page(Entity),
++    /// One of Iliada's pages (updates, privacy, Homer…).
++    Iliada(iliada_settings::panel::Page, iliada_settings::panel::Message),
++    /// What an Iliada page asked that only its own window could do.
++    IliadaNothing,
+     #[cfg(feature = "wayland")]
+     Panel(desktop::panel::Message),
+     #[cfg(feature = "wayland")]

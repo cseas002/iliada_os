@@ -61,6 +61,8 @@ enum Message {
     /// Build an app that isn't in the Store from Debian's package.
     Build(String),
     Built(String, Result<(), String>),
+    /// Get an app from its maker's download (Google Chrome), by its URL.
+    FromMaker(&'static str),
 }
 
 struct App {
@@ -143,7 +145,52 @@ fn load_system() -> Task<Message> {
     cosmic::task::future(async { Message::System(iliada_system::client::status().await.map_err(|e| format!("{e:#}"))) })
 }
 
+/// Apps whose makers don't let them be shared (Google Chrome): offered on
+/// the processors they're made for.
+fn makers() -> impl Iterator<Item = &'static translate::FromMaker> {
+    translate::FROM_MAKER.iter().filter(|_| std::env::consts::ARCH == "x86_64")
+}
+
 impl App {
+    /// An app from its maker's own download (Google Chrome): Get builds it
+    /// on this computer, then Open.
+    fn maker_row<'a>(&'a self, m: &'static translate::FromMaker) -> Element<'a, Message> {
+        let spacing = cosmic::theme::spacing();
+        let installed = self.installed.values().find(|i| i.name == m.name).map(|i| i.id.clone());
+        let action: Element<_> = match (self.status.get(m.url), installed) {
+            (Some(Status::Working(what)), _) => widget::row::with_capacity(2)
+                .push(widget::progress_bar::circular::Circular::new().size(20.0))
+                .push(widget::text::body(*what))
+                .spacing(spacing.space_xs)
+                .align_y(Alignment::Center)
+                .into(),
+            (_, Some(id)) => widget::button::standard("Open").on_press(Message::Open(id)).into(),
+            _ => widget::button::suggested("Get").on_press(Message::FromMaker(m.url)).into(),
+        };
+        let text = widget::column::with_capacity(3)
+            .push(widget::text::title4(m.name))
+            .push(widget::text::body("Browse the web"))
+            .push(widget::text::caption("Downloaded from its maker and set up on this computer  ·  Uses the internet"))
+            .spacing(spacing.space_xxxs)
+            .width(Length::Fill);
+        let mut col = widget::column::with_capacity(2).push(
+            widget::row::with_capacity(3)
+                .push(widget::icon::from_name("web-browser").size(56).icon())
+                .push(text)
+                .push(action)
+                .spacing(spacing.space_m)
+                .align_y(Alignment::Center),
+        );
+        if let Some(Status::Failed(e)) = self.status.get(m.url) {
+            col = col.push(widget::text::caption(format!("Could not install it: {e}")));
+        }
+        widget::container(col.spacing(spacing.space_xxs))
+            .padding(spacing.space_s)
+            .class(cosmic::theme::Container::Card)
+            .width(Length::Fill)
+            .into()
+    }
+
     /// An app Debian has that isn't in the Store: Build, then Open.
     fn debian_row<'a>(&'a self, d: &'a DebianApp) -> Element<'a, Message> {
         let spacing = cosmic::theme::spacing();
@@ -203,6 +250,14 @@ impl App {
                 list = list.push(self.row(app));
                 found = true;
             }
+        }
+        for m in makers().filter(|m| {
+            m.name.to_lowercase().contains(&needle)
+                || m.names.iter().any(|n| n.contains(&needle))
+                || ["browser", "web", "internet"].iter().any(|w| needle.contains(w))
+        }) {
+            list = list.push(self.maker_row(m));
+            found = true;
         }
         if let Some(Ok(s)) = &self.system {
             for item in iliada_system::software::search(&needle) {
@@ -431,6 +486,21 @@ impl cosmic::Application for App {
                 }
                 self.installed = self.store.installed();
             }
+            Message::FromMaker(url) => {
+                let list = StoreConfig::from_env()
+                    .ok()
+                    .and_then(|c| c.app_list)
+                    .unwrap_or_else(|| "/etc/iliada/apps.toml".into());
+                if let Err(e) = translate::request_url(&list, url) {
+                    self.status.insert(url.to_owned(), Status::Failed(format!("{e:#}")));
+                    return Task::none();
+                }
+                self.status.insert(url.to_owned(), Status::Working("Downloading and setting up…"));
+                return cosmic::task::future(async move {
+                    let r = translate::wait_url(url, std::time::Duration::from_secs(30 * 60), &|_| {}).await;
+                    Message::Built(url.to_owned(), r.map_err(|e| format!("{e:#}")))
+                });
+            }
             Message::Build(package) => {
                 let list = StoreConfig::from_env()
                     .ok()
@@ -549,10 +619,23 @@ impl cosmic::Application for App {
                             || a.summary.to_lowercase().contains(&needle)
                     })
                     .collect();
-                if apps.is_empty() {
+                // Apps from their makers (Google Chrome): with the browsers.
+                let from_makers: Vec<_> = makers()
+                    .filter(|m| match &page {
+                        Page::Discover => true,
+                        Page::Category(c) => *c == "Internet",
+                        Page::Installed => self.installed.values().any(|i| i.name == m.name),
+                        Page::System(_) => false,
+                    })
+                    .filter(|m| needle.is_empty() || m.name.to_lowercase().contains(&needle))
+                    .collect();
+                if apps.is_empty() && from_makers.is_empty() {
                     widget::container(widget::text::body("No apps here yet.")).center(Length::Fill).into()
                 } else {
-                    let mut list = widget::column::with_capacity(apps.len()).spacing(spacing.space_s);
+                    let mut list = widget::column::with_capacity(apps.len() + 1).spacing(spacing.space_s);
+                    for m in from_makers {
+                        list = list.push(self.maker_row(m));
+                    }
                     for app in apps {
                         list = list.push(self.row(app));
                     }

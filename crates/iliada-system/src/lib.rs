@@ -58,3 +58,36 @@ pub fn changes(count: usize) -> anyhow::Result<Vec<Change>> {
         .map(|(t, what)| Change { time: t.parse().unwrap_or(0), what: what.to_owned() })
         .collect())
 }
+
+/// How long ago `t` (seconds since 1970) was, in words: "just now",
+/// "1 hour ago", "3 days ago". One wording for Settings, Homer and the
+/// `iliada` command.
+pub fn ago(t: u64) -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(t);
+    ago_from(now.saturating_sub(t))
+}
+
+fn ago_from(secs: u64) -> String {
+    let count = |n: u64, unit: &str| if n == 1 { format!("1 {unit} ago") } else { format!("{n} {unit}s ago") };
+    match secs {
+        s if s < 90 => "just now".into(),
+        s if s < 90 * 60 => count(s / 60, "minute"),
+        s if s < 36 * 3600 => count(s / 3600, "hour"),
+        s => count(s / 86400, "day"),
+    }
+}
+
+#[cfg(test)]
+mod ago_tests {
+    use super::ago_from;
+
+    #[test]
+    fn reads_like_a_person_would_say_it() {
+        assert_eq!(ago_from(10), "just now");
+        assert_eq!(ago_from(5 * 60), "5 minutes ago");
+        assert_eq!(ago_from(90 * 60), "1 hour ago");
+        assert_eq!(ago_from(3 * 3600), "3 hours ago");
+        assert_eq!(ago_from(36 * 3600), "1 day ago");
+        assert_eq!(ago_from(3 * 86400), "3 days ago");
+    }
+}

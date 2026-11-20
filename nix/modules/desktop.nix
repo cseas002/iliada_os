@@ -5,6 +5,11 @@
 let
   cfg = config.iliada.desktop;
   desktopApps = pkgs.callPackage ../desktop-apps.nix { };
+  # What COSMIC Settings needs of Iliada's source for its pages.
+  iliadaSource = lib.fileset.toSource {
+    root = ../..;
+    fileset = lib.fileset.unions [ ../../Cargo.toml ../../Cargo.lock ../../crates ../../apps ];
+  };
   # The default wallpaper: Homer's wine-dark sea at dusk, Troy on its hill,
   # the Achaean ships on the horizon (nix/branding/wallpaper).
   wallpaper = pkgs.runCommand "iliada-wallpaper" { nativeBuildInputs = [ pkgs.librsvg ]; } ''
@@ -12,6 +17,18 @@ let
     rsvg-convert -w 3840 ${../branding/wallpaper/wine-dark-sea.svg} -o $out/share/backgrounds/iliada/wine-dark-sea.png
   '';
   themeIds = "com.system76.CosmicTheme.Dark com.system76.CosmicTheme.Light com.system76.CosmicTheme.Dark.Builder com.system76.CosmicTheme.Light.Builder";
+  # COSMIC's apps under plain names (left out when a system excludes the app).
+  renamedApps = lib.filter (a: !(lib.elem a.pkg config.environment.cosmic.excludePackages)) [
+    { pkg = pkgs.cosmic-settings; id = "com.system76.CosmicSettings"; name = "Settings"; }
+    { pkg = pkgs.cosmic-files; id = "com.system76.CosmicFiles"; name = "Files"; }
+    { pkg = pkgs.cosmic-edit; id = "com.system76.CosmicEdit"; name = "Text Editor"; }
+    { pkg = pkgs.cosmic-term; id = "com.system76.CosmicTerm"; name = "Terminal"; }
+    { pkg = pkgs.cosmic-player; id = "com.system76.CosmicPlayer"; name = "Media Player"; }
+    { pkg = pkgs.cosmic-viewer; id = "com.system76.CosmicViewer"; name = "Photos"; }
+    { pkg = pkgs.cosmic-monitor; id = "com.system76.CosmicMonitor"; name = "System Monitor"; }
+    { pkg = pkgs.cosmic-reader; id = "com.system76.CosmicReader"; name = "Document Reader"; }
+    { pkg = pkgs.cosmic-screenshot; id = "com.system76.CosmicScreenshot"; name = "Screenshot"; }
+  ];
 in
 {
   options.iliada.desktop = {
@@ -38,6 +55,31 @@ in
         cosmic-files = prev.cosmic-files.overrideAttrs (old: {
           patches = (old.patches or [ ]) ++ [ ../patches/cosmic-files-app-bundles.patch ];
         });
+        # One Settings app: COSMIC Settings shows Iliada's pages (account,
+        # privacy, Homer, updates, backup…) among its own. Iliada's source
+        # goes next to it (the pages are iliada_settings::panel), and the
+        # lock file covers both.
+        cosmic-settings = prev.cosmic-settings.overrideAttrs (old: {
+          patches = (old.patches or [ ]) ++ [ ../patches/cosmic-settings-iliada-pages.patch ];
+          postPatch = (old.postPatch or "") + ''
+            cp -r ${iliadaSource} iliada
+            chmod -R u+w iliada
+            cp ${../patches/cosmic-settings-iliada.Cargo.lock} Cargo.lock
+          '';
+          cargoDeps = final.rustPlatform.importCargoLock {
+            lockFile = ../patches/cosmic-settings-iliada.Cargo.lock;
+            allowBuiltinFetchGit = true;
+          };
+          # The Iliada account's backups are compressed with zstd.
+          buildInputs = (old.buildInputs or [ ]) ++ [ final.zstd ];
+        });
+        # Every COSMIC app is built with this hook, which points at COSMIC
+        # Settings' theme files. Give it the stock COSMIC Settings (same
+        # theme files) so the other apps stay byte-identical to nixpkgs and
+        # download from its cache, instead of all compiling here.
+        libcosmicAppHook = prev.libcosmicAppHook.override {
+          targetPackages = prev.targetPackages // { inherit (prev) cosmic-settings; };
+        };
       })
     ];
     services.desktopManager.cosmic.enable = true;
@@ -89,16 +131,27 @@ in
             Videos,
         ]
         EOF
-        # One Settings app: Iliada Settings lists COSMIC's pages too, so COSMIC's
-        # own entry leaves Applications (it still opens from the panel).
         apps=$out/share/applications
         mkdir -p $apps
-        sed '/^\[Desktop Entry\]/a NoDisplay=true' \
-          ${pkgs.cosmic-settings}/share/applications/com.system76.CosmicSettings.desktop \
-          > $apps/com.system76.CosmicSettings.desktop
+        # COSMIC's apps by plain names ("Files", not "COSMIC Files"), and
+        # Iliada's icons for them (nix/branding/cosmic-icons), at every size
+        # their own come in. One Settings app: COSMIC Settings, which shows
+        # Iliada's pages among its own, is "Settings".
+        rename() {
+          [ -f "$1" ] || return 0
+          sed -e '/^Name\[/d' -e "s/^Name=.*/Name=$2/" "$1" > $apps/$(basename "$1")
+        }
+        ${lib.concatMapStrings ({ pkg, id, name }: ''
+          rename ${pkg}/share/applications/${id}.desktop "${name}"
+        '') renamedApps}
+        for icon in ${../branding/cosmic-icons}/*.svg; do
+          for size in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 scalable; do
+            install -Dm644 "$icon" $out/share/icons/hicolor/$size/apps/$(basename "$icon")
+          done
+        done
         # Tools for the terminal and for Linux experts stay out of the app
         # library (they still run from a terminal).
-        for id in htop btop nixos-manual qt5ct qt6ct; do
+        for id in htop btop nixos-manual qt5ct qt6ct gvim vim nm-connection-editor; do
           printf '[Desktop Entry]\nType=Application\nName=%s\nExec=true\nNoDisplay=true\n' $id > $apps/$id.desktop
         done
         cat > $dock/favorites <<'EOF'
@@ -106,7 +159,7 @@ in
             "com.system76.CosmicFiles",
             "org.iliada.Store",
             "org.iliada.Assistant",
-            "org.iliada.Settings",
+            "com.system76.CosmicSettings",
             "com.system76.CosmicEdit",
             "com.system76.CosmicTerm",
         ]

@@ -193,16 +193,19 @@ impl App {
 /// What the "Choose your apps" page offers, in order: (Store id, or
 /// `chrome`; a few plain words; ticked at first; a browser).
 const PICKS: &[(&str, &str, bool, bool)] = &[
-    ("org.debian.firefox-esr", "Fast, private browsing", true, true),
-    (CHROME, "Google's browser", false, true),
+    // Chrome is the browser most people know: ticked (where Google makes it,
+    // Intel and AMD; elsewhere Firefox is, see `picks`).
+    ("org.debian.firefox-esr", "Fast, private browsing", false, true),
+    (CHROME, "Google's browser", true, true),
     ("org.debian.chromium", "Chrome without Google's extras", false, true),
     ("org.debian.libreoffice-writer", "Documents, like Word", true, false),
     ("org.debian.libreoffice-calc", "Spreadsheets, like Excel", true, false),
     ("org.debian.libreoffice-impress", "Slides, like PowerPoint", false, false),
     ("org.debian.thunderbird", "Email and calendar", false, false),
     ("org.debian.vlc-bin", "Plays any video or music", true, false),
-    ("org.debian.loupe", "Look at your photos", true, false),
-    ("org.debian.evince", "Read PDFs", true, false),
+    // Iliada comes with Photos and Document Reader: these are extras.
+    ("org.debian.loupe", "Another photo viewer", false, false),
+    ("org.debian.evince", "Read and fill in PDFs", false, false),
     ("org.debian.gimp", "Edit photos", false, false),
     ("org.debian.inkscape", "Drawings and logos", false, false),
     ("org.debian.audacity", "Record and edit sound", false, false),
@@ -245,6 +248,8 @@ fn picks(apps: &[AppEntry], installed: &BTreeSet<String>, arch: &str) -> Vec<Pic
                 (a.name.clone(), a.local_archive().map_or(0, |x| x.size), a.icon.clone())
             };
             let installed = installed.contains(key) || installed.contains(&name);
+            // No Chrome here (ARM): Firefox is the browser ticked instead.
+            let default = default || (key == "org.debian.firefox-esr" && arch != "x86_64");
             Some(Pick { key: key.to_owned(), name, blurb, size, icon, browser, default, installed })
         })
         .collect()
@@ -281,7 +286,13 @@ fn and_list(items: &[String]) -> String {
 fn install_in_background(names: &[String]) -> std::io::Result<()> {
     let iliada = "/run/current-system/sw/bin/iliada";
     let iliada = if std::path::Path::new(iliada).exists() { iliada } else { "iliada" };
-    let install = [iliada, "install", "--build", "--keep-going", "--notify", "--"];
+    // The browser chosen (Chrome first) opens links and sits in the dock.
+    let browser = ["Google Chrome", "Firefox", "Chromium"].into_iter().find(|b| names.iter().any(|n| n == b));
+    let mut install = vec![iliada, "install", "--build", "--keep-going", "--notify"];
+    if let Some(b) = browser {
+        install.extend(["--default-browser", b]);
+    }
+    install.push("--");
     let started = std::process::Command::new("systemd-run")
         .args([
             "--user",
@@ -292,7 +303,7 @@ fn install_in_background(names: &[String]) -> std::io::Result<()> {
             // From this environment: user services have a short PATH.
             "--setenv=PATH",
         ])
-        .args(install)
+        .args(&install)
         .args(names)
         .status()
         .is_ok_and(|s| s.success());
@@ -771,11 +782,14 @@ mod tests {
         let names: Vec<_> = p.iter().map(|p| p.name.as_str()).collect();
         // In the page's order; Chrome is offered on Intel/AMD even though it isn't in the Store.
         assert_eq!(names, ["Firefox", "Google Chrome", "VLC"]);
-        assert!(p[0].browser && p[0].default && !p[0].installed);
-        assert!(p[1].browser && !p[1].default);
+        // Chrome is the ticked browser on Intel/AMD; Firefox is offered.
+        assert!(p[0].browser && !p[0].default && !p[0].installed);
+        assert!(p[1].browser && p[1].default);
         assert!(p[2].installed && p[2].size == 170_000_000);
         // No Chrome for ARM.
-        assert!(picks(&apps, &installed, "aarch64").iter().all(|p| p.key != CHROME));
+        let arm = picks(&apps, &installed, "aarch64");
+        assert!(arm.iter().all(|p| p.key != CHROME));
+        assert!(arm[0].default, "no Chrome on ARM: Firefox is ticked");
     }
 
     #[test]

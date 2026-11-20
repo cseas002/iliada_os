@@ -228,12 +228,7 @@ fn show_requests() -> impl futures_util::Stream<Item = Message> {
 }
 
 fn ago(t: u64) -> String {
-    match iliada_assistant::history::now().saturating_sub(t) {
-        s if s < 90 => "just now".into(),
-        s if s < 90 * 60 => format!("{} minutes ago", s / 60),
-        s if s < 36 * 3600 => format!("{} hours ago", s / 3600),
-        s => format!("{} days ago", s / 86400),
-    }
+    iliada_settings::ago(t)
 }
 
 impl App {

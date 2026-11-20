@@ -86,6 +86,8 @@ pub struct Assistant {
     api: api::Api,
     mode: AssistantMode,
     full_access: bool,
+    /// Kinds of important actions it may take without asking (Auto mode).
+    on_its_own: Vec<String>,
     store: Store,
     system: String,
     tools: Value,
@@ -113,6 +115,7 @@ impl Assistant {
             settings.full_access,
             Store::new(StoreConfig::from_env()?)?,
         );
+        a.on_its_own = settings.on_its_own.clone();
         if let Some(home) = std::env::var_os("HOME") {
             // Otherwise models guess (/home/<name>, /Users/…).
             a.system.push_str(&format!("\n- This person's home folder is {}.", home.to_string_lossy()));
@@ -131,6 +134,7 @@ impl Assistant {
             api,
             mode,
             full_access,
+            on_its_own: Vec::new(),
             store,
             system: system_prompt(full_access),
             tools: tools::definitions(full_access),
@@ -216,7 +220,7 @@ impl Assistant {
                     Err(anyhow::anyhow!("{name} needs full access (Settings → Assistant)"))
                 } else if tools::acts(name) {
                     let action = tools::describe(name, input);
-                    let ask = self.mode == AssistantMode::Ask || tools::always_asks(name);
+                    let ask = tools::asks_first(name, self.mode, &self.on_its_own);
                     if ask && !ui.approve(&action).await {
                         audit(
                             self.log.as_deref(),
@@ -231,6 +235,14 @@ impl Assistant {
                     } else {
                         ui.progress(&format!("{action}…"));
                         let r = tools::run(&self.store, name, input).await;
+                        // Takes effect in this conversation too, not only the next.
+                        if name == "allow_on_its_own" && r.is_ok() {
+                            let kind = input["kind"].as_str().unwrap_or("").to_owned();
+                            self.on_its_own.retain(|k| *k != kind);
+                            if input["allow"].as_bool() == Some(true) {
+                                self.on_its_own.push(kind);
+                            }
+                        }
                         audit(
                             self.log.as_deref(),
                             &self.api.model,
@@ -597,6 +609,7 @@ mod tests {
             mode: AssistantMode::Auto,
             model: "deepseek/deepseek-v4-flash".into(),
             full_access: false,
+            on_its_own: Vec::new(),
         };
         assert_eq!(s.effective_mode(), AssistantMode::Auto);
         assert!(!s.recommended_for_auto());

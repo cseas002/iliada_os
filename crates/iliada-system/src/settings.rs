@@ -109,7 +109,8 @@ pub fn remove_tools(doc: &mut DocumentMut, names: &[String]) -> Vec<String> {
     removed
 }
 
-/// `[assistant]`: enabled, mode ("ask" / "auto"), model, full_access.
+/// `[assistant]`: enabled, mode ("ask" / "auto"), model, full_access,
+/// on_its_own (kinds of important actions it may take without asking).
 pub fn assistant(doc: &DocumentMut) -> crate::protocol::AssistantSettings {
     use crate::protocol::{AssistantMode, AssistantSettings};
     let d = AssistantSettings::default();
@@ -122,6 +123,11 @@ pub fn assistant(doc: &DocumentMut) -> crate::protocol::AssistantSettings {
         },
         model: t.get("model").and_then(Item::as_str).map(str::to_owned).unwrap_or(d.model),
         full_access: t.get("full_access").and_then(Item::as_bool).unwrap_or(false),
+        on_its_own: t
+            .get("on_its_own")
+            .and_then(Item::as_array)
+            .map(|a| a.iter().filter_map(|v| v.as_str()).map(str::to_owned).collect())
+            .unwrap_or_default(),
     }
 }
 
@@ -150,6 +156,13 @@ pub fn set_assistant(doc: &mut DocumentMut, a: &crate::protocol::AssistantSettin
     });
     doc["assistant"]["model"] = value(a.model.as_str());
     doc["assistant"]["full_access"] = value(a.full_access);
+    if a.on_its_own.is_empty() {
+        if let Some(t) = doc["assistant"].as_table_mut() {
+            t.remove("on_its_own");
+        }
+    } else {
+        doc["assistant"]["on_its_own"] = value(a.on_its_own.iter().map(String::as_str).collect::<toml_edit::Array>());
+    }
     Ok(true)
 }
 
@@ -298,6 +311,7 @@ mod tests {
             mode: AssistantMode::Auto,
             model: "claude-opus-5-5".into(),
             full_access: false,
+            on_its_own: Vec::new(),
         };
         assert!(set_assistant(&mut doc, &a).unwrap());
         assert_eq!(assistant(&doc), a);
@@ -308,6 +322,12 @@ mod tests {
         assert_eq!(other.effective_mode(), AssistantMode::Auto, "the user's choice");
         assert!(!other.recommended_for_auto());
         assert!(set_assistant(&mut doc, &AssistantSettings { model: "a b".into(), ..other.clone() }).is_err());
+        // Kinds it may do on its own: kept, and gone again when emptied.
+        let trusting = AssistantSettings { on_its_own: vec!["messages".into()], ..other.clone() };
+        assert!(set_assistant(&mut doc, &trusting).unwrap());
+        assert_eq!(assistant(&doc).on_its_own, ["messages"]);
+        assert!(set_assistant(&mut doc, &other).unwrap());
+        assert!(!doc.to_string().contains("on_its_own"));
         assert!(set_assistant(&mut doc, &AssistantSettings { model: "/etc".into(), ..other }).is_err());
     }
 }

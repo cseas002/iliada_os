@@ -8,4 +8,7 @@ Icon=org.iliada.Settings
 Categories=Settings;System;
 Keywords=settings;preferences;wifi;network;bluetooth;display;sound;appearance;wallpaper;keyboard;mouse;power;update;backup;github;restore;privacy;homer;tools;ssh;printing;
 StartupNotify=true
+# Opens the one Settings app (COSMIC Settings, with Iliada's pages) at
+# Updates; the launcher and dock show that app's own entry, "Settings".
+NoDisplay=true
 StartupWMClass=org.iliada.Settings
