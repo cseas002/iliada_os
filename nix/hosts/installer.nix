@@ -35,6 +35,11 @@ in
     };
     applications.ingest.enable = false;
   };
+  # A smaller download (the installed system keeps both): COSMIC's document
+  # reader brings OCR for every language (1 GB), and System76's scheduler
+  # brings kernel tracing tools (170 MB); a live session needs neither.
+  environment.cosmic.excludePackages = [ pkgs.cosmic-reader ];
+  services.system76-scheduler.enable = lib.mkForce false;
   # sudo-rs here too (the stock installer profile enables C sudo); the live
   # user needs no password, as on the stock NixOS installer.
   security.sudo.enable = lib.mkForce false;
