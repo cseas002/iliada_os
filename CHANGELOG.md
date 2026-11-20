@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.6 (2026-11-20)
 
 - **One Settings window.** Iliada's pages (the Iliada account, Privacy,
   Homer, Updates, Backup, Services, Command-line tools, About Iliada) are
