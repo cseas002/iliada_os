@@ -9,6 +9,8 @@
   and Approve. The key travels sealed for that one computer (the account
   server only passes it on and can't read it), and the matching codes catch
   anyone in the middle. Also `iliada account get-key` / `give-key`.
+- **Bitwarden** in the Store: the desktop app, built from Bitwarden's own
+  package (the Store's first app that Debian doesn't carry).
 
 ## 0.2.6 (2026-11-20)
 

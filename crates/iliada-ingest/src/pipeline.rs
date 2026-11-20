@@ -35,6 +35,9 @@ pub enum Source {
     Url(String),
     /// A package name looked up in the configured Debian suite (`debian:jq`).
     Debian(String),
+    /// A vendor's `.deb` at a fixed address, refused unless its SHA-256 is
+    /// this one (apps Debian doesn't carry, e.g. Bitwarden).
+    Pinned { url: String, sha256: String },
 }
 
 impl Source {
@@ -221,6 +224,7 @@ impl Ingestor {
         // 1. Fetch the primary package.
         let (url, expected_sha) = match source {
             Source::Url(u) => (u.clone(), None),
+            Source::Pinned { url, sha256 } => (url.clone(), Some(sha256.to_ascii_lowercase())),
             Source::Debian(name) => {
                 let idx = self.index(&self.target_arch()).await?;
                 let e = idx.get(name).with_context(|| format!("package {name:?} not found in {}", self.cfg.suite))?;
@@ -230,7 +234,7 @@ impl Ingestor {
         tracing::info!(%url, "fetching package");
         let primary = self.fetcher.fetch(&url).await?;
         if let Some(exp) = expected_sha {
-            ensure!(primary.sha256 == exp, "checksum mismatch for {url}: index says {exp}, got {}", primary.sha256);
+            ensure!(primary.sha256 == exp, "checksum mismatch for {url}: expected {exp}, got {}", primary.sha256);
         }
 
         // 2. Extract into a private staging area under the output directory.

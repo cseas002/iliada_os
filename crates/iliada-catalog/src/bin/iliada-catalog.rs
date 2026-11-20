@@ -13,7 +13,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
 use iliada_catalog::{AppEntry, Archive, Archives, Catalog, FORMAT};
 use iliada_ingest::resolvers::{LibraryResolver, NamingRules};
@@ -171,10 +171,53 @@ struct Recipe {
     env: BTreeMap<String, String>,
 }
 
+/// Where an app comes from: a Debian package (`{ debian = "vlc" }`), or a
+/// vendor's `.deb` at a fixed address with its SHA-256 (`{ url = "…", sha256
+/// = "…", arch = "amd64" }`; `arch` defaults to amd64, and other processors
+/// skip it).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RecipeSource {
-    debian: String,
+    debian: Option<String>,
+    url: Option<String>,
+    sha256: Option<String>,
+    arch: Option<String>,
+    /// The app id's prefix for a vendor's .deb (`com.bitwarden`); Debian
+    /// packages are `org.debian.*`.
+    vendor: Option<String>,
+}
+
+impl RecipeSource {
+    /// What to ingest for this processor; `None`: the recipe has no build
+    /// for it.
+    fn for_arch(&self, deb_arch: &str) -> Result<Option<Source>> {
+        match (&self.debian, &self.url, &self.sha256) {
+            (Some(d), None, None) if self.arch.is_none() && self.vendor.is_none() => {
+                Ok(Some(Source::Debian(d.clone())))
+            }
+            (None, Some(url), Some(sha256)) => {
+                ensure!(
+                    self.vendor.as_deref().is_some_and(|v| v.contains('.') && !v.starts_with("org.debian")),
+                    "source: a vendor's .deb needs vendor = \"com.example\" (the app id's prefix)"
+                );
+                ensure!(
+                    url.starts_with("https://") && sha256.len() == 64 && sha256.chars().all(|c| c.is_ascii_hexdigit()),
+                    "source: an https:// url and its sha256 (64 hex digits)"
+                );
+                Ok((self.arch.as_deref().unwrap_or("amd64") == deb_arch)
+                    .then(|| Source::Pinned { url: url.clone(), sha256: sha256.clone() }))
+            }
+            _ => bail!("source: either {{ debian = \"name\" }} or {{ url = \"https://…\", sha256 = \"…\" }}"),
+        }
+    }
+
+    fn label(&self) -> String {
+        match (&self.debian, &self.url) {
+            (Some(d), _) => format!("debian:{d}"),
+            (None, Some(u)) => u.clone(),
+            _ => "?".into(),
+        }
+    }
 }
 
 /// Git tag / file-name safe form of a Debian version (`1:48.1-2+b1`).
@@ -240,13 +283,18 @@ async fn build(
     for stem in stems {
         let recipe: Recipe = toml::from_str(&fs::read_to_string(recipes.join(format!("{stem}.toml")))?)
             .with_context(|| format!("recipe {stem}"))?;
-        eprintln!("==> {stem}: translating debian:{}", recipe.source.debian);
+        let Some(source) = recipe.source.for_arch(deb_arch).with_context(|| format!("recipe {stem}"))? else {
+            eprintln!("==> {stem}: no {deb_arch} build (skipped)");
+            continue;
+        };
+        eprintln!("==> {stem}: translating {}", recipe.source.label());
         let work = out.join(format!("work{sfx}")).join(&stem);
         let cfg = IngestConfig {
             out_dir: work.clone(),
             cache_dir: cache.clone().unwrap_or_else(iliada_ingest::pipeline::default_cache_dir),
             arch: Some(deb_arch.to_owned()),
             exec_override: recipe.exec.clone(),
+            vendor_prefix: recipe.source.vendor.clone().unwrap_or_else(|| "org.debian".into()),
             full_closure: recipe.full_closure,
             network: recipe.network,
             display_name: Some(recipe.name.clone()),
@@ -270,7 +318,7 @@ async fn build(
             ..Default::default()
         };
         let resolvers: Vec<Box<dyn LibraryResolver>> = vec![Box::new(NamingRules)];
-        let report = match Ingestor::new(cfg, resolvers)?.ingest(&Source::Debian(recipe.source.debian.clone())).await {
+        let report = match Ingestor::new(cfg, resolvers)?.ingest(&source).await {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("    FAILED: {e:#}");
@@ -409,7 +457,9 @@ async fn main() -> Result<()> {
             for e in fs::read_dir(&recipes)?.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "toml")) {
                 let r: Recipe = toml::from_str(&fs::read_to_string(e.path())?)
                     .with_context(|| format!("reading {}", e.path().display()))?;
-                skip.insert(r.source.debian);
+                if let Some(d) = r.source.debian {
+                    skip.insert(d);
+                }
             }
             if let Some(p) = rejected {
                 let text = fs::read_to_string(p).unwrap_or_default();
@@ -654,5 +704,34 @@ source = { debian = "gnome-mines" }"#,
         .unwrap();
         assert!(plain.not_needed.is_empty());
         assert_eq!(plain.build, 0);
+        assert!(matches!(plain.source.for_arch("arm64").unwrap(), Some(Source::Debian(d)) if d == "gnome-mines"));
+    }
+
+    #[test]
+    fn recipe_can_take_a_vendor_deb() {
+        let sha = "a".repeat(64);
+        let r: Recipe = toml::from_str(&format!(
+            "name = \"Bitwarden\"\nsummary = \"Passwords\"\ncategory = \"Utilities\"\n\
+             source = {{ url = \"https://example.org/b.deb\", sha256 = \"{sha}\", vendor = \"org.example\" }}"
+        ))
+        .unwrap();
+        assert!(
+            matches!(r.source.for_arch("amd64").unwrap(), Some(Source::Pinned { url, .. }) if url == "https://example.org/b.deb")
+        );
+        assert!(r.source.for_arch("arm64").unwrap().is_none(), "an amd64 .deb has no ARM build");
+        for bad in [
+            "source = { url = \"http://example.org/b.deb\", sha256 = \"SHA\" }",
+            "source = { url = \"https://example.org/b.deb\" }",
+            "source = { url = \"https://example.org/b.deb\", sha256 = \"SHA\" }",
+            "source = { url = \"https://example.org/b.deb\", sha256 = \"SHA\", vendor = \"org.debian\" }",
+            "source = { debian = \"x\", url = \"https://example.org/b.deb\", sha256 = \"SHA\" }",
+        ] {
+            let r: Recipe = toml::from_str(&format!(
+                "name = \"B\"\nsummary = \"P\"\ncategory = \"U\"\n{}",
+                bad.replace("SHA", &sha)
+            ))
+            .unwrap();
+            assert!(r.source.for_arch("amd64").is_err(), "{bad}");
+        }
     }
 }
