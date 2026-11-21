@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.7 (2026-11-21)
 
 - **Fixed: Settings links in 0.2.6** did nothing: the update notice, Homer's
   Settings button and the Settings icon in docks from before 0.2.6. Those
