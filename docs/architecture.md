@@ -117,7 +117,9 @@ client, passt for the network, and cloud-hypervisor.
 *Why not Firecracker:* no virtio-gpu, no virtio-fs (only block devices), and no
 display path. Desktop apps need all three. cloud-hypervisor is Rust,
 KVM-based, supports virtio-fs, vsock and vhost-user, and is what Spectrum OS
-(the closest prior art: NixOS with per-app VMs) uses. GPU acceleration
+(the closest prior art: NixOS with per-app VMs) uses. The idea of apps in
+separate VMs comes from Qubes OS (Xen, a VM per group of apps); Iliada keeps
+the light sandbox for every app and makes the VM a per-app switch. GPU acceleration
 (virtio-gpu cross-domain) is later work; waypipe already carries windows.
 
 **Permissions** (ADR 0006):

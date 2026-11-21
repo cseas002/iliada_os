@@ -80,6 +80,19 @@ in
         libcosmicAppHook = prev.libcosmicAppHook.override {
           targetPackages = prev.targetPackages // { inherit (prev) cosmic-settings; };
         };
+        # The login screen shows a picture of its own until someone has signed
+        # in once (it shows each person's wallpaper after that): the Iliad
+        # wallpaper instead of COSMIC's nebula, so a new install starts in
+        # the Iliad look.
+        cosmic-greeter = prev.cosmic-greeter.overrideAttrs (old: {
+          postPatch = (old.postPatch or "") + ''
+            # res/background.jpg in 1.11, .png upstream; the image is read by
+            # its contents, so a PNG serves under either name.
+            ${final.librsvg}/bin/rsvg-convert -w 2560 ${../branding/wallpaper/wine-dark-sea.svg} -o iliada-login.png
+            for f in res/background.*; do cp iliada-login.png "$f"; done
+            rm iliada-login.png
+          '';
+        });
       })
     ];
     services.desktopManager.cosmic.enable = true;
@@ -231,6 +244,10 @@ in
       '';
     };
     services.displayManager.cosmic-greeter.enable = true;
+    # Its helper reads each person's theme; for someone who never signed in
+    # that is the system's defaults (the Iliad theme), which it finds only
+    # through XDG_DATA_DIRS (a system service has none).
+    systemd.services.cosmic-greeter-daemon.environment.XDG_DATA_DIRS = "/run/current-system/sw/share";
     services.displayManager.autoLogin = lib.mkIf (cfg.autoLoginUser != null) {
       enable = true;
       user = cfg.autoLoginUser;

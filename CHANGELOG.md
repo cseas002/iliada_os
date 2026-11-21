@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **A new computer greets you in the Iliad look**: the login screen showed
+  COSMIC's nebula and colours until someone had signed in once.
+
 ## 0.2.7 (2026-11-21)
 
 - **Fixed: Settings links in 0.2.6** did nothing: the update notice, Homer's
